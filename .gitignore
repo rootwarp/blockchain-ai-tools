@@ -1,0 +1,28 @@
+# Compiled binaries / build output
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test & coverage artifacts
+*.test
+*.out
+coverage.*
+profile.out
+
+# Dependency vendoring
+vendor/
+
+# Go workspace local sum file (go.work itself is tracked)
+go.work.sum
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*~
+
+# OS cruft
+.DS_Store
+Thumbs.db

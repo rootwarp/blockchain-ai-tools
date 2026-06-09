@@ -1,0 +1,23 @@
+# golangci-lint v2 configuration.
+# Docs: https://golangci-lint.run/
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  # The default set (errcheck, govet, ineffassign, staticcheck, unused)
+  # stays enabled; these are added on top.
+  enable:
+    - revive
+    - misspell
+    - unconvert
+  settings:
+    revive:
+      rules:
+        - name: exported
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

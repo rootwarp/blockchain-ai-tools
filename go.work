@@ -1,0 +1,11 @@
+go 1.26
+
+// This is a multi-module Go workspace. No modules exist yet.
+//
+// Create one with the Makefile, which scaffolds the module and runs
+// `go work use` for you:
+//
+//	make new-app name=foo   -> creates apps/foo (module .../apps/foo)
+//	make new-lib name=bar   -> creates libs/bar (module .../libs/bar)
+//
+// After that, Go manages a `use ( ... )` block below automatically.
