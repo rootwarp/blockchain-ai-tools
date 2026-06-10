@@ -7,6 +7,11 @@ import (
 
 const unknownValue = "<unknown>"
 
+// readBuildInfo is an indirection over debug.ReadBuildInfo so tests can exercise
+// the ok==false fallback and the vcs.* settings arms (which are never populated
+// under `go test`). Production code never reassigns it.
+var readBuildInfo = debug.ReadBuildInfo
+
 // Info holds the four fields exposed on --version.
 // Every field that cannot be determined is set to the literal "<unknown>".
 type Info struct {
@@ -35,8 +40,10 @@ func (i Info) String() string {
 // Build reads runtime/debug.ReadBuildInfo and populates an Info value.
 //
 // Field derivation:
-//   - Version   — debug.BuildInfo.Main.Version; "<unknown>" when ok==false,
-//     empty, or the placeholder "(devel)" indicates no version tag.
+//   - Version   — debug.BuildInfo.Main.Version; "<unknown>" when ok==false or
+//     empty. The Go toolchain placeholder "(devel)" is passed through unchanged
+//     to indicate an untagged development build — it is informative, not
+//     undeterminable, so it is NOT replaced with "<unknown>".
 //   - Commit    — vcs.revision build setting; "<unknown>" when absent or empty.
 //   - Date      — vcs.time build setting; "<unknown>" when absent or empty.
 //   - GoVersion — debug.BuildInfo.GoVersion; "<unknown>" when ok==false or empty.
@@ -44,7 +51,7 @@ func (i Info) String() string {
 // go test binaries carry no VCS stamping; Commit and Date will be "<unknown>"
 // in that environment. GoVersion is always available from the toolchain.
 func Build() Info {
-	info, ok := debug.ReadBuildInfo()
+	info, ok := readBuildInfo()
 	if !ok {
 		return Info{
 			Version:   unknownValue,

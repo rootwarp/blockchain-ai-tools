@@ -28,12 +28,16 @@
 //     fmt.Formatter (all verbs), json.Marshaler, and slog.LogValuer all
 //     return "[REDACTED]".
 //
-//  3. Never embed a Secret inside a struct passed to slog. The slog JSON
-//     handler reflects through struct fields via reflection, bypassing the
-//     LogValue interface. The known-leak anti-pattern test in
-//     internal/signing/antipattern_test.go asserts that this leak DOES
-//     occur, to keep the rule visible and to detect any future slog change
-//     that alters the behaviour.
+//  3. Never pass a value that contains a Secret — directly or transitively
+//     through a struct field, pointer, slice/array element, or map value —
+//     to slog. The JSON encoder behind slog.NewJSONHandler reflects through
+//     every such nested composite, bypassing the slog.LogValuer interface.
+//     The only safe shape is a top-level attribute:
+//     slog.Info("...", "k", secret), where LogValuer is honoured. The
+//     known-leak anti-pattern test in internal/signing/antipattern_test.go
+//     asserts that this leak DOES occur (via a struct carrier), to keep the
+//     rule visible and to detect any future slog change that alters the
+//     behaviour.
 //
 //  4. The transaction body (calldata/to/value) is never logged at any
 //     level. Phase 2 enforces this in signing.Signer's audit line.

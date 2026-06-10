@@ -1,11 +1,68 @@
 package obs
 
 import (
+	"runtime/debug"
 	"strings"
 	"testing"
 )
 
 const unknown = "<unknown>"
+
+// TestBuild_ReadBuildInfoFails exercises the ok==false fallback, which is never
+// reached under `go test` (ReadBuildInfo always succeeds there). It overrides the
+// readBuildInfo seam and asserts every field falls back to "<unknown>" — the
+// safety net for a stripped/hostile build environment. Not parallel: mutates a
+// package-level var.
+func TestBuild_ReadBuildInfoFails(t *testing.T) {
+	orig := readBuildInfo
+	t.Cleanup(func() { readBuildInfo = orig })
+	readBuildInfo = func() (*debug.BuildInfo, bool) { return nil, false }
+
+	info := Build()
+	for name, val := range map[string]string{
+		"Version":   info.Version,
+		"Commit":    info.Commit,
+		"Date":      info.Date,
+		"GoVersion": info.GoVersion,
+	} {
+		if val != unknown {
+			t.Errorf("Build() field %q = %q, want %q when ReadBuildInfo fails", name, val, unknown)
+		}
+	}
+}
+
+// TestBuild_VCSFieldsPresent exercises the vcs.revision / vcs.time settings arms
+// (0 hits under `go test`). A typo in either key string would otherwise silently
+// leave Commit/Date as <unknown> in every real build. Not parallel: mutates a
+// package-level var.
+func TestBuild_VCSFieldsPresent(t *testing.T) {
+	orig := readBuildInfo
+	t.Cleanup(func() { readBuildInfo = orig })
+	readBuildInfo = func() (*debug.BuildInfo, bool) {
+		return &debug.BuildInfo{
+			GoVersion: "go1.26.0",
+			Main:      debug.Module{Version: "v9.9.9"},
+			Settings: []debug.BuildSetting{
+				{Key: "vcs.revision", Value: "deadbeefcafe"},
+				{Key: "vcs.time", Value: "2026-01-02T03:04:05Z"},
+			},
+		}, true
+	}
+
+	info := Build()
+	if info.Version != "v9.9.9" {
+		t.Errorf("Version = %q, want %q", info.Version, "v9.9.9")
+	}
+	if info.Commit != "deadbeefcafe" {
+		t.Errorf("Commit = %q, want %q (vcs.revision arm)", info.Commit, "deadbeefcafe")
+	}
+	if info.Date != "2026-01-02T03:04:05Z" {
+		t.Errorf("Date = %q, want %q (vcs.time arm)", info.Date, "2026-01-02T03:04:05Z")
+	}
+	if info.GoVersion != "go1.26.0" {
+		t.Errorf("GoVersion = %q, want %q", info.GoVersion, "go1.26.0")
+	}
+}
 
 // TestBuild_GoTestBinaries verifies that Build() returns <unknown> for fields
 // that cannot be determined under go test (no VCS stamping in test binaries)
