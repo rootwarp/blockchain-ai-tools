@@ -21,13 +21,28 @@ func newFixtureSentinel() signing.Sentinel {
 	return signing.NewSentinel("fixture-secret", fixtureRaw)
 }
 
+// reportRedactFailure reports a redaction failure WITHOUT leaking the secret.
+// The redacting APIs are fed the fixture sentinel, so a broken implementation
+// would return the secret itself — printing `got` directly would re-leak it into
+// the test log. Instead we scan `got` for sentinel forms and name only the
+// leaked form(s) (the sanitized-failure-message rule). desc names the API.
+func reportRedactFailure(t *testing.T, desc, got string) {
+	t.Helper()
+	sent := newFixtureSentinel()
+	if leaked := sent.Scan([]byte(got)); len(leaked) > 0 {
+		t.Errorf("%s leaked sentinel forms: %v (sentinel: %q)", desc, leaked, sent.Name)
+	} else {
+		t.Errorf("%s did not return \"[REDACTED]\" (no sentinel forms; got length=%d)", desc, len(got))
+	}
+}
+
 // TestSecret_Stringer verifies that fmt.Stringer returns "[REDACTED]".
 func TestSecret_Stringer(t *testing.T) {
 	t.Parallel()
 	s := signing.NewSecret(string(fixtureRaw))
 	got := s.String()
 	if got != "[REDACTED]" {
-		t.Errorf("String() = %q, want \"[REDACTED]\"", got)
+		reportRedactFailure(t, "String()", got)
 	}
 }
 
@@ -37,7 +52,7 @@ func TestSecret_GoStringer(t *testing.T) {
 	s := signing.NewSecret(string(fixtureRaw))
 	got := fmt.Sprintf("%#v", s)
 	if got != "[REDACTED]" {
-		t.Errorf("%%#v = %q, want \"[REDACTED]\"", got)
+		reportRedactFailure(t, "%#v", got)
 	}
 }
 
@@ -52,9 +67,38 @@ func TestSecret_Formatter(t *testing.T) {
 			t.Parallel()
 			got := fmt.Sprintf(verb, s)
 			if got != "[REDACTED]" {
-				t.Errorf("Sprintf(%q) = %q, want \"[REDACTED]\"", verb, got)
+				reportRedactFailure(t, "Sprintf("+verb+")", got)
 			}
 		})
+	}
+}
+
+// TestSecret_Format_KnownVerbGaps documents the %T / %p gap: Go's fmt does NOT
+// route those two verbs through fmt.Formatter, so Secret cannot redact them.
+// This test pins that known behaviour (so a future Go change that altered it
+// would be noticed) and proves %T is safe (type name only). It deliberately
+// wraps a HARMLESS marker — never a real secret — because %p prints fmt's
+// bad-verb error containing the struct's field values.
+func TestSecret_Format_KnownVerbGaps(t *testing.T) {
+	t.Parallel()
+	const harmless = "harmless-marker"
+	s := signing.NewSecret(harmless)
+
+	// %T: type name only, no value bytes — safe, and not "[REDACTED]".
+	gotT := fmt.Sprintf("%T", s)
+	if !strings.Contains(gotT, "Secret") {
+		t.Errorf("%%T = %q, want a string containing the type name \"Secret\"", gotT)
+	}
+	if gotT == "[REDACTED]" {
+		t.Errorf("%%T = %q; fmt is not expected to route %%T through Formatter", gotT)
+	}
+
+	// %p: KNOWN GAP — fmt does not call Formatter; output is NOT redacted.
+	// (Using a harmless marker so this documented leak path exposes nothing real.)
+	gotP := fmt.Sprintf("%p", s)
+	if gotP == "[REDACTED]" {
+		t.Errorf("%%p unexpectedly returned [REDACTED]; the documented gap (fmt skips " +
+			"Formatter for %%p) no longer holds — update secret.go's KNOWN GAP note")
 	}
 }
 
@@ -67,7 +111,7 @@ func TestSecret_JSONMarshaler(t *testing.T) {
 		t.Fatalf("json.Marshal error: %v", err)
 	}
 	if string(b) != `"[REDACTED]"` {
-		t.Errorf("json.Marshal = %q, want %q", b, `"[REDACTED]"`)
+		reportRedactFailure(t, "json.Marshal", string(b))
 	}
 }
 
@@ -124,7 +168,7 @@ func TestSecret_GoStringDirect(t *testing.T) {
 	t.Parallel()
 	s := signing.NewSecret(string(fixtureRaw))
 	if got := s.GoString(); got != "[REDACTED]" {
-		t.Errorf("GoString() = %q, want \"[REDACTED]\"", got)
+		reportRedactFailure(t, "GoString()", got)
 	}
 }
 

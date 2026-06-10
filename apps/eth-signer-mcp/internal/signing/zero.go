@@ -19,9 +19,16 @@ func ZeroBytes(b []byte) {
 	runtime.KeepAlive(b)
 }
 
-// ZeroBigInt sets n's magnitude to zero by clearing its internal word slice,
-// then calls runtime.KeepAlive(n) to prevent the clear from being optimised away.
-// After ZeroBigInt, n.BitLen() == 0.
+// ZeroBigInt overwrites n's magnitude with zero and normalises n so that
+// n.BitLen() == 0, then calls runtime.KeepAlive(n) to prevent the clear from
+// being optimised away.
+//
+// Implementation note: clear(n.Bits()) zeroes the backing word slice (the secret
+// magnitude) in place, but big.Int does NOT re-normalise after that — BitLen()
+// would still report (len(words)-1)*wordSize bits (e.g. 192 for a 32-byte key
+// scalar) because it derives the length from the slice length, not the values.
+// The follow-up n.SetInt64(0) reslices the (already-zeroed) backing array to
+// length 0, so the secret words stay zeroed AND BitLen() becomes 0.
 //
 // ADR-009 best-effort limitation: the Go runtime may have retained copies of
 // the integer's bits in transient allocations (GC moves, stack copies). This is
@@ -29,6 +36,10 @@ func ZeroBytes(b []byte) {
 // requirement is "no secrets in logs or outputs" — not guaranteed in-memory
 // erasure against a privileged adversary.
 func ZeroBigInt(n *big.Int) {
-	clear(n.Bits())
+	if n == nil {
+		return
+	}
+	clear(n.Bits()) // zero the secret magnitude in the backing word slice
+	n.SetInt64(0)   // re-normalise: reslices the now-zeroed backing array to len 0
 	runtime.KeepAlive(n)
 }

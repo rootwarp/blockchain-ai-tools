@@ -139,3 +139,107 @@ func TestSentinel_ScanReturnsEmpty_NilInput(t *testing.T) {
 		t.Errorf("Scan(nil) returned non-empty: %v", leaked)
 	}
 }
+
+// TestNewSentinel_RawFormDefensiveCopy verifies that zeroing the caller's input
+// slice after construction does NOT wipe the Sentinel's "raw" form (W-1). The
+// natural hygiene pattern is: derive a Sentinel from fixture bytes, then
+// ZeroBytes(fixture) for cleanup — which must leave the Sentinel intact.
+func TestNewSentinel_RawFormDefensiveCopy(t *testing.T) {
+	t.Parallel()
+	raw := []byte{0xDE, 0xAD, 0xBE, 0xEF}
+	orig := append([]byte(nil), raw...) // keep an independent copy to plant
+	sent := signing.NewSentinel("copytest", raw)
+
+	signing.ZeroBytes(raw) // caller cleanup — must not affect the Sentinel
+
+	output := append([]byte("prefix "), append(orig, []byte(" suffix")...)...)
+	leaked := sent.Scan(output)
+	found := false
+	for _, name := range leaked {
+		if name == "raw" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("raw form was wiped by zeroing the caller's input slice (sentinel: %q)", sent.Name)
+	}
+}
+
+// TestNewSentinel_EmptyRaw verifies that an empty/nil raw input yields a Sentinel
+// with no forms — guarding against the decimal form "0" (from
+// big.Int.SetBytes(nil)) producing false positives on innocuous output (W-3).
+func TestNewSentinel_EmptyRaw(t *testing.T) {
+	t.Parallel()
+	for _, raw := range [][]byte{{}, nil} {
+		sent := signing.NewSentinel("empty", raw)
+		if len(sent.Forms) != 0 {
+			t.Errorf("NewSentinel(empty): derived %d forms, want 0", len(sent.Forms))
+		}
+		// Output full of zeros / counts must NOT trip a false positive.
+		if leaked := sent.Scan([]byte("count=0 port=8080 status=0")); len(leaked) > 0 {
+			t.Errorf("NewSentinel(empty): Scan false-positive forms: %v", leaked)
+		}
+	}
+}
+
+// TestNewSentinel_DerivesURLBase64Forms verifies the URL-safe base64 forms are
+// derived and detected (W-4) — a secret leaking through a JWT/OAuth/token path
+// (URL-safe alphabet, -_ instead of +/) must not evade the scan.
+func TestNewSentinel_DerivesURLBase64Forms(t *testing.T) {
+	t.Parallel()
+	// 0xFB,0xFF,0xBF encodes to "+/+/"-ish under std and "-_-_"-ish under url —
+	// the two alphabets differ, so the url form is a distinct detectable string.
+	raw := []byte{0xFB, 0xFF, 0xBF, 0xFE}
+	sent := signing.NewSentinel("urltest", raw)
+
+	for _, tc := range []struct {
+		name string
+		form []byte
+	}{
+		{"base64-url", []byte(base64.URLEncoding.EncodeToString(raw))},
+		{"base64-rawurl", []byte(base64.RawURLEncoding.EncodeToString(raw))},
+	} {
+		output := append([]byte("token="), tc.form...)
+		found := false
+		for _, n := range sent.Scan(output) {
+			if n == tc.name {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("Scan did not detect %s form when planted (sentinel: %q)", tc.name, sent.Name)
+		}
+	}
+}
+
+// TestSentinel_RegisterForm verifies RegisterForm adds a custom form (keeping
+// Forms/names in sync so Scan reports it by name) and skips empty/duplicate forms.
+func TestSentinel_RegisterForm(t *testing.T) {
+	t.Parallel()
+	sent := signing.NewSentinel("reg", []byte{0x01, 0x02})
+	before := len(sent.Forms)
+
+	sent.RegisterForm("custom", []byte("CHECKSUMMED-FORM-XYZ"))
+	if len(sent.Forms) != before+1 {
+		t.Fatalf("RegisterForm: Forms len = %d, want %d", len(sent.Forms), before+1)
+	}
+
+	// Empty and duplicate registrations are skipped.
+	sent.RegisterForm("empty", nil)
+	sent.RegisterForm("dup", []byte("CHECKSUMMED-FORM-XYZ"))
+	if len(sent.Forms) != before+1 {
+		t.Errorf("RegisterForm: empty/dup not skipped; Forms len = %d, want %d", len(sent.Forms), before+1)
+	}
+
+	// Scan reports the custom form by its registered name (names stayed in sync).
+	leaked := sent.Scan([]byte("x CHECKSUMMED-FORM-XYZ y"))
+	found := false
+	for _, n := range leaked {
+		if n == "custom" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("Scan did not report the registered custom form by name (got %v)", leaked)
+	}
+}

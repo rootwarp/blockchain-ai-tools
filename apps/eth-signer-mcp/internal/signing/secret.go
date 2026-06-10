@@ -15,9 +15,17 @@ import (
 // appearing in logs, formatted output, or JSON serialisation. It implements:
 //   - fmt.Stringer     → "[REDACTED]"
 //   - fmt.GoStringer   → "[REDACTED]" (catches %#v)
-//   - fmt.Formatter    → writes "[REDACTED]" for every verb
+//   - fmt.Formatter    → "[REDACTED]" for every verb fmt routes through Formatter
 //   - json.Marshaler   → `"[REDACTED]"`
 //   - slog.LogValuer   → slog.StringValue("[REDACTED]")
+//
+// KNOWN GAP (%T / %p): Go's fmt package does not consult the Formatter (or any
+// interface) for the %T and %p verbs. %T prints only the type name — no value
+// bytes, so it is safe. %p on a non-pointer Secret prints fmt's bad-verb error,
+// which includes the struct's field values — a potential leak. NEVER use %p on
+// a Secret. This gap is tracked by TestSecret_Format_KnownVerbGaps and is
+// accepted under the ADR-009 threat model (the observable requirement is "no
+// secrets in logs/outputs", enforced by the leak-scan tests over real log paths).
 //
 // The only way to read the wrapped value is Expose(). No Unwrap or Value aliases
 // exist: any additional accessor would widen the surface that reflection might
@@ -54,8 +62,12 @@ func (s Secret[T]) GoString() string {
 	return "[REDACTED]"
 }
 
-// Format implements fmt.Formatter. Every verb — %v, %+v, %#v, %s, %q, %x, %X,
-// %d and any other — writes "[REDACTED]" to w.
+// Format implements fmt.Formatter, writing "[REDACTED]" for every verb that fmt
+// routes through the Formatter interface (%v, %+v, %#v, %s, %q, %x, %X, %d, …).
+//
+// It does NOT cover %T or %p: fmt handles those two verbs itself and never calls
+// Formatter for them (see the type doc's KNOWN GAP note). %T is safe (type name
+// only); %p must never be used on a Secret.
 func (s Secret[T]) Format(f fmt.State, verb rune) {
 	_, _ = io.WriteString(f, "[REDACTED]")
 }
