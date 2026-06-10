@@ -1,0 +1,28 @@
+{
+  "name": "1559-mainnet",
+  "tx": {
+    "type": "0x2",
+    "chainId": "1",
+    "nonce": "42",
+    "to": "0x9858EfFD232B4033E47d90003D41EC34EcaEda94",
+    "value": "1000000000000000000",
+    "data": "0xcafebabe",
+    "gas": "100000",
+    "maxFeePerGas": "30000000000",
+    "maxPriorityFeePerGas": "2000000000"
+  },
+  "expected": {
+    "raw_tx": "0x02f878012a84773594008506fc23ac00830186a0949858effd232b4033e47d90003d41ec34ecaeda94880de0b6b3a764000084cafebabec080a09c4861a936548597508b2582117dc2603d11b53d7da9db676204df34dca5ee49a048349fb03c9991300fdb9dff1569609d0bf2e4ad94a256b4624627219b262b99",
+    "tx_hash": "0x8490c945e27a90c756b574fcb1d3ef42ab4522423ad0e6e3c4c25407d18ca78a",
+    "r": "0x9c4861a936548597508b2582117dc2603d11b53d7da9db676204df34dca5ee49",
+    "s": "0x48349fb03c9991300fdb9dff1569609d0bf2e4ad94a256b4624627219b262b99",
+    "v": "0x0"
+  },
+  "meta": {
+    "oracles": {
+      "ethers": "6.16.0",
+      "cast": "not-run-in-this-env"
+    },
+    "regenerated_at": "2026-06-11T00:00:00Z"
+  }
+}

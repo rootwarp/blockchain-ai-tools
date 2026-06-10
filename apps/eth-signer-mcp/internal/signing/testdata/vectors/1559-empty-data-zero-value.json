@@ -1,0 +1,28 @@
+{
+  "name": "1559-empty-data-zero-value",
+  "tx": {
+    "type": "0x2",
+    "chainId": "1",
+    "nonce": "0",
+    "to": "0x9858EfFD232B4033E47d90003D41EC34EcaEda94",
+    "value": "0",
+    "data": "0x",
+    "gas": "21000",
+    "maxFeePerGas": "30000000000",
+    "maxPriorityFeePerGas": "2000000000"
+  },
+  "expected": {
+    "raw_tx": "0x02f86b018084773594008506fc23ac00825208949858effd232b4033e47d90003d41ec34ecaeda948080c080a0a5f6e50e1952b3d078e683cc837120e4c102b3386a569033f906b36f7b3075eaa063d63d306a2daefc118a48c31ab7df8e2d716a383c6ddcb4a7b8ddd841b6b8e2",
+    "tx_hash": "0x053833274d249932ee6e0958ea754c4ef1f49f5f6cc868657927efeead09262c",
+    "r": "0xa5f6e50e1952b3d078e683cc837120e4c102b3386a569033f906b36f7b3075ea",
+    "s": "0x63d63d306a2daefc118a48c31ab7df8e2d716a383c6ddcb4a7b8ddd841b6b8e2",
+    "v": "0x0"
+  },
+  "meta": {
+    "oracles": {
+      "ethers": "6.16.0",
+      "cast": "not-run-in-this-env"
+    },
+    "regenerated_at": "2026-06-11T00:00:00Z"
+  }
+}

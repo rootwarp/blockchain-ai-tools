@@ -1,0 +1,12 @@
+cast was NOT run in this environment (Foundry/cast not installed).
+
+Intended pinned version: v1.7.1 (see /.foundry-version in the repo root)
+
+The committed vectors were generated and verified with ethers v6.16.0 ONLY.
+Cast cross-check is deferred to a Foundry-equipped machine.
+
+To regenerate with both oracles:
+  1. Install Foundry v1.7.1 (see https://getfoundry.sh/)
+  2. Verify: cast --version  # must match .foundry-version
+  3. Run: scripts/regen-vectors.sh
+     (the script performs the dual-oracle byte-compare and overwrites this file)

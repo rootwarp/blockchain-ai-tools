@@ -26,3 +26,8 @@ go.work.sum
 # OS cruft
 .DS_Store
 Thumbs.db
+
+# Node / npm (regen-vectors-ethers.mjs tooling — not committed)
+scripts/node_modules/
+scripts/package.json
+scripts/package-lock.json

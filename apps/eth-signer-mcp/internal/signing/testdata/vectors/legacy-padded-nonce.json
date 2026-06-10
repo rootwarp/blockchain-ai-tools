@@ -1,0 +1,27 @@
+{
+  "name": "legacy-padded-nonce",
+  "tx": {
+    "type": "0x0",
+    "chainId": "1",
+    "nonce": "0x0009",
+    "to": "0x9858EfFD232B4033E47d90003D41EC34EcaEda94",
+    "value": "0",
+    "data": "0x",
+    "gas": "21000",
+    "gasPrice": "20000000000"
+  },
+  "expected": {
+    "raw_tx": "0xf864098504a817c800825208949858effd232b4033e47d90003d41ec34ecaeda94808025a0cffc375de3ed74aa01f31ceedc0779386a60c6ab771b10d0cf999194155399ada06ad87ec216d0d624d43199c7ae4a0a8e13865c8bf3415b408161a1867b1830d1",
+    "tx_hash": "0xdb6f8fd805b7e4fa1e8f86726c68d6091a2da4cbcb92058634c43490291d2769",
+    "r": "0xcffc375de3ed74aa01f31ceedc0779386a60c6ab771b10d0cf999194155399ad",
+    "s": "0x6ad87ec216d0d624d43199c7ae4a0a8e13865c8bf3415b408161a1867b1830d1",
+    "v": "0x25"
+  },
+  "meta": {
+    "oracles": {
+      "ethers": "6.16.0",
+      "cast": "not-run-in-this-env"
+    },
+    "regenerated_at": "2026-06-11T00:00:00Z"
+  }
+}

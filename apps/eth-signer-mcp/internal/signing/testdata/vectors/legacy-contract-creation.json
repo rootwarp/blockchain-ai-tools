@@ -1,0 +1,26 @@
+{
+  "name": "legacy-contract-creation",
+  "tx": {
+    "type": "0x0",
+    "chainId": "1",
+    "nonce": "0",
+    "value": "0",
+    "data": "0x6080604052",
+    "gas": "200000",
+    "gasPrice": "20000000000"
+  },
+  "expected": {
+    "raw_tx": "0xf856808504a817c80083030d40808085608060405226a0cb081ba0888c55318ac8e5a68d7f8dc22f15358bd721e1273bf81da4c02ad519a078e80d68637c7d4e5e025fb21318bfa939a74c5e71a58b971e8f3d31e5cde4ef",
+    "tx_hash": "0xdfd9adae0c17b5138b7c0fd43cfaec73398356cf71ad3014beae9228e402eaab",
+    "r": "0xcb081ba0888c55318ac8e5a68d7f8dc22f15358bd721e1273bf81da4c02ad519",
+    "s": "0x78e80d68637c7d4e5e025fb21318bfa939a74c5e71a58b971e8f3d31e5cde4ef",
+    "v": "0x26"
+  },
+  "meta": {
+    "oracles": {
+      "ethers": "6.16.0",
+      "cast": "not-run-in-this-env"
+    },
+    "regenerated_at": "2026-06-11T00:00:00Z"
+  }
+}

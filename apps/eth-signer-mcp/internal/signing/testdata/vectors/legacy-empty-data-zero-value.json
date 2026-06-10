@@ -1,0 +1,27 @@
+{
+  "name": "legacy-empty-data-zero-value",
+  "tx": {
+    "type": "0x0",
+    "chainId": "1",
+    "nonce": "0",
+    "to": "0x9858EfFD232B4033E47d90003D41EC34EcaEda94",
+    "value": "0",
+    "data": "0x",
+    "gas": "21000",
+    "gasPrice": "20000000000"
+  },
+  "expected": {
+    "raw_tx": "0xf864808504a817c800825208949858effd232b4033e47d90003d41ec34ecaeda94808026a08a3b131f35ef3edd02c4d57d5e891362e61a9855605de1f6f52dd14962973940a036e593ce37ed3c9061e64d4e40d123beb80774e9595cffe3c60f2246d61f78d9",
+    "tx_hash": "0xee1ea5b8249d9b51036a87d4e00052c9d3d3023877805870a48e839c82b43c8f",
+    "r": "0x8a3b131f35ef3edd02c4d57d5e891362e61a9855605de1f6f52dd14962973940",
+    "s": "0x36e593ce37ed3c9061e64d4e40d123beb80774e9595cffe3c60f2246d61f78d9",
+    "v": "0x26"
+  },
+  "meta": {
+    "oracles": {
+      "ethers": "6.16.0",
+      "cast": "not-run-in-this-env"
+    },
+    "regenerated_at": "2026-06-11T00:00:00Z"
+  }
+}
