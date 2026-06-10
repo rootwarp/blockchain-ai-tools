@@ -18,7 +18,12 @@ import (
 
 // makeParsedLegacy returns a minimal valid parsedTx for a legacy (type 0) tx.
 func makeParsedLegacy() *parsedTx {
-	to := common.HexToAddress("0xd3CdA913deB6f4967b2Ef3aa68f5A843B5C4B70")
+	// Use a valid 42-character EIP-55 address (40 hex digits + "0x" prefix).
+	// The previous literal "0xd3CdA913deB6f4967b2Ef3aa68f5A843B5C4B70" was only
+	// 41 characters (39 hex digits); common.HexToAddress silently zero-padded it
+	// to a different address.  validate.go correctly rejects non-42-char addresses,
+	// but internal tests that bypass validate must use valid inputs.
+	to := common.HexToAddress("0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045")
 	return &parsedTx{
 		txType:   0,
 		chainID:  big.NewInt(1),
@@ -33,7 +38,7 @@ func makeParsedLegacy() *parsedTx {
 
 // makeParsed1559 returns a minimal valid parsedTx for an EIP-1559 (type 2) tx.
 func makeParsed1559() *parsedTx {
-	to := common.HexToAddress("0xd3CdA913deB6f4967b2Ef3aa68f5A843B5C4B70")
+	to := common.HexToAddress("0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045")
 	return &parsedTx{
 		txType:    2,
 		chainID:   big.NewInt(1),
@@ -166,6 +171,11 @@ func TestBuildTx_1559FieldMapping(t *testing.T) {
 	if tx.GasFeeCap().Cmp(p.gasFeeCap) != 0 {
 		t.Errorf("GasFeeCap (maxFeePerGas): got %s, want %s", tx.GasFeeCap(), p.gasFeeCap)
 	}
+	// ChainID is embedded in the type-2 tx body (DynamicFeeTx.ChainID), distinct
+	// from the signer's chain ID (asserted separately in TestBuildTx_1559SignerChainID).
+	if tx.ChainId().Cmp(p.chainID) != 0 {
+		t.Errorf("ChainId (tx body): got %s, want %s", tx.ChainId(), p.chainID)
+	}
 	if tx.To() == nil || *tx.To() != *p.to {
 		t.Errorf("To: got %v, want %v", tx.To(), p.to)
 	}
@@ -212,14 +222,17 @@ func TestBuildTx_1559ContractCreation(t *testing.T) {
 
 // ─── Empty data → RLP 0x80 ───────────────────────────────────────────────────
 
-// TestBuildTx_LegacyEmptyData_RLP80 verifies that "0x" (empty data) is encoded
-// as RLP 0x80 (empty string), not 0xc0 (empty list) or absent.
+// TestBuildTx_LegacyEmptyData_RLP80 verifies that "0x" (empty data) is
+// represented in-memory as a non-nil []byte{} so that the go-ethereum RLP
+// encoder produces 0x80 (empty string) rather than omitting the field.
 //
-// The verification strategy: sign with a throwaway key and scan the raw signed
-// bytes for 0x80.  Because the data field is empty (zero bytes), its RLP
-// encoding is exactly the one-byte 0x80; any 0xc0/absent encoding would be a
-// bug.  We also assert the in-memory tx.Data() is non-nil and length-0 so that
-// the go-ethereum RLP encoder sees an empty byte slice, not a nil slice.
+// Verification note: the non-nil / length-0 pre-condition on tx.Data() is the
+// load-bearing assertion here.  go-ethereum's RLP encoder treats nil []byte and
+// []byte{} identically at the wire level (both encode as 0x80), so the 0x80
+// byte-scan below is not a discriminating proof — it passes even for nil data.
+// The scan is retained as documentation that the field is present in the wire
+// output; byte-level oracle parity (confirming the exact encoding against cast
+// and ethers v6) is Issue 2.10's job.
 func TestBuildTx_LegacyEmptyData_RLP80(t *testing.T) {
 	t.Parallel()
 	p := makeParsedLegacy()
@@ -237,8 +250,9 @@ func TestBuildTx_LegacyEmptyData_RLP80(t *testing.T) {
 	// Sign and marshal to get the raw RLP bytes.
 	raw := signBytes(t, tx, signer, throwawayKey(t))
 
-	// 0x80 is the RLP encoding of an empty byte string.  It must appear in the
-	// signed transaction's binary representation.
+	// Scan for 0x80 as documentation that the data field appears in the wire
+	// output.  This is not a discriminating proof (nil []byte also encodes as
+	// 0x80); the nil pre-condition above is the real guard.
 	found := false
 	for _, b := range raw {
 		if b == 0x80 {
@@ -247,7 +261,7 @@ func TestBuildTx_LegacyEmptyData_RLP80(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("0x80 not found in signed tx bytes (empty-data RLP encoding missing); raw=%x", raw)
+		t.Errorf("0x80 not found in signed tx bytes; raw=%x", raw)
 	}
 }
 
@@ -265,6 +279,9 @@ func TestBuildTx_1559EmptyData_RLP80(t *testing.T) {
 	}
 
 	raw := signBytes(t, tx, signer, throwawayKey(t))
+	// Scan for 0x80 as documentation that the data field appears in the wire
+	// output.  See TestBuildTx_LegacyEmptyData_RLP80 for the caveat: the nil
+	// pre-condition above is the real guard; the scan is not discriminating.
 	found := false
 	for _, b := range raw {
 		if b == 0x80 {
@@ -273,7 +290,7 @@ func TestBuildTx_1559EmptyData_RLP80(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("0x80 not found in signed tx bytes (empty-data RLP encoding missing); raw=%x", raw)
+		t.Errorf("0x80 not found in signed tx bytes; raw=%x", raw)
 	}
 }
 

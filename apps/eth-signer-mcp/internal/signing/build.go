@@ -6,6 +6,7 @@
 package signing
 
 import (
+	"fmt"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/core/types"
@@ -90,7 +91,7 @@ func buildTx(p *parsedTx) (*types.Transaction, types.Signer) {
 		})
 		return tx, signer
 
-	default: // type 0 (legacy / EIP-155)
+	case 0: // legacy / EIP-155
 		tx := types.NewTx(&types.LegacyTx{
 			Nonce:    p.nonce,
 			GasPrice: p.gasPrice,
@@ -100,5 +101,12 @@ func buildTx(p *parsedTx) (*types.Transaction, types.Signer) {
 			Data:     data,
 		})
 		return tx, signer
+
+	default:
+		// validate.go guarantees txType is 0 or 2 (types 1/3/4 are planned for a
+		// future phase).  Any other value reaching here means a new type was added
+		// to validate.go without a corresponding case in this switch — a programmer
+		// error that must not silently fabricate a wrong-type transaction.
+		panic(fmt.Sprintf("buildTx: unhandled txType %d (validate.go contract violated)", p.txType))
 	}
 }
