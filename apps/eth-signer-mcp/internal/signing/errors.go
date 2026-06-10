@@ -54,7 +54,11 @@ type ToolError struct {
 	// NEVER serialised or forwarded to callers. Any log site that emits Cause
 	// must pass the cause as a structured field, not interpolate it into the
 	// Message string.
-	Cause error
+	//
+	// The json:"-" tag enforces at the encoding layer that Cause is never
+	// marshalled, regardless of how the enclosing struct is serialised.
+	// (Defence-in-depth: the server layer must also only encode Code+Message.)
+	Cause error `json:"-"`
 }
 
 // Error implements the error interface.

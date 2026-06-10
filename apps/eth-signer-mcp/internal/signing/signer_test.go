@@ -375,7 +375,8 @@ func TestSigner_WrongPassword(t *testing.T) {
 	}
 
 	var logBuf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&logBuf, nil))
+	// Use Debug level so a future Debug-level log of Cause/key material would be caught.
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	s := NewSigner(vault, SignerOptions{Logger: logger})
 
 	_, signErr := s.SignTransaction(context.Background(), legacyReq())
@@ -430,7 +431,8 @@ func TestSigner_SenderMismatch(t *testing.T) {
 	wv := &mismatchedAddressVault{inner: realVault, claimedAddr: wrongAddr}
 
 	var logBuf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&logBuf, nil))
+	// Use Debug level so a future Debug-level log of Cause/addresses would be caught.
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	s := NewSigner(wv, SignerOptions{Logger: logger})
 
 	_, signErr := s.SignTransaction(context.Background(), legacyReq())
@@ -504,7 +506,8 @@ func TestSigner_PanicRecovery(t *testing.T) {
 	}
 
 	var logBuf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&logBuf, nil))
+	// Use Debug level so a future Debug-level log of the panic value would be caught.
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	s := NewSigner(pv, SignerOptions{Logger: logger})
 
 	// First call: triggers panic, must recover and return internal_error.
