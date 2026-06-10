@@ -5,17 +5,20 @@
 // dependencies so that `go mod tidy` does not prune them from go.mod before
 // real code adds genuine imports.
 //
-// Current status (issue 1.10 polish):
+// Current status (issue 2.1):
 //   - urfave/cli/v3: genuinely imported by cmd/eth-signer-mcp — held by a real import.
 //   - MCP SDK (github.com/modelcontextprotocol/go-sdk/mcp): imported by
 //     internal/server — held by a real import.
 //   - jsonschema-go: pulled transitively by the MCP SDK (a real, non-test
-//     dependency) — held by a real import; dropped here in 1.10.
-//   - go-ethereum: NOT yet imported (internal/signing is stdlib-only in Phase 1);
-//     this pin must stay until Phase 2 wires crypto/accounts/keystore/core/types.
+//     dependency) — held by a real import.
+//   - go-ethereum: imported by internal/signing test files since issue 2.1
+//     (fixtures_test.go uses accounts/keystore). Production code imports
+//     (accounts/keystore, core/types, crypto) land in issues 2.2+.
+//     This pin can be removed once any production file in internal/signing imports
+//     go-ethereum directly. Scheduled for cleanup in issue 2.12 polish pass.
 //
-// When Phase 2 adds the go-ethereum imports to internal/signing, this file
-// becomes empty and should be deleted.
+// When all entries above are held by real imports, this file becomes empty and
+// should be deleted.
 package main
 
 import (
