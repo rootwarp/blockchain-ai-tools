@@ -363,10 +363,15 @@ func TestRun_HTTPValidation(t *testing.T) {
 			wantErr: "--http-auth-token-file",
 		},
 		{
-			// The Action runs, so real 0600 files are needed to pass the fsperm check.
-			// The token-file path (/t) is not checked by fsperm — only keystore and
-			// password-file are — so it can remain a placeholder until Phase 3.
-			name: "http_with_token_file_ok",
+			// Issue 1.8: --http with a token file passes validation and the fsperm
+			// check (real 0600 files used for the latter), but run() rejects it with
+			// a stable "Phase 3" message.  The Streamable HTTP transport arrives in
+			// Phase 3; stdio is the only available transport in Phase 1.
+			// This assertion pins the stable error substring so future refactors
+			// cannot silently change the message that callers rely on.
+			// NEVER "SSE" — transport naming is "Streamable HTTP" per Phase Conventions.
+			name:    "http_with_token_file_phase3_error",
+			wantErr: "Phase 3",
 			args: []string{
 				"eth-signer-mcp", "--keystore", ks, "--password-file", pw,
 				"--http", "--http-auth-token-file", "/t",
@@ -406,11 +411,20 @@ func TestRun_LogLevel(t *testing.T) {
 	// validate() before the Action fires, so it still uses fake paths.
 	ks, pw := tempFiles600(t)
 
+	// Valid-level subtests use a custom action that runs the full parse →
+	// validate → logger → fsperm pipeline but stops before server.New /
+	// RunStdio.  This keeps the test focused on CLI validation and avoids
+	// using os.Stdin (which would be closed by the first parallel subtest,
+	// causing "file already closed" errors in subsequent ones).
 	valid := []string{"debug", "info", "warn", "error", "DEBUG", "INFO", "WARN", "ERROR"}
 	for _, lvl := range valid {
 		t.Run("valid_"+lvl, func(t *testing.T) {
 			t.Parallel()
 			cmd := newCommand()
+			cmd.Action = func(ctx context.Context, c *cli.Command) error {
+				cfg := buildConfig(c)
+				return validate(cfg)
+			}
 			args := []string{"eth-signer-mcp", "--keystore", ks, "--password-file", pw, "--log-level", lvl}
 			if err := cmd.Run(context.Background(), args); err != nil {
 				t.Fatalf("cmd.Run() = %v, want nil for valid log-level %q", err, lvl)

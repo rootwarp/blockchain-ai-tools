@@ -24,8 +24,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/rootwarp/blockchain-ai-tools/apps/eth-signer-mcp/internal/obs"
+	"github.com/rootwarp/blockchain-ai-tools/apps/eth-signer-mcp/internal/server"
 	"github.com/urfave/cli/v3"
 )
 
@@ -143,7 +146,17 @@ func buildConfig(cmd *cli.Command) config {
 }
 
 // run is the cli Action implementing the startup sequence for eth-signer-mcp:
-// parse → validate → logger → fsperm checks → (Phase 1.8: server wiring).
+// parse → validate → logger → fsperm checks → server construction → RunStdio.
+//
+// Startup sequence (architecture Flow D):
+//  1. Parse flags + validate (urfave/cli v3 layer)
+//  2. Construct logger (obs.NewLogger)
+//  3. File-permission checks (issue 1.6, wired once — fsperm is wired once per
+//     Phase Conventions)
+//  4. Construct *server.Server (issue 1.8)
+//  5. Guard against --http (Streamable HTTP lands in Phase 3; clean error now)
+//  6. Install signal.NotifyContext for SIGINT/SIGTERM graceful shutdown
+//  7. Run the server on the stdio transport
 //
 // Exit-code contract: a cli.Exit("…", 2) value is returned for permission
 // failures (missing/unreadable path, or too-open + --strict-perms). The
@@ -151,20 +164,24 @@ func buildConfig(cmd *cli.Command) config {
 // returning from cmd.Run; main() also checks for cli.ExitCoder as a
 // belt-and-suspenders fallback (e.g. when OsExiter is overridden in tests).
 //
+// STDOUT DISCIPLINE: nothing in this function may write to os.Stdout.  Stdout
+// carries MCP JSON-RPC frames written by the SDK's StdioTransport.  All logs
+// go to os.Stderr via obs.NewLogger.
+//
 // There is exactly ONE error-return path through run(), so any deferred
-// cleanup added by future issues will execute even on permission failures.
+// cleanup will execute even on early failures.
 func run(ctx context.Context, cmd *cli.Command) error {
 	cfg := buildConfig(cmd)
 	if err := validate(cfg); err != nil {
 		return err
 	}
 
-	// Issue 1.4: construct the logger from the validated log level.
+	// Step 2: construct the logger from the validated log level.
 	// Never log secret material at any level — see package obs for redaction rules.
 	logger := obs.NewLogger(cfg.LogLevel)
 	logger.Info("eth-signer-mcp starting", "log_level", cfg.LogLevel)
 
-	// Issue 1.6: file-permission startup check — wired once, final form
+	// Step 3: file-permission startup check — wired once, final form
 	// (architecture Flow D, Phase Conventions: "fsperm is wired once").
 	// Checks keystore and password-file paths before any transport starts.
 	// Fail fast if either path is missing, not a regular file, or (when
@@ -177,10 +194,32 @@ func run(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 
-	// TODO(1.8): srv := server.New(server.Options{Name: "eth-signer-mcp", Version: obs.Build().Version, Logger: logger})
-	// TODO(1.8): if cfg.HTTP { return fmt.Errorf("Streamable HTTP transport arrives in Phase 3") }
-	// TODO(1.8): ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM); defer stop()
-	// TODO(1.8): return srv.RunStdio(ctx)
+	// Step 4: construct the MCP server.
+	// Phase 1: no signer wired yet — no tools registered; tools/list returns empty.
+	// Phase 2 extends this to server.New(signer, opts) when sign_transaction and
+	// get_address are registered (see internal/server/server.go comment).
+	srv := server.New(server.Options{
+		Name:    "eth-signer-mcp",
+		Version: obs.Build().Version,
+		Logger:  logger,
+	})
 
-	return nil
+	// Step 5: guard against --http (Streamable HTTP transport arrives in Phase 3).
+	// The flag exists in Phase 1 so --help is truthful; the transport is not yet wired.
+	// Never use the word "SSE" — the second transport is MCP Streamable HTTP
+	// (Phase Conventions: "The second transport … is never called 'HTTP/SSE'").
+	if cfg.HTTP {
+		return fmt.Errorf("the Streamable HTTP transport arrives in Phase 3; " +
+			"use stdio (default) for now")
+	}
+
+	// Step 6: wire signal.NotifyContext for SIGINT/SIGTERM graceful shutdown.
+	// When the OS delivers SIGINT or SIGTERM, ctx is cancelled, which propagates
+	// to RunStdio, which closes the session and returns nil (normalised by RunStdio).
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// Step 7: run the MCP server on the stdio transport.
+	// Returns nil on clean EOF (client closed stdin) or on SIGINT/SIGTERM.
+	return srv.RunStdio(ctx)
 }
