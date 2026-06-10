@@ -3,8 +3,11 @@ package obs
 import (
 	"bytes"
 	"encoding/json"
+	"log/slog"
 	"strings"
 	"testing"
+
+	"github.com/rootwarp/blockchain-ai-tools/apps/eth-signer-mcp/internal/signing"
 )
 
 // TestNewLogger_NonNil verifies that NewLogger returns a non-nil logger.
@@ -143,6 +146,67 @@ func TestNewLogger_GarbageLevelFallsBackToInfo(t *testing.T) {
 	// Info should appear.
 	if !strings.Contains(output, "should appear") {
 		t.Error("info message did not appear; expected info fallback to allow it")
+	}
+}
+
+// TestLeakScan_ObsLogger verifies that a Secret-wrapped sentinel does not appear
+// in any form in obs logger output, at every log level.
+//
+// This test imports internal/signing solely for its Sentinel and Secret[T]
+// helpers — an explicitly permitted test-only edge per ADR-008. The obs package
+// production code does NOT import signing.
+//
+// SAFETY: on any scan failure, only Sentinel.Name and leaked form names are
+// reported — never the captured buffer or its contents.
+func TestLeakScan_ObsLogger(t *testing.T) {
+	t.Parallel()
+
+	// fixtureRaw is the same sentinel used in internal/signing/secret_test.go.
+	const fixtureName = "obs-fixture-secret"
+	fixtureRaw := []byte("SENTINEL-7f3a9c-DO-NOT-LOG")
+	sent := signing.NewSentinel(fixtureName, fixtureRaw)
+	secret := signing.NewSecret(string(fixtureRaw))
+
+	levels := []struct {
+		name  string
+		logFn func(l *slog.Logger)
+	}{
+		{
+			"debug",
+			func(l *slog.Logger) { l.Debug("obs-test-event", "secret", secret) },
+		},
+		{
+			"info",
+			func(l *slog.Logger) { l.Info("obs-test-event", "secret", secret) },
+		},
+		{
+			"warn",
+			func(l *slog.Logger) { l.Warn("obs-test-event", "secret", secret) },
+		},
+		{
+			"error",
+			func(l *slog.Logger) { l.Error("obs-test-event", "secret", secret) },
+		},
+	}
+
+	for _, tc := range levels {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var buf bytes.Buffer
+			// newLoggerTo is the unexported helper in obs/log.go; since this
+			// test is in package obs (same package), it can call it directly.
+			logger := newLoggerTo(&buf, tc.name)
+			tc.logFn(logger)
+
+			output := buf.Bytes()
+			// SAFETY: do NOT include `output` in failure messages — report form names only.
+			leaked := sent.Scan(output)
+			if len(leaked) > 0 {
+				t.Errorf("obs logger at level %q leaked sentinel forms: %v (sentinel: %q)",
+					tc.name, leaked, sent.Name)
+			}
+		})
 	}
 }
 
