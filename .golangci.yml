@@ -12,10 +12,63 @@ linters:
     - revive
     - misspell
     - unconvert
+    - depguard
   settings:
     revive:
       rules:
         - name: exported
+    depguard:
+      # HONEST SCOPE: depguard enforces package-level import PATH edges only.
+      # It cannot see symbols or distinguish interface from concrete types.
+      # Interface-vs-concrete discipline is code-review enforced (ADR-008).
+      rules:
+        # internal/signing must not import HTTP/RPC client packages (ADR-007:
+        # offline invariant) and must not import other internal packages
+        # (ADR-008: signing is a leaf node in the dependency graph).
+        # Production files only — test files are excluded because
+        # offline_test.go uses golang.org/x/tools, a permitted test-only dep.
+        signing-offline-and-leaf:
+          files:
+            - "**/apps/eth-signer-mcp/internal/signing/**"
+            - "!**/*_test.go"
+          deny:
+            - pkg: "net/http"
+              desc: "ADR-007: internal/signing must not reach the network (offline invariant, PRD P0-SIGN-5/P0-SEC-6)"
+            - pkg: "net/rpc"
+              desc: "ADR-007: internal/signing must not reach the network (offline invariant, PRD P0-SIGN-5/P0-SEC-6)"
+            - pkg: "github.com/ethereum/go-ethereum/ethclient"
+              desc: "ADR-007: internal/signing must not reach the network (offline invariant, PRD P0-SIGN-5/P0-SEC-6)"
+            - pkg: "github.com/ethereum/go-ethereum/rpc"
+              desc: "ADR-007: internal/signing must not reach the network (offline invariant, PRD P0-SIGN-5/P0-SEC-6)"
+            - pkg: "github.com/rootwarp/blockchain-ai-tools/apps/eth-signer-mcp/internal/server"
+              desc: "ADR-008: internal/signing is a leaf node; must not import internal/server"
+            - pkg: "github.com/rootwarp/blockchain-ai-tools/apps/eth-signer-mcp/internal/obs"
+              desc: "ADR-008: internal/signing is a leaf node; must not import internal/obs"
+          list-mode: lax
+
+        # internal/obs must not import any internal package (ADR-008: obs is
+        # a leaf node, stdlib-only). Test files are excluded: the leak-scan
+        # test in obs/log_test.go imports signing's Sentinel helper — an
+        # explicitly permitted test-only edge (ADR-008).
+        obs-leaf:
+          files:
+            - "**/apps/eth-signer-mcp/internal/obs/**"
+            - "!**/*_test.go"
+          deny:
+            - pkg: "github.com/rootwarp/blockchain-ai-tools/apps/eth-signer-mcp/internal"
+              desc: "ADR-008: internal/obs is a leaf node; must not import any internal package (prefix match)"
+          list-mode: lax
+
+        # internal/server must not import cmd (package main cannot be
+        # imported anyway — the deny documents the intended edge; signing and
+        # obs are allowed by omission under lax mode).
+        server-edges:
+          files:
+            - "**/apps/eth-signer-mcp/internal/server/**"
+          deny:
+            - pkg: "github.com/rootwarp/blockchain-ai-tools/apps/eth-signer-mcp/cmd"
+              desc: "ADR-008: internal/server must not import cmd (composition root only imports; prefix match)"
+          list-mode: lax
 
 formatters:
   enable:
