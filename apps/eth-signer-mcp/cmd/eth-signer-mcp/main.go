@@ -32,6 +32,15 @@ import (
 func main() {
 	cmd := newCommand()
 	if err := cmd.Run(context.Background(), os.Args); err != nil {
+		// cli.Exit errors carry a specific exit code (e.g. 2 for permission
+		// failures).  The framework's HandleExitCoder already called os.Exit with
+		// that code before Run returned in normal execution, so this branch is only
+		// reached when cli.OsExiter is overridden (e.g. during integration tests).
+		// Honour the embedded code so callers always observe the correct process
+		// exit status.
+		if ec, ok := err.(cli.ExitCoder); ok {
+			os.Exit(ec.ExitCode())
+		}
 		fmt.Fprintf(os.Stderr, "eth-signer-mcp: %v\n", err)
 		os.Exit(1)
 	}
@@ -133,10 +142,17 @@ func buildConfig(cmd *cli.Command) config {
 	return cfg
 }
 
-// run is the cli Action: parse → build config → validate → startup.
-// On validation failure it returns the error, which main() writes to stderr and
-// exits 1. On success, it currently returns nil (exit 0) until later issues
-// complete the startup sequence.
+// run is the cli Action implementing the startup sequence for eth-signer-mcp:
+// parse → validate → logger → fsperm checks → (Phase 1.8: server wiring).
+//
+// Exit-code contract: a cli.Exit("…", 2) value is returned for permission
+// failures (missing/unreadable path, or too-open + --strict-perms). The
+// framework's HandleExitCoder translates this to an OS exit code of 2 before
+// returning from cmd.Run; main() also checks for cli.ExitCoder as a
+// belt-and-suspenders fallback (e.g. when OsExiter is overridden in tests).
+//
+// There is exactly ONE error-return path through run(), so any deferred
+// cleanup added by future issues will execute even on permission failures.
 func run(ctx context.Context, cmd *cli.Command) error {
 	cfg := buildConfig(cmd)
 	if err := validate(cfg); err != nil {
@@ -148,7 +164,19 @@ func run(ctx context.Context, cmd *cli.Command) error {
 	logger := obs.NewLogger(cfg.LogLevel)
 	logger.Info("eth-signer-mcp starting", "log_level", cfg.LogLevel)
 
-	// TODO(1.6): for _, p := range []string{cfg.KeystorePath, cfg.PasswordPath} { checkPerms(p, ...) }
+	// Issue 1.6: file-permission startup check — wired once, final form
+	// (architecture Flow D, Phase Conventions: "fsperm is wired once").
+	// Checks keystore and password-file paths before any transport starts.
+	// Fail fast if either path is missing, not a regular file, or (when
+	// --strict-perms is set) group/world accessible.
+	if err := applyPermChecks(
+		[]string{cfg.KeystorePath, cfg.PasswordPath},
+		cfg.StrictPerms,
+		logger,
+	); err != nil {
+		return err
+	}
+
 	// TODO(1.8): srv := server.New(server.Options{Name: "eth-signer-mcp", Version: obs.Build().Version, Logger: logger})
 	// TODO(1.8): if cfg.HTTP { return fmt.Errorf("Streamable HTTP transport arrives in Phase 3") }
 	// TODO(1.8): ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM); defer stop()

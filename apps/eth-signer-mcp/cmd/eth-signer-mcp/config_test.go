@@ -2,11 +2,31 @@ package main
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/urfave/cli/v3"
 )
+
+// tempFiles600 creates keystore and password-file temp files with mode 0600 in
+// t.TempDir() so that the fsperm startup check (issue 1.6) passes.  Both files
+// get minimal placeholder content; the fsperm check only needs them to exist and
+// be regular files with acceptable permissions.  Returns (keystorePath, passwordPath).
+func tempFiles600(t *testing.T) (string, string) {
+	t.Helper()
+	dir := t.TempDir()
+	ks := filepath.Join(dir, "keystore.json")
+	pw := filepath.Join(dir, "password.txt")
+	if err := os.WriteFile(ks, []byte("{}"), 0o600); err != nil {
+		t.Fatalf("tempFiles600: write keystore: %v", err)
+	}
+	if err := os.WriteFile(pw, []byte("pass"), 0o600); err != nil {
+		t.Fatalf("tempFiles600: write password: %v", err)
+	}
+	return ks, pw
+}
 
 // ptrUint64 is a test helper that returns a pointer to the given uint64 value.
 func ptrUint64(v uint64) *uint64 { return &v }
@@ -325,20 +345,30 @@ func TestRun_ChainID(t *testing.T) {
 func TestRun_HTTPValidation(t *testing.T) {
 	t.Parallel()
 
+	// Pre-create real temp files so the fsperm check (issue 1.6) passes for the
+	// successful case.  Tests that fail at validate() before the Action fires can
+	// use the original fake paths — the Action never runs for those.
+	ks, pw := tempFiles600(t)
+
 	tests := []struct {
 		name    string
 		args    []string
 		wantErr string
 	}{
 		{
+			// validate() rejects --http without a token file before the Action fires,
+			// so fake keystore/password paths are fine for this case.
 			name:    "http_without_token_file",
 			args:    []string{"eth-signer-mcp", "--keystore", "/k", "--password-file", "/p", "--http"},
 			wantErr: "--http-auth-token-file",
 		},
 		{
+			// The Action runs, so real 0600 files are needed to pass the fsperm check.
+			// The token-file path (/t) is not checked by fsperm — only keystore and
+			// password-file are — so it can remain a placeholder until Phase 3.
 			name: "http_with_token_file_ok",
 			args: []string{
-				"eth-signer-mcp", "--keystore", "/k", "--password-file", "/p",
+				"eth-signer-mcp", "--keystore", ks, "--password-file", pw,
 				"--http", "--http-auth-token-file", "/t",
 			},
 		},
@@ -371,12 +401,17 @@ func TestRun_HTTPValidation(t *testing.T) {
 func TestRun_LogLevel(t *testing.T) {
 	t.Parallel()
 
+	// Pre-create real temp files with mode 0600 so the fsperm check (issue 1.6)
+	// passes for the valid-level subtests.  The invalid-level case fails at
+	// validate() before the Action fires, so it still uses fake paths.
+	ks, pw := tempFiles600(t)
+
 	valid := []string{"debug", "info", "warn", "error", "DEBUG", "INFO", "WARN", "ERROR"}
 	for _, lvl := range valid {
 		t.Run("valid_"+lvl, func(t *testing.T) {
 			t.Parallel()
 			cmd := newCommand()
-			args := []string{"eth-signer-mcp", "--keystore", "/k", "--password-file", "/p", "--log-level", lvl}
+			args := []string{"eth-signer-mcp", "--keystore", ks, "--password-file", pw, "--log-level", lvl}
 			if err := cmd.Run(context.Background(), args); err != nil {
 				t.Fatalf("cmd.Run() = %v, want nil for valid log-level %q", err, lvl)
 			}
@@ -386,6 +421,7 @@ func TestRun_LogLevel(t *testing.T) {
 	t.Run("invalid_garbage", func(t *testing.T) {
 		t.Parallel()
 		cmd := newCommand()
+		// validate() rejects the level before the Action fires — fake paths are fine.
 		args := []string{"eth-signer-mcp", "--keystore", "/k", "--password-file", "/p", "--log-level", "garbage"}
 		err := cmd.Run(context.Background(), args)
 		if err == nil {
@@ -419,13 +455,15 @@ func TestRun_UnknownFlag(t *testing.T) {
 }
 
 // TestRun_SuccessExit verifies that a fully-valid invocation returns nil (exit 0).
+// Uses real 0600 temp files so the fsperm startup check (issue 1.6) passes.
 func TestRun_SuccessExit(t *testing.T) {
 	t.Parallel()
 
+	ks, pw := tempFiles600(t)
 	cmd := newCommand()
-	args := []string{"eth-signer-mcp", "--keystore", "/k", "--password-file", "/p"}
+	args := []string{"eth-signer-mcp", "--keystore", ks, "--password-file", pw}
 	if err := cmd.Run(context.Background(), args); err != nil {
-		t.Fatalf("cmd.Run() = %v, want nil (exit 0) for valid args", err)
+		t.Fatalf("cmd.Run() = %v, want nil (exit 0) for valid args with mode-0600 files", err)
 	}
 }
 
