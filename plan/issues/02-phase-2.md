@@ -173,21 +173,21 @@ registered per the Phase 1 `Sentinel` helper).
 
 **Acceptance Criteria:**
 
-- [ ] All three valid keystore files decrypt with `password.txt` (trailing newline
+- [x] All three valid keystore files decrypt with `password.txt` (trailing newline
       stripped) via go-ethereum v1.17.3 `keystore.DecryptKey`, yielding the same key
       and the README-documented address.
-- [ ] `keystore-standard.json` has scrypt N=262144 and `keystore-light.json` N=4096
+- [x] `keystore-standard.json` has scrypt N=262144 and `keystore-light.json` N=4096
       (asserted by a fixture-sanity test reading the JSON `crypto.kdfparams`); both were
       produced by geth tooling (commands recorded in the README).
-- [ ] `keystore-weak.json` has scrypt n=2 and decrypts in well under 100 ms.
-- [ ] `keystore-no-address.json` / `keystore-empty-address.json` exist and differ from
+- [x] `keystore-weak.json` has scrypt n=2 and decrypts in well under 100 ms.
+- [x] `keystore-no-address.json` / `keystore-empty-address.json` exist and differ from
       `keystore-weak.json` only in the `address` field (the 2.2 startup-failure
       fixtures).
-- [ ] `README.md` carries the "test-only key, weakened/dev KDF, never reuse" warning,
+- [x] `README.md` carries the "test-only key, weakened/dev KDF, never reuse" warning,
       the address, the raw key hex in the marked block, and regeneration instructions.
-- [ ] The fixture key's scalar is registered as a leak-scan sentinel (raw + lower/upper
+- [x] The fixture key's scalar is registered as a leak-scan sentinel (raw + lower/upper
       hex + base64 + decimal forms) via the Phase 1 `Sentinel` helper.
-- [ ] `make test` and `make lint` stay green (fixtures only; a fixture-sanity test is
+- [x] `make test` and `make lint` stay green (fixtures only; a fixture-sanity test is
       the single new test).
 
 **Testing Notes:**
@@ -255,30 +255,30 @@ best-effort zeroed in a `defer` — **including on panic**.
 
 **Acceptance Criteria:**
 
-- [ ] `NewFileKeyVault` against each 2.1 fixture succeeds; `Address()` returns the
+- [x] `NewFileKeyVault` against each 2.1 fixture succeeds; `Address()` returns the
       documented address; no password read and no `DecryptKey` call at construction
       (proven by constructing with a wrong-password file and asserting success).
-- [ ] `NewFileKeyVault` against `keystore-no-address.json` **and**
+- [x] `NewFileKeyVault` against `keystore-no-address.json` **and**
       `keystore-empty-address.json` fails with `keystore_error` and a message naming
       the missing/empty `address` field — the locked startup case, both fixtures.
-- [ ] Missing / unreadable / malformed-JSON keystore → constructor `keystore_error`.
-- [ ] **Password re-read per call:** a test changes the password-file contents between
+- [x] Missing / unreadable / malformed-JSON keystore → constructor `keystore_error`.
+- [x] **Password re-read per call:** a test changes the password-file contents between
       two `WithSigningKey` calls; the second call succeeds with the **new** password
       (and a third call with a wrong password returns `password_error`).
-- [ ] After `WithSigningKey` returns, the key scalar's `D.Bits()` slice and the
+- [x] After `WithSigningKey` returns, the key scalar's `D.Bits()` slice and the
       password byte slice are all zeros (captured-pointer technique: stash pointers
       inside `fn` via closure, inspect after return).
-- [ ] A panic inside `fn` propagates **after** the deferred zeroing runs (test recovers
+- [x] A panic inside `fn` propagates **after** the deferred zeroing runs (test recovers
       the panic and inspects the zeroed buffers).
-- [ ] Wrong password → `password_error`; password bytes still zeroed.
-- [ ] **Semaphore of 1:** two goroutines call `WithSigningKey` concurrently; the second
+- [x] Wrong password → `password_error`; password bytes still zeroed.
+- [x] **Semaphore of 1:** two goroutines call `WithSigningKey` concurrently; the second
       observably enters only after the first's `fn` returns (instrumented ordering —
       e.g. channel handshakes inside `fn` — not wall-clock sleeps).
-- [ ] **ctx before KDF:** a pre-cancelled ctx returns `ctx.Err()` and the KDF never
+- [x] **ctx before KDF:** a pre-cancelled ctx returns `ctx.Err()` and the KDF never
       starts (assert via a sub-100 ms deadline against the standard-scrypt fixture,
       whose KDF alone takes ~0.5–1 s).
-- [ ] No compile-path exposes the raw private key: `SigningKey` has exactly two methods.
-- [ ] Leak scan over logs captured during all vault tests is green (raw + encoded
+- [x] No compile-path exposes the raw private key: `SigningKey` has exactly two methods.
+- [x] Leak scan over logs captured during all vault tests is green (raw + encoded
       sentinel forms).
 
 **Testing Notes:**
@@ -333,20 +333,20 @@ including `additionalProperties: false` — so accidental wire changes fail loud
 
 **Acceptance Criteria:**
 
-- [ ] All four structs compile in `internal/signing` with `json` + `jsonschema` tags
+- [x] All four structs compile in `internal/signing` with `json` + `jsonschema` tags
       matching the architecture's public API; field-by-field doc comments state the
       accepted encodings (decimal or `0x`-hex) and per-type applicability.
-- [ ] The golden schema test pins the inferred `TxRequest` schema, asserting
+- [x] The golden schema test pins the inferred `TxRequest` schema, asserting
       `additionalProperties: false`, the required-field set, the `data` `maxLength`,
       and the hex patterns; any tag change fails the test until the golden is
       consciously regenerated.
-- [ ] `SignResult` contains `rawTransaction`, `signature{r,s,v}`, `hash`, `from` with
+- [x] `SignResult` contains `rawTransaction`, `signature{r,s,v}`, `hash`, `from` with
       **no** `omitempty` on `hash`/`from`; a marshalling test proves all keys are
       always present.
-- [ ] `internal/signing` still imports no MCP SDK package and no internal package
+- [x] `internal/signing` still imports no MCP SDK package and no internal package
       (depguard + offline scaffold stay green; `jsonschema-go` appears in test files
       only).
-- [ ] `make lint` and `make test` green.
+- [x] `make lint` and `make test` green.
 
 **Testing Notes:**
 
@@ -415,25 +415,25 @@ with the correct stable code; the vault is never reachable from any failure path
 
 **Acceptance Criteria:**
 
-- [ ] Table-driven tests cover every rule above with at least one accept and one reject
+- [x] Table-driven tests cover every rule above with at least one accept and one reject
       case per rule, asserting the exact `ToolError` code.
-- [ ] **EIP-55 vectors:** a checksum-correct mixed-case `to` is accepted; a
+- [x] **EIP-55 vectors:** a checksum-correct mixed-case `to` is accepted; a
       checksum-**failing** mixed-case `to` (single letter case-flipped) →
       `invalid_input`; the same address all-lowercase and all-uppercase are both
       accepted.
-- [ ] `chainId: "0"` and `chainId: "0x0"` → `invalid_input`.
-- [ ] `data` of exactly 256 KiB decoded bytes is accepted; 256 KiB + 1 byte →
+- [x] `chainId: "0"` and `chainId: "0x0"` → `invalid_input`.
+- [x] `data` of exactly 256 KiB decoded bytes is accepted; 256 KiB + 1 byte →
       `invalid_input`.
-- [ ] Guard mismatch returns `chain_id_mismatch` even when the request is otherwise
+- [x] Guard mismatch returns `chain_id_mismatch` even when the request is otherwise
       invalid in later rules (ordering locked by a dedicated test).
-- [ ] `nonce: "0x0009"` normalizes to the same `parsedTx` as `"9"` and `"0x9"`.
-- [ ] Contract creation (`to` omitted **and** `to: ""`) yields nil address for both tx
+- [x] `nonce: "0x0009"` normalizes to the same `parsedTx` as `"9"` and `"0x9"`.
+- [x] Contract creation (`to` omitted **and** `to: ""`) yields nil address for both tx
       types.
-- [ ] No error message contains any raw input value (asserted by scanning produced
+- [x] No error message contains any raw input value (asserted by scanning produced
       messages for the inputs of every reject case).
-- [ ] Fuzz tests on the numeric/hex/address parsers find no panics (the server never
+- [x] Fuzz tests on the numeric/hex/address parsers find no panics (the server never
       panics on malformed input).
-- [ ] `make lint` and `make test` green; `internal/signing` imports stay clean.
+- [x] `make lint` and `make test` green; `internal/signing` imports stay clean.
 
 **Testing Notes:**
 
@@ -479,18 +479,18 @@ matrix: contract creation (`To` nil), empty `data` (`[]byte{}` → RLP `0x80`), 
 
 **Acceptance Criteria:**
 
-- [ ] Legacy build: correct field mapping, `Tx.Type() == 0`, EIP-155-capable signer for
+- [x] Legacy build: correct field mapping, `Tx.Type() == 0`, EIP-155-capable signer for
       the chainID.
-- [ ] 1559 build: correct field mapping incl. `GasTipCap`/`GasFeeCap`, `Tx.Type() == 2`.
-- [ ] Contract creation builds with `Tx.To() == nil` for both types.
-- [ ] Empty-data build RLP-encodes the data field as `0x80` (asserted on the unsigned
+- [x] 1559 build: correct field mapping incl. `GasTipCap`/`GasFeeCap`, `Tx.Type() == 2`.
+- [x] Contract creation builds with `Tx.To() == nil` for both types.
+- [x] Empty-data build RLP-encodes the data field as `0x80` (asserted on the unsigned
       tx's RLP or via a signed round-trip in test).
-- [ ] Zero-value build succeeds and survives `MarshalBinary`/`UnmarshalBinary`
+- [x] Zero-value build succeeds and survives `MarshalBinary`/`UnmarshalBinary`
       round-trip.
-- [ ] A `value` above 2^64 wei round-trips without precision loss.
-- [ ] Padded-nonce input (via 2.4) produces byte-identical unsigned tx to the canonical
+- [x] A `value` above 2^64 wei round-trips without precision loss.
+- [x] Padded-nonce input (via 2.4) produces byte-identical unsigned tx to the canonical
       nonce.
-- [ ] `make lint` and `make test` green.
+- [x] `make lint` and `make test` green.
 
 **Testing Notes:**
 
@@ -563,31 +563,31 @@ serving, the per-signing **audit log line**, and the **non-KDF-overhead benchmar
 
 **Acceptance Criteria:**
 
-- [ ] Happy path against the weak fixture returns a `SignResult` with non-empty
+- [x] Happy path against the weak fixture returns a `SignResult` with non-empty
       `rawTransaction`, populated `r`/`s`/`v`, `hash == signedTx.Hash()`, and `from`
       equal to the EIP-55 keystore address — for both legacy and 1559 requests, with
       the correct `v` shape each (`chainID*2+35/36` vs yParity 0/1).
-- [ ] The chain-id guard exists **only** as the `NewSigner` constructor parameter; grep
+- [x] The chain-id guard exists **only** as the `NewSigner` constructor parameter; grep
       proves no per-request guard field; guard mismatch → `chain_id_mismatch`.
-- [ ] Every validation-failure class returns the right code and **never** invokes the
+- [x] Every validation-failure class returns the right code and **never** invokes the
       vault (panicking-fake-vault test per class).
-- [ ] Wrong-password fixture → `password_error`; the error's `Cause` never appears in
+- [x] Wrong-password fixture → `password_error`; the error's `Cause` never appears in
       any captured output (leak scan + wire assertion in 2.7).
-- [ ] Sender-mismatch (fake vault returning a key whose address differs from
+- [x] Sender-mismatch (fake vault returning a key whose address differs from
       `Address()`) → `internal_error` whose message contains **both** the cached
       keystore address and the recovered address.
-- [ ] A panic injected inside the signing path is recovered: key material already
+- [x] A panic injected inside the signing path is recovered: key material already
       zeroed (2.2's technique), result is `internal_error`, the logged line is
       redacted, and a **subsequent** `SignTransaction` on the same `Signer` succeeds
       (server-keeps-serving proof).
-- [ ] Exactly one audit line per success with exactly `request_id`, `tx_hash`,
+- [x] Exactly one audit line per success with exactly `request_id`, `tx_hash`,
       `chain_id`, `nonce`; captured logs contain no `to`, no `value`, no calldata
       bytes (asserted against a request with distinctive values), and pass the
       encoded-forms leak scan.
-- [ ] Benchmark/test asserts non-KDF overhead < 10 ms on **both** standard- and
+- [x] Benchmark/test asserts non-KDF overhead < 10 ms on **both** standard- and
       light-scrypt fixtures (standard run skipped under `-short`, executed in CI's
       full run and recorded for the Phase 4 acceptance benchmark).
-- [ ] `go test -race` green over the package.
+- [x] `go test -race` green over the package.
 
 **Testing Notes:**
 
@@ -647,31 +647,31 @@ vault + signer + `--chain-id` guard in `cmd`.
 
 **Acceptance Criteria:**
 
-- [ ] `tools/list` over the in-memory transport shows **exactly two** tools,
+- [x] `tools/list` over the in-memory transport shows **exactly two** tools,
       `sign_transaction` and `get_address`, with inferred schemas; the
       `sign_transaction` input schema deep-matches 2.3's golden (incl.
       `additionalProperties: false`).
-- [ ] Happy-path `sign_transaction` over MCP returns structured content with
+- [x] Happy-path `sign_transaction` over MCP returns structured content with
       `rawTransaction`, `signature.r/s/v`, `hash`, `from` all populated — full output
       shape from day one.
-- [ ] **Wire-encoding contract tests JSON-parse `Content[0]`** for **all six** codes
+- [x] **Wire-encoding contract tests JSON-parse `Content[0]`** for **all six** codes
       (stub signer returning each `*signing.ToolError` in turn): `IsError == true`,
       exactly one TextContent, its text parses as JSON with exactly the keys `code`
       and `message`, `code` matches, and the handler returned a nil Go error.
-- [ ] A stub signer returning a non-`ToolError` error surfaces as a protocol-level
+- [x] A stub signer returning a non-`ToolError` error surfaces as a protocol-level
       error (non-nil Go error path), not as an `IsError` result.
-- [ ] Unknown input field (`{"foo":"bar"}` alongside valid fields) is rejected via the
+- [x] Unknown input field (`{"foo":"bar"}` alongside valid fields) is rejected via the
       strict schema (asserted end-to-end through the SDK).
-- [ ] `get_address` returns the checksummed fixture address **with the password file
+- [x] `get_address` returns the checksummed fixture address **with the password file
       chmod'd unreadable** (no password read on this path).
-- [ ] `ToolError.Cause` set to a sentinel-bearing error never appears in `Content[0]`
+- [x] `ToolError.Cause` set to a sentinel-bearing error never appears in `Content[0]`
       or anywhere on the wire (leak-scan over the captured transport bytes).
-- [ ] Handlers attach a non-empty `request_id`; the 2.6 audit line emitted during a
+- [x] Handlers attach a non-empty `request_id`; the 2.6 audit line emitted during a
       handler-driven signing carries the same id (correlation test).
-- [ ] `cmd` wiring: missing/no-address keystore at startup exits non-zero with a clear
+- [x] `cmd` wiring: missing/no-address keystore at startup exits non-zero with a clear
       `keystore_error` message (smoke test against `keystore-no-address.json`);
       `--chain-id` is plumbed only into `NewSigner`.
-- [ ] `make lint` (depguard: `server` imports only `signing` + `obs`) and `make test`
+- [x] `make lint` (depguard: `server` imports only `signing` + `obs`) and `make test`
       green.
 
 **Testing Notes:**
@@ -722,14 +722,14 @@ gates green in CI.
 
 **Acceptance Criteria:**
 
-- [ ] `go test ./internal/signing/ -run TestOfflineImports` passes against the real
+- [x] `go test ./internal/signing/ -run TestOfflineImports` passes against the real
       Phase 2 dependency tree (go-ethereum keystore/types/crypto in scope).
-- [ ] The PR description records the mutation: deliberate `ethclient` import → the
+- [x] The PR description records the mutation: deliberate `ethclient` import → the
       offline test failed naming package and path **and** depguard failed; revert
       committed.
-- [ ] Failing output format names the importer and the forbidden import path.
-- [ ] The test completes in under 5 seconds locally (`packages.Load` mode tuned).
-- [ ] CI runs both gates (the test via `make test`, depguard via `make lint`) and is
+- [x] Failing output format names the importer and the forbidden import path.
+- [x] The test completes in under 5 seconds locally (`packages.Load` mode tuned).
+- [x] CI runs both gates (the test via `make test`, depguard via `make lint`) and is
       green on the merge commit.
 
 **Testing Notes:**
@@ -801,17 +801,17 @@ committed. **CI never invokes Foundry or Node**; regeneration is a manual develo
 
 **Acceptance Criteria:**
 
-- [ ] `scripts/regen-vectors.sh` regenerates the **entire** matrix in one run on a
+- [x] `scripts/regen-vectors.sh` regenerates the **entire** matrix in one run on a
       machine with pinned Foundry + Node and exits non-zero on any cast/ethers
       byte mismatch or `cast --version` / `.foundry-version` mismatch.
-- [ ] All 11 vector files exist, conform to the documented schema, and the 9 signing
+- [x] All 11 vector files exist, conform to the documented schema, and the 9 signing
       vectors carry byte-identical output from both oracles (recorded in `meta`).
-- [ ] `.foundry-version` (v1.7.1) and `vectors/cast-version.txt` are committed and
+- [x] `.foundry-version` (v1.7.1) and `vectors/cast-version.txt` are committed and
       mutually consistent.
-- [ ] Signing vectors use the 2.1 fixture key (one disclosure path: the 2.1 README);
+- [x] Signing vectors use the 2.1 fixture key (one disclosure path: the 2.1 README);
       the script contains a pointer, not a second copy of the key's provenance story.
-- [ ] The script performs no network calls (both oracles run fully offline).
-- [ ] CI does **not** execute the script; `make test` has no dependency on `cast` or
+- [x] The script performs no network calls (both oracles run fully offline).
+- [x] CI does **not** execute the script; `make test` has no dependency on `cast` or
       `node` (verified by CI passing on a runner without them).
 
 **Testing Notes:**
