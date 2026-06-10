@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/rootwarp/blockchain-ai-tools/apps/eth-signer-mcp/internal/obs"
 	"github.com/urfave/cli/v3"
 )
 
@@ -52,13 +53,16 @@ func main() {
 // validate() rejects as replay-unprotected). Always obtain a fresh instance via
 // newCommand() per Run. main() runs once per process and is therefore safe.
 //
-// Version is intentionally empty here. Issue 1.4 wires obs.Build() so that
-// --version prints version, commit, build date, and Go version automatically.
+// cmd.Version is set here (not inside the Action) because urfave/cli v3 handles
+// --version before the Action fires; wiring inside run() would be a no-op.
+// obs.Build().String() returns the version+build-info fields only — urfave/cli v3's
+// DefaultPrintVersion prepends "{cmd.Name} version " automatically, so the full
+// output is: "eth-signer-mcp version <Version> (commit <Commit>, built <Date>, <GoVersion>)".
 func newCommand() *cli.Command {
 	return &cli.Command{
-		Name:  "eth-signer-mcp",
-		Usage: "offline Ethereum signer MCP server (stdio by default; Streamable HTTP via --http in Phase 3)",
-		// Version: set by Issue 1.4 from obs.Build().Version; urfave/cli v3 prints it on --version.
+		Name:    "eth-signer-mcp",
+		Usage:   "offline Ethereum signer MCP server (stdio by default; Streamable HTTP via --http in Phase 3)",
+		Version: obs.Build().String(), // Issue 1.4: all four fields on --version
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:     "keystore",
@@ -129,7 +133,7 @@ func buildConfig(cmd *cli.Command) config {
 	return cfg
 }
 
-// run is the cli Action: parse → build config → validate → (future seam).
+// run is the cli Action: parse → build config → validate → startup.
 // On validation failure it returns the error, which main() writes to stderr and
 // exits 1. On success, it currently returns nil (exit 0) until later issues
 // complete the startup sequence.
@@ -139,11 +143,11 @@ func run(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 
-	// TODO(1.4): logger := obs.NewLogger(cfg.LogLevel)
-	// Note: cmd.Version must be set in newCommand() (or before cmd.Run() in
-	// main()), NOT here — urfave/cli v3 handles --version before the Action
-	// fires, so setting it inside run() is a no-op. See newCommand()'s
-	// "Version:" anchor for the Issue 1.4 wiring point.
+	// Issue 1.4: construct the logger from the validated log level.
+	// Never log secret material at any level — see package obs for redaction rules.
+	logger := obs.NewLogger(cfg.LogLevel)
+	logger.Info("eth-signer-mcp starting", "log_level", cfg.LogLevel)
+
 	// TODO(1.6): for _, p := range []string{cfg.KeystorePath, cfg.PasswordPath} { checkPerms(p, ...) }
 	// TODO(1.8): srv := server.New(server.Options{Name: "eth-signer-mcp", Version: obs.Build().Version, Logger: logger})
 	// TODO(1.8): if cfg.HTTP { return fmt.Errorf("Streamable HTTP transport arrives in Phase 3") }
