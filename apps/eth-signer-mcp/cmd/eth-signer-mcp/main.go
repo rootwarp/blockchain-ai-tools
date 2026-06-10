@@ -45,6 +45,13 @@ func main() {
 // newCommand is a factory so tests can re-create the command with a custom Action
 // (e.g. to capture the parsed config) without mutating the production action.
 //
+// IMPORTANT: the returned *cli.Command must NOT be reused across multiple Run
+// calls. urfave/cli v3 sets each flag's hasBeenSet=true on first parse and never
+// resets it, so a second Run on the same instance sees stale IsSet() results and
+// would misclassify --chain-id presence (an absent flag read as &0, which
+// validate() rejects as replay-unprotected). Always obtain a fresh instance via
+// newCommand() per Run. main() runs once per process and is therefore safe.
+//
 // Version is intentionally empty here. Issue 1.4 wires obs.Build() so that
 // --version prints version, commit, build date, and Go version automatically.
 func newCommand() *cli.Command {
@@ -133,7 +140,10 @@ func run(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	// TODO(1.4): logger := obs.NewLogger(cfg.LogLevel)
-	// TODO(1.4): cmd (root) Version = obs.Build().Version
+	// Note: cmd.Version must be set in newCommand() (or before cmd.Run() in
+	// main()), NOT here — urfave/cli v3 handles --version before the Action
+	// fires, so setting it inside run() is a no-op. See newCommand()'s
+	// "Version:" anchor for the Issue 1.4 wiring point.
 	// TODO(1.6): for _, p := range []string{cfg.KeystorePath, cfg.PasswordPath} { checkPerms(p, ...) }
 	// TODO(1.8): srv := server.New(server.Options{Name: "eth-signer-mcp", Version: obs.Build().Version, Logger: logger})
 	// TODO(1.8): if cfg.HTTP { return fmt.Errorf("Streamable HTTP transport arrives in Phase 3") }

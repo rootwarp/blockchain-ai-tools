@@ -165,6 +165,8 @@ func TestValidate_Rules(t *testing.T) {
 // TestRun_GoldenConfig verifies that parsing the minimal required flags yields
 // the exact canonical default config value (acceptance criterion §golden).
 func TestRun_GoldenConfig(t *testing.T) {
+	t.Parallel()
+
 	var captured config
 
 	cmd := newCommand()
@@ -371,7 +373,6 @@ func TestRun_LogLevel(t *testing.T) {
 
 	valid := []string{"debug", "info", "warn", "error", "DEBUG", "INFO", "WARN", "ERROR"}
 	for _, lvl := range valid {
-		lvl := lvl
 		t.Run("valid_"+lvl, func(t *testing.T) {
 			t.Parallel()
 			cmd := newCommand()
@@ -398,6 +399,8 @@ func TestRun_LogLevel(t *testing.T) {
 
 // TestRun_UnknownFlag verifies that an unknown flag causes non-zero exit with non-empty error.
 func TestRun_UnknownFlag(t *testing.T) {
+	t.Parallel()
+
 	cmd := newCommand()
 	// Suppress error output to stderr during test.
 	cmd.ErrWriter = &strings.Builder{}
@@ -417,6 +420,8 @@ func TestRun_UnknownFlag(t *testing.T) {
 
 // TestRun_SuccessExit verifies that a fully-valid invocation returns nil (exit 0).
 func TestRun_SuccessExit(t *testing.T) {
+	t.Parallel()
+
 	cmd := newCommand()
 	args := []string{"eth-signer-mcp", "--keystore", "/k", "--password-file", "/p"}
 	if err := cmd.Run(context.Background(), args); err != nil {
@@ -424,9 +429,46 @@ func TestRun_SuccessExit(t *testing.T) {
 	}
 }
 
+// TestNewCommand_FreshInstancePerRun pins the no-reuse contract documented on
+// newCommand(): a fresh *cli.Command must classify --chain-id presence
+// independently. urfave/cli v3's IsSet() is sticky (write-once per instance), so
+// this guards against a future test or retry loop that shares an instance and
+// silently misclassifies an absent --chain-id as &0.
+func TestNewCommand_FreshInstancePerRun(t *testing.T) {
+	t.Parallel()
+
+	capture := func(args []string) config {
+		var captured config
+		cmd := newCommand()
+		cmd.Action = func(ctx context.Context, c *cli.Command) error {
+			captured = buildConfig(c)
+			return nil
+		}
+		if err := cmd.Run(context.Background(), args); err != nil {
+			t.Fatalf("cmd.Run(%v) = %v, want nil", args, err)
+		}
+		return captured
+	}
+
+	// A fresh instance WITH --chain-id sets the guard.
+	withGuard := capture([]string{"eth-signer-mcp", "--keystore", "/k", "--password-file", "/p", "--chain-id", "5"})
+	if withGuard.ChainIDGuard == nil || *withGuard.ChainIDGuard != 5 {
+		t.Fatalf("ChainIDGuard = %v, want &5", withGuard.ChainIDGuard)
+	}
+
+	// A separate fresh instance WITHOUT --chain-id must see nil — not leaked
+	// sticky IsSet state from the previous Run.
+	without := capture([]string{"eth-signer-mcp", "--keystore", "/k", "--password-file", "/p"})
+	if without.ChainIDGuard != nil {
+		t.Fatalf("ChainIDGuard = %v on fresh instance without --chain-id, want nil", *without.ChainIDGuard)
+	}
+}
+
 // TestHelp_ListsAllFlags verifies that --help exits 0 and lists every documented flag.
 // In urfave/cli v3, --help prints to cmd.Writer and returns nil (no os.Exit call).
 func TestHelp_ListsAllFlags(t *testing.T) {
+	t.Parallel()
+
 	var buf strings.Builder
 	cmd := newCommand()
 	cmd.Writer = &buf

@@ -47,6 +47,9 @@ func validate(cfg config) error {
 	if cfg.HTTP && cfg.TokenFilePath == "" {
 		return fmt.Errorf("--http-auth-token-file is required when --http is set")
 	}
+	// TODO(Phase 3): when cfg.HTTP is set, validate HTTPAddr via net.SplitHostPort
+	// and ensure the host resolves to loopback only. The error message must not
+	// echo cfg.HTTPAddr (architecture §Error Handling: never echo raw input).
 	if cfg.ChainIDGuard != nil && *cfg.ChainIDGuard == 0 {
 		return fmt.Errorf("--chain-id 0 is rejected: chain-id 0 is replay-unprotected; use a non-zero chain-id")
 	}
@@ -54,7 +57,10 @@ func validate(cfg config) error {
 	case "debug", "info", "warn", "error":
 		// valid
 	default:
-		return fmt.Errorf("--log-level must be one of debug|info|warn|error, got %q", cfg.LogLevel)
+		// Do not echo cfg.LogLevel: architecture §Error Handling forbids echoing
+		// raw user input in error messages (it could surface a mis-pasted secret
+		// in stderr / CI logs / shell history).
+		return fmt.Errorf("--log-level must be one of debug|info|warn|error")
 	}
 	return nil
 }
