@@ -869,20 +869,20 @@ success metric in code and the phase exit gate.
 
 **Acceptance Criteria:**
 
-- [ ] All 9 signing vectors pass **byte-identical** `rawTransaction` equality against
+- [x] All 9 signing vectors pass **byte-identical** `rawTransaction` equality against
       the cast/ethers reference, covering: both types × chainId {1, 11155111}, EIP-155
       `v` vs yParity, empty `data` (`0x` → `0x80`), zero `value`, contract creation
       (`to` omitted), padded/leading-zero nonce.
-- [ ] `r`/`s`/`v` match the reference on every signing vector.
-- [ ] Recovered sender == keystore address on every signing vector (in-test recovery,
+- [x] `r`/`s`/`v` match the reference on every signing vector.
+- [x] Recovered sender == keystore address on every signing vector (in-test recovery,
       independent of the signer's own defensive check).
-- [ ] Every output RLP round-trips through `UnmarshalBinary` to the same hash.
-- [ ] `reject-bad-checksum.json` → `invalid_input`; `reject-chainid-zero.json` →
+- [x] Every output RLP round-trips through `UnmarshalBinary` to the same hash.
+- [x] `reject-bad-checksum.json` → `invalid_input`; `reject-chainid-zero.json` →
       `invalid_input`; the fake vault proves no key material was touched for either.
-- [ ] The suite asserts it consumed exactly 11 vectors (9 + 2).
-- [ ] Full suite completes in under ~5 seconds (weak-scrypt fixture) and runs in plain
+- [x] The suite asserts it consumed exactly 11 vectors (9 + 2).
+- [x] Full suite completes in under ~5 seconds (weak-scrypt fixture) and runs in plain
       `make test` / CI — no external tools.
-- [ ] `make lint` and `make test` green.
+- [x] `make lint` and `make test` green.
 
 **Testing Notes:**
 
