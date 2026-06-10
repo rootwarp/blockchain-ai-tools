@@ -1,0 +1,70 @@
+# This workflow is the referent of every "in CI" claim in the plan.
+# All enforcement described in plan/issues/01-phase-1.md — lint, test,
+# build, govulncheck, and Windows-compile — runs here. When a later plan
+# issue says "CI enforces X", this file is what enforces it.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  ci:
+    name: CI
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Go 1.26 matches the workspace toolchain declared in go.work.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+          cache-dependency-path: '**/go.sum'
+
+      # golangci-lint version is pinned explicitly. Bumps must be deliberate:
+      # update the version below AND verify locally (`make lint`) before merging.
+      # Pinned to v2.11.4 — the version in the local dev environment.
+      - name: Install golangci-lint v2.11.4
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh \
+            | sh -s -- -b "$(go env GOPATH)/bin" v2.11.4
+
+      # make lint iterates every module and calls golangci-lint on each.
+      # Running via make (not the action's built-in run) keeps local and CI
+      # lint identical — same binary, same config, same module loop.
+      - name: Lint
+        run: make lint
+
+      - name: Test
+        run: make test
+
+      - name: Build
+        run: make build
+
+      # govulncheck is installed at latest so it always has the freshest
+      # vulnerability database scanner; the dep-pinned versions under scan
+      # are what matter, not the scanner version.
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      # Run govulncheck inside the module dir (workspace mode is active;
+      # this matches the Makefile per-module convention). A future advisory
+      # against any dependency MUST fail the build — do NOT add
+      # continue-on-error here. Vulnerability tracking for go-ethereum and
+      # all other deps is automated through this step; no manual advisory
+      # claims are needed anywhere in the repo.
+      - name: govulncheck (apps/eth-signer-mcp)
+        working-directory: apps/eth-signer-mcp
+        run: govulncheck ./...
+
+      # Compile-only check against Windows target. No Windows runner needed.
+      # This exercises fsperm_windows.go (added in issue 1.6) and catches any
+      # accidental POSIX-only code from day one.
+      - name: Windows compile check (apps/eth-signer-mcp)
+        working-directory: apps/eth-signer-mcp
+        run: GOOS=windows GOARCH=amd64 go build ./...
