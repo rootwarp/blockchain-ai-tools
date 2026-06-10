@@ -1,13 +1,18 @@
 go 1.26
 
-// This is a multi-module Go workspace. No modules exist yet.
+// toolchain pins the patch release used to build/test the workspace. Kept at the
+// latest 1.26.x to clear standard-library security advisories (govulncheck gate);
+// bump as new Go patch releases land. The `go 1.26` line above is the language
+// version; this is the concrete toolchain.
+toolchain go1.26.4
+
+// This is a multi-module Go workspace.
 //
-// Create one with the Makefile, which scaffolds the module and runs
-// `go work use` for you:
+// Add a module with the Makefile, which scaffolds it and runs `go work use`:
 //
 //	make new-app name=foo   -> creates apps/foo (module .../apps/foo)
 //	make new-lib name=bar   -> creates libs/bar (module .../libs/bar)
 //
-// After that, Go manages a `use ( ... )` block below automatically.
+// Go manages the `use ( ... )` block below automatically.
 
 use ./apps/eth-signer-mcp

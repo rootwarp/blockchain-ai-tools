@@ -30,9 +30,19 @@ import (
 // os.Stdout.  Nothing else in this package may write to os.Stdout.  All logs
 // go to os.Stderr via the injected obs logger.
 func (s *Server) RunStdio(ctx context.Context) error {
-	err := s.runWithTransport(ctx, &mcp.StdioTransport{})
-	// Normalise context cancellation to nil: a SIGINT/SIGTERM shutdown is
-	// clean (expected), not an error.  The SDK returns ctx.Err() on cancel.
+	return normalizeShutdownErr(s.runWithTransport(ctx, &mcp.StdioTransport{}))
+}
+
+// normalizeShutdownErr maps a context cancellation/deadline error to nil: a
+// SIGINT/SIGTERM-initiated shutdown (which cancels ctx via signal.NotifyContext)
+// is a clean, expected exit, not an error. The SDK's Server.Run returns
+// ctx.Err() on cancel; callers want nil so the binary exits 0. Any other error
+// passes through unchanged.
+//
+// Extracted from RunStdio so the normalisation can be unit-tested directly,
+// without driving RunStdio (which would otherwise close the process-wide
+// os.Stdin via mcp.StdioTransport — a land-mine for other tests in this binary).
+func normalizeShutdownErr(err error) error {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return nil
 	}

@@ -406,16 +406,14 @@ func TestRun_HTTPValidation(t *testing.T) {
 func TestRun_LogLevel(t *testing.T) {
 	t.Parallel()
 
-	// Pre-create real temp files with mode 0600 so the fsperm check (issue 1.6)
-	// passes for the valid-level subtests.  The invalid-level case fails at
-	// validate() before the Action fires, so it still uses fake paths.
+	// Real 0600 temp files are created for parity with the invalid case, though
+	// the custom action below never reaches the fsperm check.
 	ks, pw := tempFiles600(t)
 
-	// Valid-level subtests use a custom action that runs the full parse →
-	// validate → logger → fsperm pipeline but stops before server.New /
-	// RunStdio.  This keeps the test focused on CLI validation and avoids
-	// using os.Stdin (which would be closed by the first parallel subtest,
-	// causing "file already closed" errors in subsequent ones).
+	// Valid-level subtests use a custom action that runs only parse → buildConfig
+	// → validate(): it deliberately stops there, before logger/fsperm/server.New/
+	// RunStdio. This keeps the test focused on log-level validation and avoids
+	// driving RunStdio (which would read os.Stdin) in parallel subtests.
 	valid := []string{"debug", "info", "warn", "error", "DEBUG", "INFO", "WARN", "ERROR"}
 	for _, lvl := range valid {
 		t.Run("valid_"+lvl, func(t *testing.T) {
@@ -469,7 +467,9 @@ func TestRun_UnknownFlag(t *testing.T) {
 }
 
 // TestRun_SuccessExit verifies that a fully-valid invocation returns nil (exit 0).
-// Uses real 0600 temp files so the fsperm startup check (issue 1.6) passes.
+// This drives the REAL Action end-to-end, including RunStdio: under `go test`
+// os.Stdin is non-interactive (EOF), so the stdio session ends immediately and
+// RunStdio returns nil. Uses real 0600 temp files so the fsperm check passes.
 func TestRun_SuccessExit(t *testing.T) {
 	t.Parallel()
 

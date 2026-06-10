@@ -21,6 +21,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"testing"
 	"time"
@@ -155,15 +156,16 @@ func TestInMemorySmoke_ToolsListEmpty(t *testing.T) {
 	}
 }
 
-// TestRunStdio_CtxCancel verifies that cancelling the serve context causes
-// RunStdio to return within 1 second.  Uses an IOTransport backed by
-// io.Pipe so we can control both ends without touching real os.Stdin/Stdout.
+// TestRunWithTransport_CtxCancel verifies that cancelling the serve context
+// causes runWithTransport to return within 1 second.  Uses an IOTransport
+// backed by io.Pipe so we can control both ends without touching real
+// os.Stdin/Stdout.
 //
 // Why io.Pipe: using an io.Pipe reader ensures that when the transport is
 // closed (on ctx cancel), ioConn.Close() closes the read side of the pipe,
 // which unblocks any pending json.Decoder.Decode() call and allows the SDK's
 // internal decode goroutine to exit cleanly (no goroutine leak).
-func TestRunStdio_CtxCancel(t *testing.T) {
+func TestRunWithTransport_CtxCancel(t *testing.T) {
 	t.Parallel()
 
 	ctx, serveCancel := context.WithCancel(context.Background())
@@ -205,46 +207,35 @@ func TestRunStdio_CtxCancel(t *testing.T) {
 	}
 }
 
-// TestRunStdio_CtxCancelNormalisedToNil verifies that RunStdio itself returns
-// nil when the context is cancelled (the SIGINT/SIGTERM graceful-shutdown path),
-// not ctx.Err().
+// TestNormalizeShutdownErr verifies the context-cancellation normalisation that
+// RunStdio applies: a SIGINT/SIGTERM graceful shutdown surfaces as ctx.Err()
+// from the SDK, which must be mapped to nil so the binary exits 0; any other
+// error passes through unchanged.
 //
-// The SDK's Server.Run returns ctx.Err() (context.Canceled) on cancellation;
-// RunStdio normalises that to nil so the binary exits 0 on graceful shutdown
-// (see stdio.go comment).  This test exercises RunStdio's normalisation branch
-// for coverage.
-//
-// Stdin discipline: RunStdio uses mcp.StdioTransport which wraps os.Stdin.
-// A pre-cancelled context causes Server.Run to detect ctx.Done() immediately
-// and close the connection (which closes os.Stdin).  No other server test uses
-// os.Stdin, so the close is safe within this test binary.
-func TestRunStdio_CtxCancelNormalisedToNil(t *testing.T) {
-	// Not parallel: RunStdio closes os.Stdin on exit, which is a one-time
-	// operation within the test binary.  Other server tests use IOTransport
-	// with pipes and are unaffected, but we avoid scheduling ambiguity.
+// This exercises the normalisation directly (rather than via RunStdio, which
+// would close the process-wide os.Stdin through mcp.StdioTransport — a land-mine
+// for any future test in this binary that reads os.Stdin).
+func TestNormalizeShutdownErr(t *testing.T) {
+	t.Parallel()
 
-	logger := obs.NewLogger("error")
-	srv := New(Options{
-		Name:    "eth-signer-mcp-test",
-		Version: "v0.0.0-test",
-		Logger:  logger,
-	})
-
-	// Pre-cancel the context so Server.Run exits immediately on <-ctx.Done().
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- srv.RunStdio(ctx)
-	}()
-
-	select {
-	case <-time.After(2 * time.Second):
-		t.Fatal("RunStdio did not return within 2s with pre-cancelled context")
-	case err := <-done:
-		if err != nil {
-			t.Errorf("RunStdio(cancelled ctx) = %v; want nil (normalised from ctx.Canceled)", err)
-		}
+	otherErr := errors.New("real transport failure")
+	tests := []struct {
+		name string
+		in   error
+		want error
+	}{
+		{"nil", nil, nil},
+		{"canceled", context.Canceled, nil},
+		{"deadline", context.DeadlineExceeded, nil},
+		{"wrapped canceled", fmt.Errorf("serve: %w", context.Canceled), nil},
+		{"other error passes through", otherErr, otherErr},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := normalizeShutdownErr(tt.in); got != tt.want {
+				t.Errorf("normalizeShutdownErr(%v) = %v; want %v", tt.in, got, tt.want)
+			}
+		})
 	}
 }

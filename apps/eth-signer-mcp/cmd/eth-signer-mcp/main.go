@@ -22,6 +22,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -40,8 +41,10 @@ func main() {
 		// that code before Run returned in normal execution, so this branch is only
 		// reached when cli.OsExiter is overridden (e.g. during integration tests).
 		// Honour the embedded code so callers always observe the correct process
-		// exit status.
-		if ec, ok := err.(cli.ExitCoder); ok {
+		// exit status. errors.As (not a bare type assertion) so a wrapped
+		// ExitCoder is still recognised.
+		var ec cli.ExitCoder
+		if errors.As(err, &ec) {
 			os.Exit(ec.ExitCode())
 		}
 		fmt.Fprintf(os.Stderr, "eth-signer-mcp: %v\n", err)

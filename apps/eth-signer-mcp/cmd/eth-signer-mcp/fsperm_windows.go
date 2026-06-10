@@ -19,7 +19,12 @@ func checkPerms(_ string) (tooOpen bool, err error) {
 	return false, nil
 }
 
-// applyPermChecks is a no-op on Windows (see checkPerms for rationale).
-func applyPermChecks(_ []string, _ bool, _ *slog.Logger) error {
+// applyPermChecks is a no-op on Windows (see checkPerms for rationale), but it
+// emits a single INFO line so an operator is not misled into thinking the
+// POSIX group/world-readable check ran. Visibility addresses the review note
+// that a silent no-op could hide the platform difference.
+func applyPermChecks(_ []string, _ bool, logger *slog.Logger) error {
+	logger.Info("file-permission checks skipped on Windows; " +
+		"access is governed by ACLs, not POSIX mode bits (--strict-perms has no effect here)")
 	return nil
 }

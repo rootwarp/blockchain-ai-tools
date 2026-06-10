@@ -26,21 +26,21 @@
     ([`architecture.md`](../architecture.md), rev 2 — full simplification)
     approved and not under active revision.
 - **Exit criteria** (from `plan/project-plan.md`, all testable):
-  - [ ] `make build` produces `bin/eth-signer-mcp`; `--help` shows all
+  - [x] `make build` produces `bin/eth-signer-mcp`; `--help` shows all
         flags; `--version` prints version, commit, build date, Go version.
-  - [ ] Binary answers MCP `initialize` and an empty `tools/list` over
+  - [x] Binary answers MCP `initialize` and an empty `tools/list` over
         stdio (in-memory-transport smoke test).
-  - [ ] Logs are JSON on stderr; `--log-level` honored; leak-scan tests
+  - [x] Logs are JSON on stderr; `--log-level` honored; leak-scan tests
         pass in `signing` and `obs`, covering the sentinel **and** its
         encoded forms.
-  - [ ] World-/group-readable keystore or password file warns; with
+  - [x] World-/group-readable keystore or password file warns; with
         `--strict-perms` the process refuses (exit 2). Both paths tested.
   - [ ] CI green on `main`: lint (incl. depguard), test, build,
         govulncheck, `GOOS=windows` compile.
-  - [ ] SDK spike note committed, answering: in-memory transport,
+  - [x] SDK spike note committed, answering: in-memory transport,
         StreamableHTTPOptions surface, middleware order, request-id
         source, jsonschema tag capabilities.
-  - [ ] Offline-import test compiles and runs (vacuously green).
+  - [x] Offline-import test compiles and runs (vacuously green).
 
 ### Phase Conventions (locked; do not re-litigate during execution)
 
@@ -164,19 +164,19 @@ short comment at the top of `main.go` (and in the README stub touched by
   diff is expected. Do not prune manually.
 
 **Acceptance Criteria:**
-- [ ] `apps/eth-signer-mcp/go.mod` exists with module path
+- [x] `apps/eth-signer-mcp/go.mod` exists with module path
       `github.com/rootwarp/blockchain-ai-tools/apps/eth-signer-mcp` and
       `go 1.26`.
-- [ ] `apps/eth-signer-mcp/cmd/eth-signer-mcp/main.go` is the only
+- [x] `apps/eth-signer-mcp/cmd/eth-signer-mcp/main.go` is the only
       `package main` file in the module; the scaffolder's root-level
       `main.go` is gone; a comment in `main.go` records why the entry point
       lives under `cmd/`.
-- [ ] `go.mod` pins `github.com/modelcontextprotocol/go-sdk v1.6.1`,
+- [x] `go.mod` pins `github.com/modelcontextprotocol/go-sdk v1.6.1`,
       `github.com/ethereum/go-ethereum v1.17.3`, an exact
       `github.com/urfave/cli/v3` patch, and `github.com/google/jsonschema-go`.
-- [ ] `go mod tidy` is idempotent (second run changes nothing).
-- [ ] `go.work` lists `./apps/eth-signer-mcp`.
-- [ ] `make build` produces `bin/eth-signer-mcp` and exits 0; `make test`
+- [x] `go mod tidy` is idempotent (second run changes nothing).
+- [x] `go.work` lists `./apps/eth-signer-mcp`.
+- [x] `make build` produces `bin/eth-signer-mcp` and exits 0; `make test`
       exits 0.
 
 **Testing Notes:**
@@ -232,15 +232,15 @@ claims anywhere in the repo.
   point — do not mark the step `continue-on-error`.
 
 **Acceptance Criteria:**
-- [ ] `.github/workflows/ci.yml` exists and triggers on PRs and pushes to
+- [x] `.github/workflows/ci.yml` exists and triggers on PRs and pushes to
       `main`.
-- [ ] The workflow runs, in order or in parallel: `make lint`, `make test`,
+- [x] The workflow runs, in order or in parallel: `make lint`, `make test`,
       `make build`, `govulncheck ./...` (in `apps/eth-signer-mcp/`), and
       `GOOS=windows go build ./...`.
-- [ ] golangci-lint v2 is version-pinned in the workflow; Go version matches
+- [x] golangci-lint v2 is version-pinned in the workflow; Go version matches
       the workspace toolchain (1.26).
 - [ ] CI is green on `main` with the Phase 1 codebase as of this issue.
-- [ ] No step is `continue-on-error`; a govulncheck finding fails the build.
+- [x] No step is `continue-on-error`; a govulncheck finding fails the build.
 
 **Testing Notes:**
 - Verify by pushing a branch and opening a PR; confirm all five checks run
@@ -330,23 +330,23 @@ Flag set (PRD P0-CLI-1..6, P1-SEC-1, P1-OBS-1):
   non-zero exit. Error messages never echo file *contents*, only paths.
 
 **Acceptance Criteria:**
-- [ ] `--help` exits 0 and lists every flag in the table above with its
+- [x] `--help` exits 0 and lists every flag in the table above with its
       default.
-- [ ] Golden flag-set test: parsing
+- [x] Golden flag-set test: parsing
       `--keystore /k --password-file /p` yields `config{KeystorePath:"/k",
       PasswordPath:"/p", HTTP:false, HTTPAddr:"127.0.0.1:0",
       ChainIDGuard:nil, StrictPerms:false, LogLevel:"info"}`.
-- [ ] Missing `--keystore` or `--password-file` → non-zero exit with an
+- [x] Missing `--keystore` or `--password-file` → non-zero exit with an
       error naming the missing flag.
-- [ ] `--http` without `--http-auth-token-file` → validation error naming
+- [x] `--http` without `--http-auth-token-file` → validation error naming
       `--http-auth-token-file`.
-- [ ] `--chain-id 1` → `*ChainIDGuard == 1`; flag absent → `ChainIDGuard ==
+- [x] `--chain-id 1` → `*ChainIDGuard == 1`; flag absent → `ChainIDGuard ==
       nil`; `--chain-id 0` → validation error.
-- [ ] `--log-level garbage` → validation error; each of
+- [x] `--log-level garbage` → validation error; each of
       `debug|info|warn|error` accepted.
-- [ ] Unknown flag → non-zero exit, non-empty stderr (binary-level smoke
+- [x] Unknown flag → non-zero exit, non-empty stderr (binary-level smoke
       test).
-- [ ] No internal package imports any config type (`config` is unexported,
+- [x] No internal package imports any config type (`config` is unexported,
       in `package main`).
 
 **Testing Notes:**
@@ -417,22 +417,22 @@ the leak-scan tests.
   explicitly permitted by ADR-008.
 
 **Acceptance Criteria:**
-- [ ] `NewLogger("info")` returns a non-nil logger; output captured through
+- [x] `NewLogger("info")` returns a non-nil logger; output captured through
       a JSON handler is valid JSON per line with `ts`/`level`/`msg` keys
       (slog defaults).
-- [ ] Level filtering honored: at `warn`, a `Debug(...)` and `Info(...)`
+- [x] Level filtering honored: at `warn`, a `Debug(...)` and `Info(...)`
       produce no output; at `debug`, all levels appear. Table-driven over
       all four levels.
-- [ ] `NewLogger("garbage")` falls back to `info` (asserted: debug line
+- [x] `NewLogger("garbage")` falls back to `info` (asserted: debug line
       suppressed, info line emitted) and does not error or panic.
-- [ ] `Build()` under `go test` returns `<unknown>` (not empty, not a
+- [x] `Build()` under `go test` returns `<unknown>` (not empty, not a
       panic) for any undeterminable field, and a non-empty `GoVersion`.
-- [ ] Binary-level: `./bin/eth-signer-mcp --version` exits 0 and prints
+- [x] Binary-level: `./bin/eth-signer-mcp --version` exits 0 and prints
       version, commit, date, and Go version (real build ⇒ VCS fields
       populated, no `<unknown>` expected; assert at least the Go-version
       substring `go1.`).
-- [ ] Package doc states the four redaction rules.
-- [ ] `internal/obs` production code imports stdlib only.
+- [x] Package doc states the four redaction rules.
+- [x] `internal/obs` production code imports stdlib only.
 
 **Testing Notes:**
 - Capture logger output by constructing the handler over a `bytes.Buffer`
@@ -526,21 +526,21 @@ rule visible) and the shared leak scan over `obs` output (test-only edge).
   needed for these files; `math/big` is stdlib).
 
 **Acceptance Criteria:**
-- [ ] `Secret[T]` implements all five interfaces; one test per interface
+- [x] `Secret[T]` implements all five interfaces; one test per interface
       proves the redaction fires on the relevant API call.
-- [ ] `Expose()` returns the wrapped value bitwise-equal to the input.
-- [ ] `NewSentinel` derives at minimum: raw, lowercase hex, uppercase hex,
+- [x] `Expose()` returns the wrapped value bitwise-equal to the input.
+- [x] `NewSentinel` derives at minimum: raw, lowercase hex, uppercase hex,
       std base64, and decimal-scalar forms; `Scan` finds each form when
       planted and returns its name; `Scan` returns empty on clean input.
-- [ ] Leak-scan tests green in `signing` (fmt/json/slog paths) and in `obs`
+- [x] Leak-scan tests green in `signing` (fmt/json/slog paths) and in `obs`
       (logger output at all four levels) — covering the sentinel **and**
       all encoded forms.
-- [ ] Known-leak anti-pattern test green (asserts the leak DOES occur) with
+- [x] Known-leak anti-pattern test green (asserts the leak DOES occur) with
       a doc comment explaining the slog-reflection limitation and the
       usage rule.
-- [ ] `ZeroBytes`/`ZeroBigInt` tests green; doc comments state the ADR-009
+- [x] `ZeroBytes`/`ZeroBigInt` tests green; doc comments state the ADR-009
       best-effort limitation.
-- [ ] No test failure message can contain sentinel bytes in any form
+- [x] No test failure message can contain sentinel bytes in any form
       (verified by review: all assertions report form names only).
 
 **Testing Notes:**
@@ -604,16 +604,16 @@ is: parse → logger → **fsperm** → server → run.
   puts fsperm logic in `cmd`, not a package).
 
 **Acceptance Criteria:**
-- [ ] Mode `0600` file → no warning, process proceeds.
-- [ ] Mode `0644` file, no `--strict-perms` → WARN line naming the path and
+- [x] Mode `0600` file → no warning, process proceeds.
+- [x] Mode `0644` file, no `--strict-perms` → WARN line naming the path and
       suggesting `chmod 600`; process proceeds.
-- [ ] Mode `0644` file, `--strict-perms` → process refuses with **exit
+- [x] Mode `0644` file, `--strict-perms` → process refuses with **exit
       code 2** and an ERROR line; binary-level test asserts the exit code.
-- [ ] Missing path or directory-as-path → error + exit 2 (fail fast; a
+- [x] Missing path or directory-as-path → error + exit 2 (fail fast; a
       typo'd keystore path must not boot a server that can never sign).
-- [ ] `GOOS=windows GOARCH=amd64 go build ./...` compiles (no-op variant);
+- [x] `GOOS=windows GOARCH=amd64 go build ./...` compiles (no-op variant);
       green in CI's Windows compile step.
-- [ ] Both keystore and password-file paths are checked; both warn/refuse
+- [x] Both keystore and password-file paths are checked; both warn/refuse
       paths covered by tests.
 
 **Testing Notes:**
@@ -693,14 +693,14 @@ Questions the note MUST answer (architecture §Open Questions + plan 1.7):
   raise it immediately — Phase 3's hardening matrix depends on it.
 
 **Acceptance Criteria:**
-- [ ] `docs/mcp-sdk-spike.md` committed, answering all five questions with
+- [x] `docs/mcp-sdk-spike.md` committed, answering all five questions with
       v1.6.1 symbol names and code excerpts; includes the two recorded
       decisions (request-id source; tag surface split).
-- [ ] In-memory `initialize` smoke test committed under `internal/server`
+- [x] In-memory `initialize` smoke test committed under `internal/server`
       and green in `make test` / CI.
-- [ ] The note explicitly confirms (or red-flags) the locked middleware
+- [x] The note explicitly confirms (or red-flags) the locked middleware
       nesting and the availability of DNS-rebinding/localhost protection.
-- [ ] No throwaway/spike code outside the note and the smoke test reaches
+- [x] No throwaway/spike code outside the note and the smoke test reaches
       `main`.
 
 **Testing Notes:**
@@ -781,20 +781,20 @@ list over the in-memory transport.
   guaranteed by 1.4; keep `fmt.Println` out of `cmd`).
 
 **Acceptance Criteria:**
-- [ ] In-memory smoke test: `initialize` completes; advertised server
+- [x] In-memory smoke test: `initialize` completes; advertised server
       name/version equal `Options.Name`/`Options.Version`; `tools/list`
       returns an empty list.
-- [ ] Ctx-cancel test: cancelling the serve context returns within 1s.
-- [ ] `RunStdio` returns nil on clean EOF (binary-level: closing stdin
+- [x] Ctx-cancel test: cancelling the serve context returns within 1s.
+- [x] `RunStdio` returns nil on clean EOF (binary-level: closing stdin
       after a completed session ⇒ exit 0).
-- [ ] Binary-level smoke: real `initialize` over child-process stdio
+- [x] Binary-level smoke: real `initialize` over child-process stdio
       succeeds with `--keystore`/`--password-file` pointing at 0600 temp
       files.
-- [ ] `--http` (with token file) exits non-zero with a stable message that
+- [x] `--http` (with token file) exits non-zero with a stable message that
       the Streamable HTTP transport arrives in Phase 3.
-- [ ] SIGINT/SIGTERM wired via `signal.NotifyContext`; SIGINT during an
+- [x] SIGINT/SIGTERM wired via `signal.NotifyContext`; SIGINT during an
       idle stdio session exits cleanly (binary-level assertion).
-- [ ] No stdout writes from `cmd`/`server` outside MCP frames.
+- [x] No stdout writes from `cmd`/`server` outside MCP frames.
 
 **Testing Notes:**
 - Bound all child-process tests with ≤10s timeout contexts.
@@ -901,19 +901,19 @@ symbols — interface-vs-concrete discipline is code-review enforced.
   `go list -deps ./cmd/...` once if paranoid).
 
 **Acceptance Criteria:**
-- [ ] `.golangci.yml` contains the depguard block with the three rules
+- [x] `.golangci.yml` contains the depguard block with the three rules
       above; every `deny` entry has a `desc:` citing ADR-007 or ADR-008;
       a comment states the honest scope (package edges only;
       interface-vs-concrete is code-review enforced).
-- [ ] `make lint` exits 0 on the real tree (depguard positive case).
-- [ ] `TestDepguardRuleFires` is green: the deliberate violation makes
+- [x] `make lint` exits 0 on the real tree (depguard positive case).
+- [x] `TestDepguardRuleFires` is green: the deliberate violation makes
       `golangci-lint` fail with a depguard message naming `net/http`, and
       the violation file is removed afterward even when assertions fail.
-- [ ] `offline_test.go` compiles, runs in `make test`, and passes
+- [x] `offline_test.go` compiles, runs in `make test`, and passes
       (vacuously); the explicit vacuous-in-Phase-1 comment is present.
-- [ ] `golang.org/x/tools` is pinned in `go.mod`; `make build` output is
+- [x] `golang.org/x/tools` is pinned in `go.mod`; `make build` output is
       unaffected.
-- [ ] CI (1.2) is green with both gates active.
+- [x] CI (1.2) is green with both gates active.
 
 **Testing Notes:**
 - The violation test doubles as the recurring mutation check; Phase 4's
@@ -974,25 +974,25 @@ concrete, checkable outcomes — not a free-form cleanup day.
   pass polishes Phase 1's surface so Phase 2 starts clean.
 
 **Acceptance Criteria:**
-- [ ] `make lint`, `make vet`, `make test`, `make build` all green; CI
+- [x] `make lint`, `make vet`, `make test`, `make build` all green; CI
       green on the polish commit.
-- [ ] `gofmt -s -l` over the module reports nothing (`make fmt` produces
+- [x] `gofmt -s -l` over the module reports nothing (`make fmt` produces
       no diff).
-- [ ] **Zero lint suppressions without justification:** every `//nolint`
+- [x] **Zero lint suppressions without justification:** every `//nolint`
       directive (if any remain) carries a specific linter name and a
       same-line justification comment; `grep -rn "//nolint" apps/` output
       reviewed and each hit defensible.
-- [ ] **No dead code:** no unused exported identifiers, no leftover spike
+- [x] **No dead code:** no unused exported identifiers, no leftover spike
       scaffolding, no orphan helpers (verified by `staticcheck`'s unused
       pass in `make lint` plus a manual read of each file); the `tools.go`
       pin file contains only pins not held by real imports.
-- [ ] `apps/eth-signer-mcp/README.md` exists with the stub content listed
+- [x] `apps/eth-signer-mcp/README.md` exists with the stub content listed
       above; root `CLAUDE.md` project-status section reflects the first
       real module.
-- [ ] All four packages (`cmd/eth-signer-mcp`, `internal/signing`,
+- [x] All four packages (`cmd/eth-signer-mcp`, `internal/signing`,
       `internal/server`, `internal/obs`) have package doc comments
       consistent with the architecture's one-sentence responsibilities.
-- [ ] Phase 1 exit criteria (top of this file) all check off — this issue
+- [x] Phase 1 exit criteria (top of this file) all check off — this issue
       is the gate that walks the list and ticks each box.
 
 **Testing Notes:**

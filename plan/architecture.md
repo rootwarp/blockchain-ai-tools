@@ -612,8 +612,9 @@ error → logged, non-zero exit.
 
 - All logging goes through the injected `*slog.Logger` from
   `obs.NewLogger(level)` — JSON, stderr, level from `--log-level`;
-  constructor-injected, never a global. Standard fields: `ts`, `level`,
-  `msg`; HTTP adds `request_id`, `remote_addr`, `status`, `latency_ms`.
+  constructor-injected, never a global. Standard fields: `time`, `level`,
+  `msg` (slog's JSON-handler defaults); HTTP adds `request_id`,
+  `remote_addr`, `status`, `latency_ms`.
 - **Signing audit line:** every successful signing emits exactly one
   info-level line with `request_id`, `tx_hash`, `chain_id`, `nonce` —
   all non-secret. The transaction body — `calldata`, `to`, `value` — is

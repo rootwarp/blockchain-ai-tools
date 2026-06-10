@@ -254,10 +254,16 @@ func isClosedPipeError(err error) bool {
 	if err == nil {
 		return false
 	}
+	// Prefer typed checks; fall back to specific substrings. A bare "closed"
+	// substring was too broad (it would swallow unrelated errors that merely
+	// contain the word), so match the concrete phrasings the os/io layers use.
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrClosedPipe) {
+		return true
+	}
 	msg := err.Error()
-	return strings.Contains(msg, "closed") ||
+	return strings.Contains(msg, "file already closed") ||
+		strings.Contains(msg, "use of closed file") ||
+		strings.Contains(msg, "closed pipe") ||
 		strings.Contains(msg, "broken pipe") ||
-		strings.Contains(msg, "EOF") ||
-		errors.Is(err, io.EOF) ||
-		errors.Is(err, io.ErrClosedPipe)
+		strings.Contains(msg, "EOF")
 }

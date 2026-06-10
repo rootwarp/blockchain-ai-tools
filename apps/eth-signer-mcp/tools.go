@@ -5,21 +5,21 @@
 // dependencies so that `go mod tidy` does not prune them from go.mod before
 // real code adds genuine imports.
 //
-// Current status (issue 1.7 complete):
-//   - urfave/cli/v3: genuinely imported by cmd/eth-signer-mcp/main.go — removed here.
-//   - MCP SDK (github.com/modelcontextprotocol/go-sdk/mcp): now genuinely imported
-//     by internal/server/spike_smoke_test.go (issue 1.7) — removed here.
-//   - go-ethereum, jsonschema-go: still pending real imports (issues 1.5/1.8).
+// Current status (issue 1.10 polish):
+//   - urfave/cli/v3: genuinely imported by cmd/eth-signer-mcp — held by a real import.
+//   - MCP SDK (github.com/modelcontextprotocol/go-sdk/mcp): imported by
+//     internal/server — held by a real import.
+//   - jsonschema-go: pulled transitively by the MCP SDK (a real, non-test
+//     dependency) — held by a real import; dropped here in 1.10.
+//   - go-ethereum: NOT yet imported (internal/signing is stdlib-only in Phase 1);
+//     this pin must stay until Phase 2 wires crypto/accounts/keystore/core/types.
 //
-// The 1.10 polish pass shrinks this file further once real imports hold each pin.
+// When Phase 2 adds the go-ethereum imports to internal/signing, this file
+// becomes empty and should be deleted.
 package main
 
 import (
-	// go-ethereum — crypto, keystore, and core/types (internal/signing,
-	// issue 1.5 onward).
+	// go-ethereum — crypto, accounts/keystore, and core/types land in
+	// internal/signing in Phase 2; pinned here until then.
 	_ "github.com/ethereum/go-ethereum/crypto"
-
-	// jsonschema-go — schema inference for mcp.AddTool (internal/server,
-	// issue 1.8; there is no SDK-embedded jsonschema package).
-	_ "github.com/google/jsonschema-go/jsonschema"
 )
