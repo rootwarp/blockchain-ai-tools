@@ -41,12 +41,11 @@ func readFileForBench(path string) ([]byte, error) {
 }
 
 // measureKDFTime times a single keystore.DecryptKey call (no vault overhead).
-func measureKDFTime(t testing.TB, keystorePath, password string) time.Duration {
+// keystoreJSON must be the already-loaded keystore bytes — passing the same slice
+// that the vault snapshot uses (see overheadTimings) avoids any I/O asymmetry
+// between the KDF and total measurements.
+func measureKDFTime(t testing.TB, keystoreJSON []byte, password string) time.Duration {
 	t.Helper()
-	keystoreJSON, err := readFileForBench(keystorePath)
-	if err != nil {
-		t.Fatalf("readFile(%q): %v", keystorePath, err)
-	}
 	start := time.Now()
 	key, decErr := gokeystore.DecryptKey(keystoreJSON, password)
 	elapsed := time.Since(start)
@@ -97,6 +96,17 @@ func measureSignTime(t testing.TB, keystorePath, passwordPath string) time.Durat
 //
 // ADR-010: the bound is on the DELTA (total − KDF), not on absolute total time.
 // This makes the test pass even when the KDF itself is slow (e.g. on a slow CI runner).
+//
+// Measurement design: in each iteration, total SignTransaction time is measured
+// FIRST, then bare KDF time is measured on the same pre-loaded keystoreJSON. This
+// eliminates two sources of systematic bias identified in review:
+//  1. Ordering bias: measuring KDF first warms the CPU for the subsequent total
+//     measurement, making total appear faster than KDF (negative delta).
+//  2. I/O asymmetry: measuring KDF with a fresh os.ReadFile call each time inflates
+//     kdfTimes relative to the vault-internal KDF that uses a snapshot byte slice.
+//
+// Pre-loading keystoreJSON once and passing it to measureKDFTime removes the I/O
+// asymmetry; measuring total before KDF in each pair removes the ordering bias.
 func TestSigner_NonKDFOverhead_Light(t *testing.T) {
 	t.Parallel()
 
@@ -104,10 +114,16 @@ func TestSigner_NonKDFOverhead_Light(t *testing.T) {
 	passwordPath := testdataFile(t, "password.txt")
 	password := "test-only-password-do-not-reuse"
 
+	keystoreJSON, err := readFileForBench(keystorePath)
+	if err != nil {
+		t.Fatalf("readFileForBench: %v", err)
+	}
+
 	var totalTimes, kdfTimes []time.Duration
 	for i := 0; i < overheadIterations; i++ {
-		kdfTimes = append(kdfTimes, measureKDFTime(t, keystorePath, password))
+		// Measure total FIRST so the KDF measurement runs on a comparably warm CPU.
 		totalTimes = append(totalTimes, measureSignTime(t, keystorePath, passwordPath))
+		kdfTimes = append(kdfTimes, measureKDFTime(t, keystoreJSON, password))
 	}
 
 	medTotal := medianDuration(totalTimes)
@@ -116,6 +132,10 @@ func TestSigner_NonKDFOverhead_Light(t *testing.T) {
 
 	t.Logf("light-scrypt: median total=%v  median KDF=%v  non-KDF delta=%v  (limit: 10ms)",
 		medTotal, medKDF, delta)
+
+	if delta < 0 {
+		t.Logf("WARNING: negative delta (%v) — unexpected; KDF measurement may be slower than total", delta)
+	}
 
 	const limit = 10 * time.Millisecond
 	if delta > limit {
@@ -126,20 +146,32 @@ func TestSigner_NonKDFOverhead_Light(t *testing.T) {
 // TestSigner_NonKDFOverhead_Standard asserts the same < 10 ms bound against the
 // standard-scrypt fixture (N=262144, ~0.5–1 s KDF). Skipped under -short.
 // In CI's full run this test is the Phase 4 ADR-010 acceptance benchmark.
+//
+// NOTE: This test is NOT t.Parallel(). The standard-scrypt KDF is CPU-bound at
+// ~0.5–1 s; running concurrently with other CPU-bound tests inflates contention
+// variance by ±10–15 ms, which is enough to exceed the 10 ms delta budget.
+// Running sequentially makes the delta measurement reliably reflect the actual
+// non-KDF overhead rather than scheduler noise.
 func TestSigner_NonKDFOverhead_Standard(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping standard-scrypt overhead test under -short (each call ~0.5–1 s)")
 	}
-	t.Parallel()
+	// NOT t.Parallel() — see comment above.
 
 	keystorePath := testdataFile(t, "keystore-standard.json")
 	passwordPath := testdataFile(t, "password.txt")
 	password := "test-only-password-do-not-reuse"
 
+	keystoreJSON, err := readFileForBench(keystorePath)
+	if err != nil {
+		t.Fatalf("readFileForBench: %v", err)
+	}
+
 	var totalTimes, kdfTimes []time.Duration
 	for i := 0; i < overheadIterations; i++ {
-		kdfTimes = append(kdfTimes, measureKDFTime(t, keystorePath, password))
+		// Measure total FIRST, then KDF, to avoid ordering bias (see Light test comment).
 		totalTimes = append(totalTimes, measureSignTime(t, keystorePath, passwordPath))
+		kdfTimes = append(kdfTimes, measureKDFTime(t, keystoreJSON, password))
 	}
 
 	medTotal := medianDuration(totalTimes)
@@ -148,6 +180,10 @@ func TestSigner_NonKDFOverhead_Standard(t *testing.T) {
 
 	t.Logf("standard-scrypt: median total=%v  median KDF=%v  non-KDF delta=%v  (limit: 10ms)",
 		medTotal, medKDF, delta)
+
+	if delta < 0 {
+		t.Logf("WARNING: negative delta (%v) — unexpected; KDF measurement may be slower than total", delta)
+	}
 
 	const limit = 10 * time.Millisecond
 	if delta > limit {
