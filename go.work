@@ -9,3 +9,5 @@ go 1.26
 //	make new-lib name=bar   -> creates libs/bar (module .../libs/bar)
 //
 // After that, Go manages a `use ( ... )` block below automatically.
+
+use ./apps/eth-signer-mcp
