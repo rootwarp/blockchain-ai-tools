@@ -41,7 +41,7 @@ import (
 //   - Closing the client session (which closes child stdin) causes exit code 0.
 func TestBinary_Stdio_Initialize(t *testing.T) {
 	bin := getTestBinary(t)
-	ks, pw := tempFiles600(t)
+	ks, pw := signingFixtureFiles(t) // real keystore so NewFileKeyVault succeeds
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -79,7 +79,7 @@ func TestBinary_Stdio_Initialize(t *testing.T) {
 		t.Error("ServerInfo.Version is empty; want non-empty")
 	}
 
-	// (b) Assert tools/list returns empty.
+	// (b) Assert tools/list returns exactly 2 tools (sign_transaction, get_address).
 	toolsResult, err := cs.ListTools(ctx, nil)
 	if err != nil {
 		t.Fatalf("cs.ListTools: %v", err)
@@ -87,8 +87,13 @@ func TestBinary_Stdio_Initialize(t *testing.T) {
 	if toolsResult == nil {
 		t.Fatal("ListTools result is nil")
 	}
-	if len(toolsResult.Tools) != 0 {
-		t.Errorf("len(Tools) = %d; want 0 (no tools in Phase 1)", len(toolsResult.Tools))
+	if len(toolsResult.Tools) != 2 {
+		names := make([]string, len(toolsResult.Tools))
+		for i, tt := range toolsResult.Tools {
+			names[i] = tt.Name
+		}
+		t.Errorf("len(Tools) = %d; want 2 (sign_transaction, get_address). Got: %v",
+			len(toolsResult.Tools), names)
 	}
 
 	// (c) Close client: CommandTransport closes child stdin, server gets EOF,
@@ -112,7 +117,7 @@ func TestBinary_Stdio_Initialize(t *testing.T) {
 // can rely on it.
 func TestBinary_HTTPFlag_Phase3Error(t *testing.T) {
 	bin := getTestBinary(t)
-	ks, pw := tempFiles600(t)
+	ks, pw := signingFixtureFiles(t) // real keystore so NewFileKeyVault succeeds
 
 	// Write a dummy token file (only its existence matters; no validation yet).
 	dir := t.TempDir()
@@ -168,7 +173,7 @@ func TestBinary_HTTPFlag_Phase3Error(t *testing.T) {
 // This verifies that RunStdio normalises context.Canceled to nil (see stdio.go).
 func TestBinary_Stdio_SIGINTCleanExit(t *testing.T) {
 	bin := getTestBinary(t)
-	ks, pw := tempFiles600(t)
+	ks, pw := signingFixtureFiles(t) // real keystore so NewFileKeyVault succeeds
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -244,6 +249,42 @@ func TestBinary_Stdio_SIGINTCleanExit(t *testing.T) {
 			}
 		}
 		// waitErr == nil means exit 0. ✓
+	}
+}
+
+// TestBinary_NoAddressKeystore_ExitNonZero verifies that starting the binary with
+// a keystore that has no usable "address" field causes non-zero exit and a clear
+// keystore_error message on stderr (issue 2.7 cmd wiring smoke test).
+func TestBinary_NoAddressKeystore_ExitNonZero(t *testing.T) {
+	bin := getTestBinary(t)
+	_, pw := signingFixtureFiles(t)
+	ks := noAddressKeystoreFile(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var stderr strings.Builder
+	cmd := exec.CommandContext(ctx, bin, "--keystore", ks, "--password-file", pw)
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+
+	// Must exit non-zero.
+	if err == nil {
+		t.Fatal("binary exited 0; want non-zero exit for no-address keystore")
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("unexpected error type %T: %v", err, err)
+	}
+	if exitErr.ExitCode() == 0 {
+		t.Error("exit code = 0; want non-zero for no-address keystore")
+	}
+
+	// stderr must contain "keystore" to identify the error category.
+	stderrStr := stderr.String()
+	if !strings.Contains(strings.ToLower(stderrStr), "keystore") {
+		t.Errorf("stderr does not contain 'keystore'\nstderr: %s", stderrStr)
 	}
 }
 

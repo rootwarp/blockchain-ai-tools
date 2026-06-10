@@ -4,6 +4,8 @@
 //
 // Issue 1.7 lands the SDK spike smoke test; Issue 1.8 adds server.go / stdio.go
 // and the full boot test.
+// Issue 2.7 adds sign_transaction and get_address tool registration and the
+// error wire-encoding contract (ADR-004).
 package server
 
 import (
@@ -11,6 +13,7 @@ import (
 	"log/slog"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/rootwarp/blockchain-ai-tools/apps/eth-signer-mcp/internal/signing"
 )
 
 // Options configures the MCP server instance.
@@ -20,23 +23,30 @@ type Options struct {
 }
 
 // Server wraps the *mcp.Server and its supporting state.
-//
-// Phase 1 signature: New takes only Options — there is nothing to sign yet.
-//
-// Phase 2 extends New to New(signer *signing.Signer, opts Options) when tools
-// register (architecture's final signature from §internal/server Public API).
-// This change is expected and intentional, not drift.
 type Server struct {
 	mcpServer *mcp.Server
 	logger    *slog.Logger
 }
 
 // New constructs the *mcp.Server advertising opts.Name and opts.Version on the
-// MCP initialize handshake, and returns a *Server ready to run a transport.
+// MCP initialize handshake, registers sign_transaction and get_address against
+// the given signer, and returns a *Server ready to run a transport.
 //
-// No tools are registered in Phase 1; tools/list returns an empty list.
-// Phase 2 registers sign_transaction and get_address against a Signer.
-func New(opts Options) *Server {
+// Both tools are registered once at construction time using mcp.AddTool, which
+// infers the JSON Schema from the typed input structs (signing.TxRequest and
+// struct{}) via github.com/google/jsonschema-go. additionalProperties:false
+// falls out of struct inference — unknown fields are rejected (PRD strict schema).
+//
+// Tool descriptions state supported tx types (0 and 2) and that the result is
+// NOT broadcast anywhere.
+func New(signer *signing.Signer, opts Options) *Server {
+	return newServer(signer, opts)
+}
+
+// newServer is the internal constructor that accepts a signerPort interface.
+// New delegates here; tests can call newServer with a stub signerPort directly
+// to avoid real keystore decryption in handler tests.
+func newServer(sp signerPort, opts Options) *Server {
 	logger := opts.Logger
 	if logger == nil {
 		logger = slog.Default()
@@ -50,6 +60,42 @@ func New(opts Options) *Server {
 		&mcp.ServerOptions{
 			Logger: logger,
 		},
+	)
+
+	// Register sign_transaction.
+	//
+	// Input:  signing.TxRequest  — inferred schema (additionalProperties:false).
+	// Output: *signing.SignResult — all fields present; no omitempty on hash/from.
+	// Types 0 and 2 supported; result is never broadcast (offline signer only).
+	mcp.AddTool(mcpSrv,
+		&mcp.Tool{
+			Name: "sign_transaction",
+			Description: "Sign a fully-specified Ethereum transaction (type 0 / legacy or " +
+				"type 2 / EIP-1559) with the loaded keystore. " +
+				"Supported types: 0x0 (legacy, EIP-155) and 0x2 (EIP-1559). " +
+				"The signed transaction is returned as a hex-encoded RLP string " +
+				"(rawTransaction) ready for eth_sendRawTransaction, " +
+				"along with signature components and the transaction hash. " +
+				"The result is NOT broadcast — the caller is responsible for submission.",
+		},
+		makeSignTransactionHandler(sp, logger),
+	)
+
+	// Register get_address.
+	//
+	// Input:  struct{} (no arguments) — empty object schema.
+	// Output: *signing.AddressResult — EIP-55 checksummed address.
+	// Served from the boot-time keystore snapshot; no password file read.
+	mcp.AddTool(mcpSrv,
+		&mcp.Tool{
+			Name: "get_address",
+			Description: "Return the EIP-55 checksummed Ethereum address of the loaded " +
+				"keystore account. " +
+				"This is a read-only operation served from the boot-time keystore snapshot; " +
+				"the password file is NOT read and no KDF runs on this path. " +
+				"Safe to call even if the password file has been rotated or made unreadable.",
+		},
+		makeGetAddressHandler(sp),
 	)
 
 	return &Server{

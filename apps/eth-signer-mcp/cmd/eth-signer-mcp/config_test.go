@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -14,6 +15,9 @@ import (
 // t.TempDir() so that the fsperm startup check (issue 1.6) passes.  Both files
 // get minimal placeholder content; the fsperm check only needs them to exist and
 // be regular files with acceptable permissions.  Returns (keystorePath, passwordPath).
+//
+// NOTE: These files contain placeholder content only. Do NOT use them for tests
+// that reach signing.NewFileKeyVault — use signingFixtureFiles() instead.
 func tempFiles600(t *testing.T) (string, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -26,6 +30,51 @@ func tempFiles600(t *testing.T) (string, string) {
 		t.Fatalf("tempFiles600: write password: %v", err)
 	}
 	return ks, pw
+}
+
+// signingFixtureFiles returns the paths to the keystore-weak.json and password.txt
+// fixtures under internal/signing/testdata/. These are real keystores that can be
+// decrypted by signing.NewFileKeyVault.
+//
+// Use these for tests that run the full startup sequence (NewFileKeyVault + NewSigner).
+func signingFixtureFiles(t *testing.T) (keystorePath, passwordPath string) {
+	t.Helper()
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller(0) failed")
+	}
+	// thisFile: .../cmd/eth-signer-mcp/config_test.go
+	// testdata: .../internal/signing/testdata/
+	cmdDir := filepath.Dir(thisFile)
+	// Navigate up from cmd/eth-signer-mcp to module root, then to internal/signing/testdata
+	testdataDir := filepath.Join(cmdDir, "..", "..", "internal", "signing", "testdata")
+
+	ks := filepath.Join(testdataDir, "keystore-weak.json")
+	pw := filepath.Join(testdataDir, "password.txt")
+
+	// Verify the files exist (guard against accidental deletion of fixtures).
+	for _, p := range []string{ks, pw} {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("signingFixtureFiles: fixture not found at %s: %v", p, err)
+		}
+	}
+	return ks, pw
+}
+
+// noAddressKeystoreFile returns the path to keystore-no-address.json, used to
+// test the startup keystore_error path.
+func noAddressKeystoreFile(t *testing.T) string {
+	t.Helper()
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller(0) failed")
+	}
+	cmdDir := filepath.Dir(thisFile)
+	p := filepath.Join(cmdDir, "..", "..", "internal", "signing", "testdata", "keystore-no-address.json")
+	if _, err := os.Stat(p); err != nil {
+		t.Fatalf("noAddressKeystoreFile: fixture not found at %s: %v", p, err)
+	}
+	return p
 }
 
 // ptrUint64 is a test helper that returns a pointer to the given uint64 value.
@@ -345,10 +394,10 @@ func TestRun_ChainID(t *testing.T) {
 func TestRun_HTTPValidation(t *testing.T) {
 	t.Parallel()
 
-	// Pre-create real temp files so the fsperm check (issue 1.6) passes for the
-	// successful case.  Tests that fail at validate() before the Action fires can
-	// use the original fake paths — the Action never runs for those.
-	ks, pw := tempFiles600(t)
+	// Use real keystore+password fixtures so NewFileKeyVault succeeds and we reach
+	// the --http Phase 3 check. Tests that fail before the Action fires can use
+	// fake paths — the Action never runs for those.
+	ks, pw := signingFixtureFiles(t)
 
 	tests := []struct {
 		name    string
@@ -467,17 +516,18 @@ func TestRun_UnknownFlag(t *testing.T) {
 }
 
 // TestRun_SuccessExit verifies that a fully-valid invocation returns nil (exit 0).
-// This drives the REAL Action end-to-end, including RunStdio: under `go test`
-// os.Stdin is non-interactive (EOF), so the stdio session ends immediately and
-// RunStdio returns nil. Uses real 0600 temp files so the fsperm check passes.
+// This drives the REAL Action end-to-end, including NewFileKeyVault, NewSigner,
+// and RunStdio. Under `go test`, os.Stdin is non-interactive (EOF), so the stdio
+// session ends immediately and RunStdio returns nil.
+// Uses the real keystore-weak.json fixture so NewFileKeyVault succeeds.
 func TestRun_SuccessExit(t *testing.T) {
 	t.Parallel()
 
-	ks, pw := tempFiles600(t)
+	ks, pw := signingFixtureFiles(t)
 	cmd := newCommand()
 	args := []string{"eth-signer-mcp", "--keystore", ks, "--password-file", pw}
 	if err := cmd.Run(context.Background(), args); err != nil {
-		t.Fatalf("cmd.Run() = %v, want nil (exit 0) for valid args with mode-0600 files", err)
+		t.Fatalf("cmd.Run() = %v, want nil (exit 0) for valid args with real keystore", err)
 	}
 }
 
@@ -513,6 +563,83 @@ func TestNewCommand_FreshInstancePerRun(t *testing.T) {
 	without := capture([]string{"eth-signer-mcp", "--keystore", "/k", "--password-file", "/p"})
 	if without.ChainIDGuard != nil {
 		t.Fatalf("ChainIDGuard = %v on fresh instance without --chain-id, want nil", *without.ChainIDGuard)
+	}
+}
+
+// TestRun_NoAddressKeystore_ExitNonZero verifies that starting with a keystore
+// that has no usable "address" field fails fast with a keystore_error message
+// (issue 2.7 cmd wiring: fail fast on vault constructor error).
+//
+// Uses the committed keystore-no-address.json fixture (address field removed).
+func TestRun_NoAddressKeystore_ExitNonZero(t *testing.T) {
+	t.Parallel()
+
+	_, pw := signingFixtureFiles(t) // use real password file (vault won't read it, but fsperm checks need it)
+	ks := noAddressKeystoreFile(t)
+
+	cmd := newCommand()
+	args := []string{"eth-signer-mcp", "--keystore", ks, "--password-file", pw}
+	err := cmd.Run(context.Background(), args)
+	if err == nil {
+		t.Fatal("cmd.Run() = nil; want non-zero exit for no-address keystore")
+	}
+	// Error message must contain "keystore" to identify the failure category.
+	if !strings.Contains(strings.ToLower(err.Error()), "keystore") {
+		t.Errorf("error = %q; want it to contain 'keystore'", err.Error())
+	}
+}
+
+// TestRun_ChainIDPlumbedOnlyIntoSigner verifies that --chain-id is captured in
+// the config and plumbed only through NewSigner (no per-request field). We
+// verify this by parsing the config flag: the guard is only set when --chain-id
+// is present (non-nil), and absent when not provided (nil). The guard lives only
+// in the Signer, constructed here in cmd.
+func TestRun_ChainIDPlumbedOnlyIntoSigner(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		args        []string
+		wantGuard   *uint64
+		expectError string
+	}{
+		{
+			name:      "chain_id_1_sets_guard",
+			args:      []string{"eth-signer-mcp", "--keystore", "/k", "--password-file", "/p", "--chain-id", "1"},
+			wantGuard: ptrUint64(1),
+		},
+		{
+			name:      "no_chain_id_nil_guard",
+			args:      []string{"eth-signer-mcp", "--keystore", "/k", "--password-file", "/p"},
+			wantGuard: nil,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var captured config
+			cmd := newCommand()
+			cmd.Action = func(ctx context.Context, c *cli.Command) error {
+				captured = buildConfig(c)
+				return validate(captured)
+			}
+			if err := cmd.Run(context.Background(), tc.args); err != nil {
+				t.Fatalf("cmd.Run() = %v, want nil", err)
+			}
+			if tc.wantGuard == nil {
+				if captured.ChainIDGuard != nil {
+					t.Errorf("ChainIDGuard = %d; want nil", *captured.ChainIDGuard)
+				}
+			} else {
+				if captured.ChainIDGuard == nil {
+					t.Errorf("ChainIDGuard = nil; want %d", *tc.wantGuard)
+				} else if *captured.ChainIDGuard != *tc.wantGuard {
+					t.Errorf("ChainIDGuard = %d; want %d", *captured.ChainIDGuard, *tc.wantGuard)
+				}
+			}
+		})
 	}
 }
 

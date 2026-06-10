@@ -508,14 +508,26 @@ func TestBinary_DirectoryAsKeystore_ExitCode2(t *testing.T) {
 }
 
 // TestBinary_Mode600_ExitCode0 verifies that valid 0600 files allow the binary to
-// proceed (exit 0 since Phase 1 has no server yet — run() returns nil after fsperm).
+// proceed (exit 0 — fsperm check passes, NewFileKeyVault succeeds, stdio EOF returns 0).
+// Uses the real keystore-weak.json fixture so NewFileKeyVault succeeds.
 func TestBinary_Mode600_ExitCode0(t *testing.T) {
 	skipIfRoot(t)
 
 	bin := getTestBinary(t)
 
-	keystore := writeTestFile(t, []byte("{}"), 0o600)
-	password := writeTestFile(t, []byte("pass"), 0o600)
+	realKs, realPw := signingFixtureFiles(t)
+
+	// Copy the real keystore to a temp file with explicit mode 0600.
+	ksContent, err := os.ReadFile(realKs)
+	if err != nil {
+		t.Fatalf("read keystore fixture: %v", err)
+	}
+	pwContent, err := os.ReadFile(realPw)
+	if err != nil {
+		t.Fatalf("read password fixture: %v", err)
+	}
+	keystore := writeTestFile(t, ksContent, 0o600)
+	password := writeTestFile(t, pwContent, 0o600)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -524,22 +536,34 @@ func TestBinary_Mode600_ExitCode0(t *testing.T) {
 		"--keystore", keystore,
 		"--password-file", password,
 	)
-	err := cmd.Run()
+	err = cmd.Run()
 	code := exitCodeFromError(t, err)
 	if code != 0 {
-		t.Errorf("exit code = %d, want 0 (mode 0600, no --strict-perms)", code)
+		t.Errorf("exit code = %d, want 0 (mode 0600, real keystore)", code)
 	}
 }
 
 // TestBinary_Mode644_NoStrictPerms_ExitCode0 verifies that a too-open file without
 // --strict-perms only warns and still exits 0.
+// Uses the real keystore-weak.json fixture so NewFileKeyVault succeeds.
 func TestBinary_Mode644_NoStrictPerms_ExitCode0(t *testing.T) {
 	skipIfRoot(t)
 
 	bin := getTestBinary(t)
 
-	keystore := writeTestFile(t, []byte("{}"), 0o644)
-	password := writeTestFile(t, []byte("pass"), 0o600)
+	realKs, realPw := signingFixtureFiles(t)
+
+	// Copy the real keystore to a temp file with mode 0644 (too open) for the keystore.
+	ksContent, err := os.ReadFile(realKs)
+	if err != nil {
+		t.Fatalf("read keystore fixture: %v", err)
+	}
+	pwContent, err := os.ReadFile(realPw)
+	if err != nil {
+		t.Fatalf("read password fixture: %v", err)
+	}
+	keystore := writeTestFile(t, ksContent, 0o644) // too open → warns but does not fail
+	password := writeTestFile(t, pwContent, 0o600)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -548,7 +572,7 @@ func TestBinary_Mode644_NoStrictPerms_ExitCode0(t *testing.T) {
 		"--keystore", keystore,
 		"--password-file", password,
 	)
-	err := cmd.Run()
+	err = cmd.Run()
 	code := exitCodeFromError(t, err)
 	if code != 0 {
 		t.Errorf("exit code = %d, want 0 (mode 0644, no --strict-perms should warn not refuse)", code)

@@ -8,7 +8,8 @@ package server
 // Tests covered:
 //   (a) initialize round-trip: server name/version in Options match what the
 //       client sees via InitializeResult.ServerInfo (issue 1.7 smoke + 1.8 growth).
-//   (b) tools/list returns an empty slice — no tools registered in Phase 1.
+//   (b) tools/list returns exactly two tools (sign_transaction, get_address)
+//       — both registered in Phase 2 (issue 2.7).
 //   (c) ctx-cancel: cancelling the serve context causes RunStdio (backed by the
 //       in-memory transport) to return within 1 s (catches hung-loop regressions).
 //
@@ -26,9 +27,44 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/rootwarp/blockchain-ai-tools/apps/eth-signer-mcp/internal/obs"
+	"github.com/rootwarp/blockchain-ai-tools/apps/eth-signer-mcp/internal/signing"
 )
+
+// ── Stub signer ───────────────────────────────────────────────────────────────
+
+// stubSigner is a minimal signerPort for smoke tests that only need the server
+// to boot and respond to initialize/tools/list without actual signing.
+type stubSigner struct {
+	signFn  func(ctx context.Context, req signing.TxRequest) (*signing.SignResult, error)
+	address common.Address
+}
+
+func (s *stubSigner) SignTransaction(ctx context.Context, req signing.TxRequest) (*signing.SignResult, error) {
+	if s.signFn != nil {
+		return s.signFn(ctx, req)
+	}
+	return nil, &signing.ToolError{Code: signing.CodeInternalError, Message: "stub: SignTransaction not set"}
+}
+
+func (s *stubSigner) Address() common.Address {
+	return s.address
+}
+
+// noopStub returns a stubSigner whose SignTransaction panics if called.
+// Suitable for initialize/tools-list tests that must NOT invoke the signer.
+func noopStub() *stubSigner {
+	return &stubSigner{
+		address: common.Address{},
+		signFn: func(_ context.Context, _ signing.TxRequest) (*signing.SignResult, error) {
+			panic("stub: SignTransaction should not be called in this test")
+		},
+	}
+}
+
+// ── discardCloser ─────────────────────────────────────────────────────────────
 
 // discardCloser is an io.WriteCloser that discards all writes.  Used to supply
 // a no-op stdout for the ctx-cancel test without touching real os.Stdout.
@@ -97,7 +133,7 @@ func TestInMemorySmoke_Initialize(t *testing.T) {
 	defer cancel()
 
 	logger := obs.NewLogger("error") // suppress noise in test output
-	srv := New(Options{
+	srv := newServer(noopStub(), Options{
 		Name:    wantName,
 		Version: obs.Build().Version, // "<unknown>" under go test
 		Logger:  logger,
@@ -126,16 +162,17 @@ func TestInMemorySmoke_Initialize(t *testing.T) {
 	}
 }
 
-// TestInMemorySmoke_ToolsListEmpty verifies that tools/list returns an empty
-// list when no tools are registered (Phase 1 — no tools yet).
-func TestInMemorySmoke_ToolsListEmpty(t *testing.T) {
+// TestInMemorySmoke_ToolsListRegistered verifies that tools/list returns exactly
+// two tools — sign_transaction and get_address — after Phase 2 tool registration
+// (issue 2.7). Supersedes the Phase 1 "ToolsListEmpty" assertion.
+func TestInMemorySmoke_ToolsListRegistered(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	logger := obs.NewLogger("error")
-	srv := New(Options{
+	srv := newServer(noopStub(), Options{
 		Name:    "eth-signer-mcp-test",
 		Version: "v0.0.0-test",
 		Logger:  logger,
@@ -151,8 +188,25 @@ func TestInMemorySmoke_ToolsListEmpty(t *testing.T) {
 	if result == nil {
 		t.Fatal("ListTools result is nil")
 	}
-	if len(result.Tools) != 0 {
-		t.Errorf("len(result.Tools) = %d; want 0", len(result.Tools))
+	// Phase 2: exactly 2 tools registered.
+	if len(result.Tools) != 2 {
+		names := make([]string, len(result.Tools))
+		for i, tt := range result.Tools {
+			names[i] = tt.Name
+		}
+		t.Fatalf("len(result.Tools) = %d; want 2 (sign_transaction, get_address). Got: %v",
+			len(result.Tools), names)
+	}
+
+	// Build name set for assertion.
+	toolMap := make(map[string]bool, 2)
+	for _, tt := range result.Tools {
+		toolMap[tt.Name] = true
+	}
+	for _, wantName := range []string{"sign_transaction", "get_address"} {
+		if !toolMap[wantName] {
+			t.Errorf("tool %q not in tools/list", wantName)
+		}
 	}
 }
 
@@ -171,7 +225,7 @@ func TestRunWithTransport_CtxCancel(t *testing.T) {
 	ctx, serveCancel := context.WithCancel(context.Background())
 
 	logger := obs.NewLogger("error")
-	srv := New(Options{
+	srv := newServer(noopStub(), Options{
 		Name:    "eth-signer-mcp-test",
 		Version: "v0.0.0-test",
 		Logger:  logger,

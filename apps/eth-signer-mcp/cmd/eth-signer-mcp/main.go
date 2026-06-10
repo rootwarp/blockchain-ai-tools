@@ -30,6 +30,7 @@ import (
 
 	"github.com/rootwarp/blockchain-ai-tools/apps/eth-signer-mcp/internal/obs"
 	"github.com/rootwarp/blockchain-ai-tools/apps/eth-signer-mcp/internal/server"
+	"github.com/rootwarp/blockchain-ai-tools/apps/eth-signer-mcp/internal/signing"
 	"github.com/urfave/cli/v3"
 )
 
@@ -149,17 +150,19 @@ func buildConfig(cmd *cli.Command) config {
 }
 
 // run is the cli Action implementing the startup sequence for eth-signer-mcp:
-// parse → validate → logger → fsperm checks → server construction → RunStdio.
+// parse → validate → logger → fsperm checks → vault → signer → server → RunStdio.
 //
 // Startup sequence (architecture Flow D):
 //  1. Parse flags + validate (urfave/cli v3 layer)
 //  2. Construct logger (obs.NewLogger)
 //  3. File-permission checks (issue 1.6, wired once — fsperm is wired once per
 //     Phase Conventions)
-//  4. Construct *server.Server (issue 1.8)
-//  5. Guard against --http (Streamable HTTP lands in Phase 3; clean error now)
-//  6. Install signal.NotifyContext for SIGINT/SIGTERM graceful shutdown
-//  7. Run the server on the stdio transport
+//  4. Construct signing.FileKeyVault (fail fast: exit non-zero on any error)
+//  5. Construct signing.Signer with ChainIDGuard from --chain-id (ONLY place guard enters)
+//  6. Construct *server.Server with signer (issue 2.7: sign_transaction + get_address)
+//  7. Guard against --http (Streamable HTTP lands in Phase 3; clean error now)
+//  8. Install signal.NotifyContext for SIGINT/SIGTERM graceful shutdown
+//  9. Run the server on the stdio transport
 //
 // Exit-code contract: a cli.Exit("…", 2) value is returned for permission
 // failures (missing/unreadable path, or too-open + --strict-perms). The
@@ -197,17 +200,50 @@ func run(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 
-	// Step 4: construct the MCP server.
-	// Phase 1: no signer wired yet — no tools registered; tools/list returns empty.
-	// Phase 2 extends this to server.New(signer, opts) when sign_transaction and
-	// get_address are registered (see internal/server/server.go comment).
-	srv := server.New(server.Options{
+	// Step 4: construct the KeyVault (boot-time snapshot, fail fast).
+	//
+	// Any failure here is a startup error — the keystore is missing, malformed,
+	// or has no usable address field. The error is a *signing.ToolError with
+	// Code == signing.CodeKeystoreError and a clear message. We print the message
+	// to stderr and exit non-zero so the operator can diagnose without reading logs.
+	//
+	// The constructor reads the keystore JSON and address but does NOT read the
+	// password file (per the lifecycle contract: password is re-read on each signing
+	// call to support password rotation without restart).
+	vault, err := signing.NewFileKeyVault(signing.VaultOptions{
+		KeystorePath: cfg.KeystorePath,
+		PasswordPath: cfg.PasswordPath,
+	})
+	if err != nil {
+		// Print the keystore_error message to stderr so it is visible even when
+		// the log format is JSON (operators running the binary directly may not
+		// parse JSON log lines). The logger also emits it for structured log
+		// consumers.
+		fmt.Fprintf(os.Stderr, "eth-signer-mcp: keystore startup error: %v\n", err)
+		logger.Error("keystore startup error", "error", err.Error())
+		return fmt.Errorf("keystore startup error: %w", err)
+	}
+	logger.Info("keystore loaded", "address", vault.Address().Hex())
+
+	// Step 5: construct the Signer.
+	//
+	// The ChainIDGuard is threaded from --chain-id here and NOWHERE ELSE.
+	// This is the ONLY place the guard enters the system (architecture §locked decision).
+	// cfg.ChainIDGuard is nil when --chain-id is not set (no guard);
+	// non-nil when explicitly set (validate() has already rejected 0).
+	signer := signing.NewSigner(vault, signing.SignerOptions{
+		ChainIDGuard: cfg.ChainIDGuard,
+		Logger:       logger,
+	})
+
+	// Step 6: construct the MCP server with both tools registered.
+	srv := server.New(signer, server.Options{
 		Name:    "eth-signer-mcp",
 		Version: obs.Build().Version,
 		Logger:  logger,
 	})
 
-	// Step 5: guard against --http (Streamable HTTP transport arrives in Phase 3).
+	// Step 7: guard against --http (Streamable HTTP transport arrives in Phase 3).
 	// The flag exists in Phase 1 so --help is truthful; the transport is not yet wired.
 	// Never use the word "SSE" — the second transport is MCP Streamable HTTP
 	// (Phase Conventions: "The second transport … is never called 'HTTP/SSE'").
@@ -216,13 +252,13 @@ func run(ctx context.Context, cmd *cli.Command) error {
 			"use stdio (default) for now")
 	}
 
-	// Step 6: wire signal.NotifyContext for SIGINT/SIGTERM graceful shutdown.
+	// Step 8: wire signal.NotifyContext for SIGINT/SIGTERM graceful shutdown.
 	// When the OS delivers SIGINT or SIGTERM, ctx is cancelled, which propagates
 	// to RunStdio, which closes the session and returns nil (normalised by RunStdio).
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Step 7: run the MCP server on the stdio transport.
+	// Step 9: run the MCP server on the stdio transport.
 	// Returns nil on clean EOF (client closed stdin) or on SIGINT/SIGTERM.
 	return srv.RunStdio(ctx)
 }
