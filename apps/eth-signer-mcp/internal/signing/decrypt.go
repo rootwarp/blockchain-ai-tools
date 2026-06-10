@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"errors"
-	"os"
 	"runtime"
 
 	gokeystore "github.com/ethereum/go-ethereum/accounts/keystore"
@@ -96,7 +95,7 @@ func (v *fileKeyVault) WithSigningKey(ctx context.Context, fn func(SigningKey) e
 	defer func() { <-v.sem }()
 
 	// 3. Read password file (re-read on every call to support password rotation).
-	passwordBytes, err := readPasswordFile(v.passwordPath)
+	passwordBytes, err := readPasswordFile(v.passwordPath, v.readFileFn)
 	if err != nil {
 		return &ToolError{
 			Code:    CodePasswordError,
@@ -112,6 +111,16 @@ func (v *fileKeyVault) WithSigningKey(ctx context.Context, fn func(SigningKey) e
 	defer ZeroBytes(passwordBytes)
 
 	// 5. Decrypt the keystore snapshot using the password.
+	//
+	// ADR-009 known residual: gokeystore.DecryptKey accepts only a string password.
+	// The string(passwordBytes) conversion allocates an immutable Go string that is
+	// NOT controlled by the deferred ZeroBytes call above; it persists in the heap
+	// until GC reclaims it. This is an explicit best-effort limitation: Go runtime
+	// retains this copy beyond our control, analogous to (but distinct from) the
+	// GC-move and stack-copy cases documented in ZeroBytes/ZeroBigInt. go-ethereum
+	// v1.17.3 does not expose a []byte-password API. The observable security
+	// requirement ("no secrets in logs or outputs") is still met; memory-level
+	// erasure of this copy requires a custom scrypt+AES shim.
 	key, err := gokeystore.DecryptKey(v.keystoreJSON, string(passwordBytes))
 	if err != nil {
 		if errors.Is(err, gokeystore.ErrDecrypt) {
@@ -162,27 +171,35 @@ func (v *fileKeyVault) WithSigningKey(ctx context.Context, fn func(SigningKey) e
 	return fn(sk)
 }
 
-// readPasswordFile reads the password file at path, strips a single trailing "\n"
-// if present, and returns the result as a []byte. The returned slice is the one
-// that WithSigningKey registers for deferred zeroing; it must not be resliced or
-// replaced by callers.
-func readPasswordFile(path string) ([]byte, error) {
-	b, err := readFile(path)
+// readPasswordFile reads the password file at path using readFn, strips any trailing
+// CR/LF characters (\r and \n), and returns the result as a []byte. The returned
+// slice is the one that WithSigningKey registers for deferred zeroing; it must not
+// be resliced or replaced by callers.
+//
+// Stripping both CR and LF handles:
+//   - Unix files ending in \n (the standard; exercised by the testdata/password.txt fixture)
+//   - Windows files ending in \r\n (common when password files are created or
+//     transferred on Windows; leaving \r causes DecryptKey to fail with a cryptic
+//     "check the password" error with no line-ending diagnostic)
+//
+// The stripped CR/LF bytes are not secret material and are left un-zeroed in the
+// backing array (they are at positions len(b)..cap(b)-1 after the reslice).
+//
+// readFn is normally os.ReadFile; the fileKeyVault stores it as readFileFn to
+// allow internal tests to intercept the call via the captured-pointer technique
+// (e.g. to verify zeroing on the wrong-password path, where fn is never called
+// and signingKey.pwBytes is never created). Tests must not share a vault instance
+// across goroutines when overriding readFileFn.
+func readPasswordFile(path string, readFn func(string) ([]byte, error)) ([]byte, error) {
+	b, err := readFn(path)
 	if err != nil {
 		return nil, err
 	}
-	// Strip a single trailing newline. The fixture password.txt carries one by
-	// design so the strip path is always exercised in tests (Issue 2.1 requirement).
-	// We operate in-place (reslice) so ZeroBytes later zeroes the actual password
-	// bytes, not the newline. The newline position in the backing array is not
-	// sensitive and is left un-zeroed deliberately (it is not secret material).
-	if len(b) > 0 && b[len(b)-1] == '\n' {
+	// Strip trailing CR/LF in-place (reslice only; ZeroBytes later zeroes the
+	// actual password bytes at indices 0..len(b)-1; the stripped bytes beyond
+	// len(b) are non-secret and intentionally not zeroed).
+	for len(b) > 0 && (b[len(b)-1] == '\n' || b[len(b)-1] == '\r') {
 		b = b[:len(b)-1]
 	}
 	return b, nil
-}
-
-// readFile is the thin wrapper around os.ReadFile used by readPasswordFile.
-func readFile(path string) ([]byte, error) {
-	return os.ReadFile(path)
 }

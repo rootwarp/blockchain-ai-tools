@@ -21,10 +21,11 @@ import (
 //     Only one WithSigningKey call may run the KDF at a time; concurrent callers
 //     wait in the select on ctx.Done() vs sem, so they respect cancellation.
 type fileKeyVault struct {
-	keystoreJSON []byte         // ciphertext snapshot; safe to hold long-term
-	passwordPath string         // path re-read on every WithSigningKey call
-	address      common.Address // extracted at construction; safe to expose
-	sem          chan struct{}  // capacity 1 — send to acquire, receive to release
+	keystoreJSON []byte                       // ciphertext snapshot; safe to hold long-term
+	passwordPath string                       // path re-read on every WithSigningKey call
+	address      common.Address               // extracted at construction; safe to expose
+	sem          chan struct{}                // capacity 1 — send to acquire, receive to release
+	readFileFn   func(string) ([]byte, error) // normally os.ReadFile; injectable per-instance for tests
 }
 
 // keystoreAddressOnly is used solely to extract the top-level "address" field from
@@ -83,6 +84,7 @@ func newFileKeyVault(opts VaultOptions) (*fileKeyVault, error) {
 		passwordPath: opts.PasswordPath,
 		address:      addr,
 		sem:          sem,
+		readFileFn:   os.ReadFile,
 	}, nil
 }
 

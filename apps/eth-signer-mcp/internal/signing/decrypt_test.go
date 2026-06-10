@@ -197,6 +197,93 @@ func TestWithSigningKey_WrongPassword(t *testing.T) {
 	}
 }
 
+// TestWithSigningKey_WrongPasswordZeroesPasswordBytes verifies that the password bytes
+// are zeroed even when decryption fails due to a wrong password (spec AC: Issue 2.2
+// "Wrong password → password_error; password bytes still zeroed").
+//
+// Technique (captured-pointer via readFile seam):
+//
+//  1. Replace the package-level readFile var with a version that captures the returned
+//     slice's backing array pointer before WithSigningKey reslices it.
+//  2. Call WithSigningKey with a wrong password. fn must NOT be called; the vault
+//     returns password_error and the defer ZeroBytes(passwordBytes) must have fired.
+//  3. Assert that the captured slice bytes are all 0x00.
+//
+// This test specifically exercises the "wrong-password" path through the defer, which
+// the captured-pointer technique in TestWithSigningKey_ZeroesKeyAndPasswordOnSuccess
+// cannot reach (fn is never called, so there is no signingKey.pwBytes to capture).
+//
+// ADR-009 caveat applies: the test proves the slice we own is zeroed; Go may retain
+// transient copies (GC moves, stack copies, and the string(passwordBytes) conversion
+// described at decrypt.go:115) beyond our control.
+func TestWithSigningKey_WrongPasswordZeroesPasswordBytes(t *testing.T) {
+	t.Parallel()
+
+	// Write a wrong password to a temp file.
+	pwFile := filepath.Join(t.TempDir(), "wrong-password-zeroing.txt")
+	if err := os.WriteFile(pwFile, []byte("definitely-wrong-password\n"), 0o600); err != nil {
+		t.Fatalf("write temp password: %v", err)
+	}
+
+	v, err := newFileKeyVault(VaultOptions{
+		KeystorePath: testdataFile(t, "keystore-weak.json"),
+		PasswordPath: pwFile,
+	})
+	if err != nil {
+		t.Fatalf("newFileKeyVault: %v", err)
+	}
+
+	// Intercept v.readFileFn to capture the slice returned to readPasswordFile.
+	// The slice shares the backing array with passwordBytes in WithSigningKey, so
+	// after ZeroBytes(passwordBytes) fires we can observe the zeroing here.
+	// Using the vault's readFileFn field (rather than a package-level variable) avoids
+	// data races with other parallel tests that use different vault instances.
+	var capturedPW []byte
+	origReadFileFn := v.readFileFn
+	v.readFileFn = func(path string) ([]byte, error) {
+		b, readErr := origReadFileFn(path)
+		if readErr == nil {
+			// Capture the slice BEFORE reslicing in readPasswordFile strips CR/LF.
+			// ZeroBytes operates on the resliced slice; bytes at indices 0..len(resliced)-1
+			// will be zeroed. The stripped CR/LF bytes beyond that are not secret and are
+			// intentionally not zeroed (see readPasswordFile comment).
+			capturedPW = b
+		}
+		return b, readErr
+	}
+
+	callErr := v.WithSigningKey(context.Background(), func(k SigningKey) error {
+		t.Error("fn should not be called with wrong password")
+		return nil
+	})
+
+	if callErr == nil {
+		t.Fatal("WithSigningKey(wrong password): expected error, got nil")
+	}
+	var te *ToolError
+	if !errors.As(callErr, &te) {
+		t.Fatalf("error type = %T, want *ToolError", callErr)
+	}
+	if te.Code != CodePasswordError {
+		t.Errorf("Code = %q, want %q", te.Code, CodePasswordError)
+	}
+
+	// After return: ZeroBytes(passwordBytes) must have fired.
+	// capturedPW[0:len(capturedPW)-1] are the password bytes (the \n was stripped
+	// by readPasswordFile's reslice); they must all be 0x00.
+	// capturedPW[len(capturedPW)-1] is the trailing \n — intentionally not zeroed.
+	if len(capturedPW) == 0 {
+		t.Fatal("capturedPW is empty — readFile interception did not work")
+	}
+	passwordBytes := capturedPW[:len(capturedPW)-1] // exclude trailing \n
+	for i, b := range passwordBytes {
+		if b != 0 {
+			t.Errorf("password byte at index %d is 0x%02x, want 0x00 (not zeroed on wrong-password path)", i, b)
+			break
+		}
+	}
+}
+
 // TestWithSigningKey_MissingPasswordFile verifies that a missing password file
 // returns a *ToolError with Code == CodePasswordError.
 func TestWithSigningKey_MissingPasswordFile(t *testing.T) {
@@ -589,5 +676,37 @@ func TestWithSigningKey_PasswordFileTrailingNewline(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatalf("WithSigningKey with trailing-newline password: %v", err)
+	}
+}
+
+// TestWithSigningKey_PasswordFileCRLF verifies that a password file with Windows-style
+// CRLF line endings (\r\n) is handled correctly: both the \r and \n are stripped and
+// decryption succeeds. This guards against the common operator footgun where a password
+// file is created or transferred on Windows and fails decryption with a cryptic
+// "check the password" error.
+func TestWithSigningKey_PasswordFileCRLF(t *testing.T) {
+	t.Parallel()
+
+	// Write the correct password WITH a CRLF terminator to a temp file.
+	pwFile := filepath.Join(t.TempDir(), "password-crlf.txt")
+	if err := os.WriteFile(pwFile, []byte("test-only-password-do-not-reuse\r\n"), 0o600); err != nil {
+		t.Fatalf("write password file: %v", err)
+	}
+
+	v, err := newFileKeyVault(VaultOptions{
+		KeystorePath: testdataFile(t, "keystore-weak.json"),
+		PasswordPath: pwFile,
+	})
+	if err != nil {
+		t.Fatalf("newFileKeyVault: %v", err)
+	}
+
+	if err := v.WithSigningKey(context.Background(), func(k SigningKey) error {
+		if got := k.Address().Hex(); got != FixtureTestAddress {
+			t.Errorf("Address() = %q, want %q", got, FixtureTestAddress)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("WithSigningKey with CRLF password file: %v", err)
 	}
 }
