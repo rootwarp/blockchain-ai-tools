@@ -1,0 +1,65 @@
+{
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "description": "Transaction type: \"0x0\" or \"legacy\" (EIP-155) or \"0x2\" or \"eip1559\" (EIP-1559)"
+    },
+    "chainId": {
+      "type": "string",
+      "description": "Network chain ID: decimal or 0x-hex integer; must not be zero"
+    },
+    "nonce": {
+      "type": "string",
+      "description": "Sender nonce: decimal or 0x-hex integer"
+    },
+    "to": {
+      "type": "string",
+      "description": "Recipient address (0x-prefixed, 20 bytes); omit for contract creation. Mixed-case: must satisfy EIP-55 checksum"
+    },
+    "value": {
+      "type": "string",
+      "description": "Wei value to transfer: decimal or 0x-hex integer; zero allowed"
+    },
+    "data": {
+      "type": "string",
+      "description": "0x-prefixed hex call data or init code; \"0x\" for empty; max 256 KiB decoded"
+    },
+    "gas": {
+      "type": "string",
+      "description": "Gas limit: decimal or 0x-hex integer"
+    },
+    "gasPrice": {
+      "type": "string",
+      "description": "Gas price in wei (legacy/type-0 only): decimal or 0x-hex integer"
+    },
+    "maxFeePerGas": {
+      "type": "string",
+      "description": "Max fee per gas in wei (EIP-1559/type-2 only): decimal or 0x-hex integer"
+    },
+    "maxPriorityFeePerGas": {
+      "type": "string",
+      "description": "Max priority fee per gas in wei (EIP-1559/type-2 only): decimal or 0x-hex integer"
+    },
+    "accessList": {
+      "type": [
+        "null",
+        "array"
+      ],
+      "items": {
+        "type": "object",
+        "additionalProperties": false
+      },
+      "description": "EIP-2930 access list; must be empty in v1 (non-empty rejected)"
+    }
+  },
+  "required": [
+    "type",
+    "chainId",
+    "nonce",
+    "value",
+    "data",
+    "gas"
+  ],
+  "additionalProperties": false
+}
