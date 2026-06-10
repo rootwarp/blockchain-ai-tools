@@ -1,19 +1,21 @@
 package signing
 
+import "log/slog"
+
 // Error code constants for ToolError. These codes are stable and cross the wire.
 // They mirror the six PRD codes defined in the architecture's §Error Handling section.
 //
-// NOTE (interim): This file is introduced in Issue 2.2 as an interim home for the
-// ToolError type and code constants. Issue 2.6 will land the full signer orchestration
-// alongside the complete six-code taxonomy in this same file; the declarations here
-// will be kept in place (not moved).
+// NOTE (interim): This file was introduced in Issue 2.2 as an interim home for the
+// ToolError type and code constants. Issue 2.6 finalises the full six-code taxonomy
+// and adds the LogValue/nil-guard improvements identified in the 2.2 code review.
 const (
 	// CodeKeystoreError is returned when the keystore file is missing, unreadable,
 	// malformed, or has an unusable "address" field. This is a boot-time failure.
 	CodeKeystoreError = "keystore_error"
 
 	// CodePasswordError is returned when the password file cannot be read or when
-	// DecryptKey reports a wrong-password MAC failure.
+	// DecryptKey reports a wrong-password MAC failure (keystore.ErrDecrypt).
+	// A non-ErrDecrypt DecryptKey failure maps to CodeInternalError instead.
 	CodePasswordError = "password_error"
 
 	// CodeInvalidInput is returned when a tool request fails input validation
@@ -29,8 +31,9 @@ const (
 	CodeChainIDMismatch = "chain_id_mismatch"
 
 	// CodeInternalError is returned when an unexpected internal failure occurs
-	// (e.g. sender-mismatch after signing, recovered panic). The Cause field holds
-	// the underlying error for logs; it is never serialised to the wire.
+	// (e.g. sender-mismatch after signing, recovered panic, non-ErrDecrypt decrypt
+	// failure). The Cause field holds the underlying error for logs; it is never
+	// serialised to the wire.
 	CodeInternalError = "internal_error"
 )
 
@@ -58,7 +61,13 @@ type ToolError struct {
 // It includes the cause if present, so wrapped errors are diagnosable in logs
 // without any serialisation to the wire (the server layer encodes only Code and
 // Message).
+//
+// Nil-receiver safe: calling Error() on a nil *ToolError returns a static string
+// rather than panicking, preventing accidental nil-pointer dereferences at log sites.
 func (e *ToolError) Error() string {
+	if e == nil {
+		return "internal_error: <nil ToolError>"
+	}
 	if e.Cause != nil {
 		return e.Code + ": " + e.Message + ": " + e.Cause.Error()
 	}
@@ -67,5 +76,28 @@ func (e *ToolError) Error() string {
 
 // Unwrap returns the underlying cause so errors.Is/As work through the chain.
 func (e *ToolError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
 	return e.Cause
+}
+
+// LogValue implements slog.LogValuer so that passing a *ToolError directly to
+// slog (e.g. slog.Info("err", "tool_err", te)) never leaks the Cause field.
+//
+// Only Code and Message are included in the returned log value.  The Cause field
+// is logs-only context that must be logged separately by the call site — never
+// surfaced here to prevent accidental leakage of internal error details or
+// secret-bearing error messages.
+func (e *ToolError) LogValue() slog.Value {
+	if e == nil {
+		return slog.GroupValue(
+			slog.String("code", "internal_error"),
+			slog.String("message", "<nil ToolError>"),
+		)
+	}
+	return slog.GroupValue(
+		slog.String("code", e.Code),
+		slog.String("message", e.Message),
+	)
 }

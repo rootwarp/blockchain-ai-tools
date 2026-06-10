@@ -68,7 +68,7 @@ func (k *signingKey) SignTx(tx *types.Transaction, signer types.Signer) (*types.
 //   - ctx cancelled → ctx.Err() (not a *ToolError; system error)
 //   - unreadable password file → *ToolError{Code: CodePasswordError}
 //   - keystore.ErrDecrypt (wrong password / MAC fail) → *ToolError{Code: CodePasswordError}
-//   - other DecryptKey errors → *ToolError{Code: CodePasswordError}
+//   - other DecryptKey errors (unknown cipher, corrupted ciphertext) → *ToolError{Code: CodeInternalError}
 func (v *fileKeyVault) WithSigningKey(ctx context.Context, fn func(SigningKey) error) error {
 	// 1. Acquire semaphore. The select respects context cancellation so callers
 	//    never wait forever when the context is cancelled or timed out.
@@ -124,18 +124,21 @@ func (v *fileKeyVault) WithSigningKey(ctx context.Context, fn func(SigningKey) e
 	key, err := gokeystore.DecryptKey(v.keystoreJSON, string(passwordBytes))
 	if err != nil {
 		if errors.Is(err, gokeystore.ErrDecrypt) {
+			// ErrDecrypt means the MAC check failed — wrong password. This is a
+			// caller-visible, caller-correctable condition: password_error.
 			return &ToolError{
 				Code:    CodePasswordError,
 				Message: "keystore decryption failed; check the password",
 				Cause:   err,
 			}
 		}
-		// Other DecryptKey errors (e.g. internal crypto failure) also map to
-		// password_error: the ciphertext is validated at construction; failures
-		// here are password or key material issues.
+		// Any other error from DecryptKey (e.g. unknown cipher algorithm, corrupted
+		// ciphertext, unsupported KDF) is NOT a wrong-password issue — it is an
+		// internal configuration or file-integrity problem. Map to internal_error so
+		// operators understand this requires attention beyond a simple password change.
 		return &ToolError{
-			Code:    CodePasswordError,
-			Message: "keystore decryption failed",
+			Code:    CodeInternalError,
+			Message: "keystore decryption failed due to an internal error",
 			Cause:   err,
 		}
 	}

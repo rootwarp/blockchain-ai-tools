@@ -679,6 +679,57 @@ func TestWithSigningKey_PasswordFileTrailingNewline(t *testing.T) {
 	}
 }
 
+// TestWithSigningKey_NonErrDecryptMapsToInternalError verifies that a DecryptKey failure
+// that is NOT keystore.ErrDecrypt (e.g. unsupported cipher or corrupted ciphertext format)
+// maps to CodeInternalError, not CodePasswordError.
+//
+// Only the actual MAC-failure ErrDecrypt (wrong password) should map to password_error;
+// internal crypto errors are not the caller's fault and must be flagged as internal_error.
+//
+// Technique: replace the keystoreJSON in the vault (accessible as an unexported field from
+// within package signing) with a document that causes a non-ErrDecrypt parse/config error
+// (e.g. an unknown cipher algorithm) so that gokeystore.DecryptKey returns a non-ErrDecrypt
+// error even with the correct password.
+func TestWithSigningKey_NonErrDecryptMapsToInternalError(t *testing.T) {
+	t.Parallel()
+	v := weakVault(t)
+
+	// Overwrite the keystoreJSON with a document that has a known-unsupported cipher
+	// type. This causes DecryptKey to fail with a non-ErrDecrypt error (unknown cipher).
+	// The JSON is valid in structure so json.Unmarshal won't fail, but the cipher is not
+	// recognised by go-ethereum's keystore package.
+	v.keystoreJSON = []byte(`{
+		"crypto": {
+			"cipher": "unsupported-cipher-xyz",
+			"ciphertext": "deadbeef",
+			"cipherparams": {},
+			"kdf": "scrypt",
+			"kdfparams": {"n":2,"r":8,"p":1,"dklen":32,"salt":"aabb"},
+			"mac": "deadbeef"
+		},
+		"address": "9858effd232b4033e47d90003d41ec34ecaeda94",
+		"version": 3
+	}`)
+
+	err := v.WithSigningKey(context.Background(), func(k SigningKey) error {
+		t.Error("fn should not be called when keystore is corrupted")
+		return nil
+	})
+	if err == nil {
+		t.Fatal("WithSigningKey(corrupted cipher): expected error, got nil")
+	}
+
+	var te *ToolError
+	if !errors.As(err, &te) {
+		t.Fatalf("error type = %T (%v), want *ToolError", err, err)
+	}
+	// Must be internal_error, NOT password_error — the failure is a crypto/config issue,
+	// not a wrong-password MAC failure.
+	if te.Code != CodeInternalError {
+		t.Errorf("Code = %q, want %q (non-ErrDecrypt failure must map to internal_error, not password_error)", te.Code, CodeInternalError)
+	}
+}
+
 // TestWithSigningKey_PasswordFileCRLF verifies that a password file with Windows-style
 // CRLF line endings (\r\n) is handled correctly: both the \r and \n are stripped and
 // decryption succeeds. This guards against the common operator footgun where a password
