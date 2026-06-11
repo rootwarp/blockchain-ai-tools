@@ -428,17 +428,28 @@ func TestE2E_Stdio_FullSession(t *testing.T) {
 	if mainCloseErr != nil && !isClosedPipeError(mainCloseErr) {
 		t.Errorf("step 7: mainCS.Close: %v", mainCloseErr)
 	}
-	// Explicitly wait so ProcessState is always populated, regardless of whether
-	// the SDK's pipeRWC.Close() called cmd.Wait() before returning. This removes
-	// the vacuous-pass risk from the early-return branch (stdin.Close() error).
-	waitErr := mainCmd.Wait()
+	// Assert exit 0. The SDK's pipeRWC.Close() calls cmd.Wait() synchronously on
+	// the normal path, populating ProcessState before returning. On the early-return
+	// path (stdin.Close() error), cmd.Wait() is not called internally — so we call
+	// it here to guarantee ProcessState is always set. If the SDK already called
+	// it, Go returns "exec: Wait was already called" (not an ExitError), in which
+	// case we fall back to the already-populated ProcessState.
 	{
+		waitErr := mainCmd.Wait()
 		var ee *exec.ExitError
 		if errors.As(waitErr, &ee) {
+			// cmd.Wait() returned the exit status directly (early-return path).
 			if ee.ExitCode() != 0 {
 				t.Errorf("step 7: subprocess exit code = %d; want 0 (stdin EOF → clean shutdown)", ee.ExitCode())
 			}
-		} else if waitErr != nil && !isClosedPipeError(waitErr) {
+		} else if waitErr == nil {
+			// cmd.Wait() returned nil: exit 0 confirmed.
+		} else if isClosedPipeError(waitErr) || strings.Contains(waitErr.Error(), "Wait was already called") {
+			// SDK already called cmd.Wait(); ProcessState is populated. Use it.
+			if ps := mainCmd.ProcessState; ps != nil && ps.ExitCode() != 0 {
+				t.Errorf("step 7: subprocess exit code = %d; want 0 (stdin EOF → clean shutdown)", ps.ExitCode())
+			}
+		} else {
 			t.Errorf("step 7: cmd.Wait: %v", waitErr)
 		}
 	}
