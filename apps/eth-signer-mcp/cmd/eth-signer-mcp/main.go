@@ -257,20 +257,28 @@ func run(ctx context.Context, cmd *cli.Command) error {
 		Logger:  logger,
 	})
 
-	// Step 7: guard against --http (Streamable HTTP transport arrives in Phase 3).
-	// The flag exists in Phase 1 so --help is truthful; the transport is not yet wired.
-	// Never use the word "SSE" — the second transport is MCP Streamable HTTP
-	// (Phase Conventions: "The second transport … is never called 'HTTP/SSE'").
-	if cfg.HTTP {
-		return fmt.Errorf("the Streamable HTTP transport arrives in Phase 3; " +
-			"use stdio (default) for now")
-	}
+	// Step 7: route to the chosen transport.
+	//
+	// The signal.NotifyContext (step 8) must be wired BEFORE calling any
+	// transport so that SIGINT/SIGTERM cancels the ctx that is passed in.
+	// We wire it here, unconditionally, and pass the same ctx to both transports.
 
 	// Step 8: wire signal.NotifyContext for SIGINT/SIGTERM graceful shutdown.
 	// When the OS delivers SIGINT or SIGTERM, ctx is cancelled, which propagates
-	// to RunStdio, which closes the session and returns nil (normalised by RunStdio).
+	// to the active transport (RunHTTP or RunStdio), which returns nil.
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	if cfg.HTTP {
+		// Streamable HTTP transport (Phase 3, issue 3.1).
+		// On startup error (unreadable/empty token file, bind failure), RunHTTP
+		// returns a sanitized error (names the path + error class, never the token
+		// contents).  main() prints it as "eth-signer-mcp: <error>" and exits 1.
+		return srv.RunHTTP(ctx, server.HTTPOptions{
+			Addr:          cfg.HTTPAddr,
+			TokenFilePath: cfg.TokenFilePath,
+		})
+	}
 
 	// Step 9: run the MCP server on the stdio transport.
 	// Returns nil on clean EOF (client closed stdin) or on SIGINT/SIGTERM.

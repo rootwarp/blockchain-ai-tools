@@ -2,12 +2,13 @@
 
 package main
 
-// main_test.go — binary-level smoke tests for eth-signer-mcp (issue 1.8).
+// main_test.go — binary-level smoke tests for eth-signer-mcp (issues 1.8, 3.1).
 //
 // These tests build and drive the real eth-signer-mcp binary as a child process.
 // They exercise:
 //   (a) initialize + tools/list over child-process stdio (real MCP session).
-//   (b) --http with token file exits non-zero with "Phase 3" in stderr.
+//   (b) --http with token file starts the Streamable HTTP server (Phase 3, issue 3.1)
+//       and exits 0 on SIGTERM.  The transport is NEVER called "HTTP/SSE".
 //   (c) SIGINT during an idle stdio session causes clean exit (exit code 0).
 //
 // Prerequisites:
@@ -109,24 +110,31 @@ func TestBinary_Stdio_Initialize(t *testing.T) {
 	}
 }
 
-// TestBinary_HTTPFlag_Phase3Error verifies that --http (with a token file, so
-// validate() passes) exits non-zero and prints a stable "Phase 3" message.
+// TestBinary_HTTP_StartsAndShutsDown verifies that --http starts the Streamable
+// HTTP server, prints the announce line to stderr, and exits 0 on SIGTERM.
 //
-// The Streamable HTTP transport arrives in Phase 3; it is NEVER called "SSE"
-// (Phase Conventions).  This test pins the stable error substring so callers
-// can rely on it.
-func TestBinary_HTTPFlag_Phase3Error(t *testing.T) {
+// Phase 3 (issue 3.1): the transport is now real.  The Phase 1 placeholder
+// ("Phase 3" error message) is replaced by a proper start+shutdown test.
+//
+// Flow:
+//  1. Start binary with --http, keystore, password-file, and a token file.
+//  2. Read stderr until the "eth-signer-mcp listening on" announce line appears.
+//  3. Send SIGTERM to the child process.
+//  4. Assert exit code == 0 (clean shutdown via signal.NotifyContext).
+//
+// NEVER refer to this transport as "HTTP/SSE" — it is MCP Streamable HTTP
+// (Phase Conventions).
+func TestBinary_HTTP_StartsAndShutsDown(t *testing.T) {
 	bin := getTestBinary(t)
-	ks, pw := signingFixtureFiles(t) // real keystore so NewFileKeyVault succeeds
+	ks, pw := signingFixtureFiles(t)
 
-	// Write a dummy token file (only its existence matters; no validation yet).
 	dir := t.TempDir()
 	tokenPath := dir + "/token.txt"
-	if err := os.WriteFile(tokenPath, []byte("dummy-token"), 0o600); err != nil {
+	if err := os.WriteFile(tokenPath, []byte("test-http-startup-token\n"), 0o600); err != nil {
 		t.Fatalf("write token file: %v", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, bin,
@@ -135,28 +143,81 @@ func TestBinary_HTTPFlag_Phase3Error(t *testing.T) {
 		"--http",
 		"--http-auth-token-file", tokenPath,
 	)
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-
-	// Must exit non-zero.
-	if err == nil {
-		t.Fatal("binary exited 0; want non-zero (--http not yet implemented)")
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		t.Fatalf("StderrPipe: %v", err)
 	}
-	var exitErr *exec.ExitError
-	if !errors.As(err, &exitErr) {
-		t.Fatalf("unexpected error type: %T %v", err, err)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("cmd.Start: %v", err)
 	}
-	if exitErr.ExitCode() == 0 {
-		t.Error("exit code = 0; want non-zero for --http in Phase 1")
+	t.Cleanup(func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+	})
+
+	// Read stderr byte-by-byte until we find the announce line or timeout.
+	announceFound := make(chan string, 1)
+	go func() {
+		buf := make([]byte, 0, 512)
+		tmp := make([]byte, 1)
+		for {
+			n, readErr := stderrPipe.Read(tmp)
+			if n > 0 {
+				buf = append(buf, tmp[:n]...)
+				// Check each line as it arrives.
+				for {
+					idx := strings.IndexByte(string(buf), '\n')
+					if idx < 0 {
+						break
+					}
+					line := string(buf[:idx])
+					buf = buf[idx+1:]
+					if strings.Contains(line, "listening on") {
+						announceFound <- line
+						return
+					}
+				}
+			}
+			if readErr != nil {
+				return
+			}
+		}
+	}()
+
+	var announceLine string
+	select {
+	case announceLine = <-announceFound:
+		// Server announced its bound address.
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for announce line in stderr")
 	}
 
-	// Must mention "Phase 3" in stderr (stable substring per issue 1.8 spec).
-	// NEVER assert "SSE" — the transport is MCP Streamable HTTP (Phase Conventions).
-	stderrStr := stderr.String()
-	if !strings.Contains(stderrStr, "Phase 3") {
-		t.Errorf("stderr does not contain %q\nstderr: %s", "Phase 3", stderrStr)
+	// Verify the announce line contains the expected prefix.
+	if !strings.Contains(announceLine, "eth-signer-mcp listening on") {
+		t.Errorf("announce line = %q; want to contain %q", announceLine, "eth-signer-mcp listening on")
+	}
+
+	// Send SIGTERM → signal.NotifyContext cancels → RunHTTP returns nil → exit 0.
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("Signal(SIGTERM): %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			var exitErr *exec.ExitError
+			if errors.As(err, &exitErr) {
+				t.Errorf("exit code = %d; want 0 (clean shutdown)", exitErr.ExitCode())
+			} else {
+				t.Errorf("cmd.Wait: %v", err)
+			}
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatal("binary did not exit within 8s after SIGTERM")
 	}
 }
 

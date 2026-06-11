@@ -394,9 +394,9 @@ func TestRun_ChainID(t *testing.T) {
 func TestRun_HTTPValidation(t *testing.T) {
 	t.Parallel()
 
-	// Use real keystore+password fixtures so NewFileKeyVault succeeds and we reach
-	// the --http Phase 3 check. Tests that fail before the Action fires can use
-	// fake paths — the Action never runs for those.
+	// Use real keystore+password fixtures so NewFileKeyVault succeeds and we
+	// reach the HTTP transport startup.  Tests that fail before the Action fires
+	// can use fake paths — the Action never runs for those.
 	ks, pw := signingFixtureFiles(t)
 
 	tests := []struct {
@@ -412,18 +412,15 @@ func TestRun_HTTPValidation(t *testing.T) {
 			wantErr: "--http-auth-token-file",
 		},
 		{
-			// Issue 1.8: --http with a token file passes validation and the fsperm
-			// check (real 0600 files used for the latter), but run() rejects it with
-			// a stable "Phase 3" message.  The Streamable HTTP transport arrives in
-			// Phase 3; stdio is the only available transport in Phase 1.
-			// This assertion pins the stable error substring so future refactors
-			// cannot silently change the message that callers rely on.
+			// Issue 3.1: --http with a non-existent token file path passes validate()
+			// but RunHTTP fails fast with a token-file error before binding any listener.
+			// The error names the path, never the token contents.
 			// NEVER "SSE" — transport naming is "Streamable HTTP" per Phase Conventions.
-			name:    "http_with_token_file_phase3_error",
-			wantErr: "Phase 3",
+			name:    "http_with_missing_token_file",
+			wantErr: "token file",
 			args: []string{
 				"eth-signer-mcp", "--keystore", ks, "--password-file", pw,
-				"--http", "--http-auth-token-file", "/t",
+				"--http", "--http-auth-token-file", "/nonexistent/path/token.txt",
 			},
 		},
 	}
