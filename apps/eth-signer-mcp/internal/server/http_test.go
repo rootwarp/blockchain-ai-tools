@@ -1,6 +1,6 @@
 package server
 
-// http_test.go — TDD tests for RunHTTP (issue 3.1).
+// http_test.go — TDD tests for RunHTTP (issues 3.1 + 3.2).
 //
 // Acceptance criteria covered:
 //   (a) Valid token file + default addr → binds 127.0.0.1:0, resolves to loopback.
@@ -12,9 +12,9 @@ package server
 //       error, no announce (ReadyCh never signalled).
 //   (e) ReadHeaderTimeout == 5 s (asserted via test seam).
 //   (f) Smoke test: one initialize round-trip over real Streamable HTTP with the
-//       SDK v1.6.1 client.  Auth is not enforced yet (lands in 3.2), so no
-//       bearer header is sent.  The client is gated on the ReadyCh signal, never
-//       on sleeps.
+//       SDK v1.6.1 client.  Issue 3.2: bearer auth is now enforced; the smoke test
+//       uses bearerRoundTripper to inject the correct Authorization header.
+//       The client is gated on the ReadyCh signal, never on sleeps.
 //
 // All tests run under -race; every goroutine must finish before the test returns.
 // No hardcoded ports — every listener uses addr "127.0.0.1:0".
@@ -36,6 +36,26 @@ import (
 )
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+// bearerRoundTripper is a test-only http.RoundTripper that injects an
+// "Authorization: Bearer <token>" header into every outbound request.
+// Used by smoke tests and HTTP transport tests that need a real bearer token
+// after issue 3.2 wires auth into the pipeline.
+type bearerRoundTripper struct {
+	base  http.RoundTripper
+	token string
+}
+
+func (b bearerRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
+	// Clone the request so we do not mutate the original.
+	rc := r.Clone(r.Context())
+	rc.Header.Set("Authorization", "Bearer "+b.token)
+	base := b.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	return base.RoundTrip(rc)
+}
 
 // writeTokenFile creates a temp file with content and returns its path.
 // The file is removed at test cleanup.
@@ -540,7 +560,8 @@ func TestRunHTTP_Smoke_Initialize(t *testing.T) {
 		Logger:  obs.NewLogger("error"),
 	})
 
-	tokenFile := writeTokenFile(t, "smoke-test-token-xyz\n")
+	const smokeToken = "smoke-test-token-xyz"
+	tokenFile := writeTokenFile(t, smokeToken+"\n")
 	readyCh := make(chan net.Addr, 1)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -577,6 +598,8 @@ func TestRunHTTP_Smoke_Initialize(t *testing.T) {
 
 	// Connect the SDK v1.6.1 client over Streamable HTTP.
 	// DisableStandaloneSSE keeps the test focused: we only need one round-trip.
+	// bearerRoundTripper injects "Authorization: Bearer <token>" so the 3.2
+	// bearer-auth middleware passes the request through to the SDK handler.
 	mcpClient := mcp.NewClient(
 		&mcp.Implementation{Name: "test-smoke-client", Version: "v0.0.1"},
 		nil,
@@ -584,6 +607,9 @@ func TestRunHTTP_Smoke_Initialize(t *testing.T) {
 	transport := &mcp.StreamableClientTransport{
 		Endpoint:             endpoint,
 		DisableStandaloneSSE: true,
+		HTTPClient: &http.Client{
+			Transport: bearerRoundTripper{token: smokeToken},
+		},
 	}
 
 	// connCtx is only for the Connect handshake; release it immediately after.

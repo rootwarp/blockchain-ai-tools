@@ -190,13 +190,15 @@ func run(ctx context.Context, cmd *cli.Command) error {
 	// Step 3: file-permission startup check — wired once, final form
 	// (architecture Flow D, Phase Conventions: "fsperm is wired once").
 	// Checks keystore and password-file paths before any transport starts.
-	// Fail fast if either path is missing, not a regular file, or (when
+	// When --http is set, also checks the token file — it is security-load-
+	// bearing from the first commit that enables auth (issue 3.2).
+	// Fail fast if any path is missing, not a regular file, or (when
 	// --strict-perms is set) group/world accessible.
-	if err := applyPermChecks(
-		[]string{cfg.KeystorePath, cfg.PasswordPath},
-		cfg.StrictPerms,
-		logger,
-	); err != nil {
+	permPaths := []string{cfg.KeystorePath, cfg.PasswordPath}
+	if cfg.HTTP {
+		permPaths = append(permPaths, cfg.TokenFilePath)
+	}
+	if err := applyPermChecks(permPaths, cfg.StrictPerms, logger); err != nil {
 		return err
 	}
 

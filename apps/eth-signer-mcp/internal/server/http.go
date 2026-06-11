@@ -1,21 +1,23 @@
 package server
 
-// http.go — Issue 3.1: Streamable HTTP transport (RunHTTP).
+// http.go — Issues 3.1 + 3.2: Streamable HTTP transport (RunHTTP).
 //
 // RunHTTP is the second transport over the same *mcp.Server that RunStdio uses
 // (ADR-002: one server, two transports; tools are registered once in New).
 //
 // Startup sequence:
-//  1. Validate the bearer token file before binding — the listener MUST NOT
-//     bind if this step fails (operators get a clean failure, not a half-broken
-//     listening process).
+//  1. Validate and hash the bearer token file via NewBearerVerifierFromFile —
+//     the listener MUST NOT bind if this step fails (fail-fast: operators get a
+//     clean error, not a half-open process).  Issue 3.2 replaced the 3.1
+//     SHA-256 placeholder with the real BearerVerifier constructor.
 //  2. Bind the listener (net.Listen "tcp" on opts.Addr).
 //  3. Print the resolved bound address to stderr; log it; signal ReadyCh.
 //  4. Construct the SDK StreamableHTTPHandler with DNS-rebinding protection on
 //     (DisableLocalhostProtection stays false, the default).
-//  5. Assemble the http.Server pipeline.  Future middleware slots in as
-//     func(http.Handler) http.Handler without re-plumbing (3.2 bearer auth,
-//     3.3 reqlog, 3.4 MaxBytesHandler).
+//  5. Assemble the http.Server pipeline (current order, innermost → outermost):
+//       SDK handler → bearer auth (3.2) → [reqlog 3.3] → [MaxBytes 3.4]
+//     Each layer is a func(http.Handler) http.Handler; future layers slot in
+//     without re-plumbing this function.
 //  6. Serve in a goroutine; on ctx.Done(), gracefully shut down (skeleton here;
 //     full drain semantics and the 3 s grace window are finalised in 3.7).
 //
@@ -24,7 +26,6 @@ package server
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -34,7 +35,6 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/rootwarp/blockchain-ai-tools/apps/eth-signer-mcp/internal/signing"
 )
 
 // HTTPOptions configures the Streamable HTTP transport for RunHTTP.
@@ -73,37 +73,21 @@ func (s *Server) RunHTTP(ctx context.Context, opts HTTPOptions) error {
 		addr = "127.0.0.1:0"
 	}
 
-	// ── Step 1: Validate the bearer token file BEFORE binding any listener ──
+	// ── Step 1: Validate the bearer token file and build the verifier ──────
 	//
-	// Read, strip exactly one trailing '\n' (not TrimSpace — tokens may contain
-	// inner spaces or other whitespace), reject if empty.
+	// NewBearerVerifierFromFile reads the file, strips exactly one trailing '\n'
+	// (not TrimSpace — tokens may contain inner spaces), rejects an empty result,
+	// stores sha256(token) inside a signing.Secret, and zeroes the raw bytes.
 	//
-	// SECURITY: token contents are NEVER logged or echoed; error messages
-	// name the path and error class only.
-	raw, err := os.ReadFile(opts.TokenFilePath)
+	// The listener MUST NOT bind if this step fails — operators get a clean
+	// startup failure, not a half-broken listening process.
+	//
+	// SECURITY: token contents are NEVER logged or echoed; error messages name
+	// the path and error class only (enforced inside NewBearerVerifierFromFile).
+	verifier, err := NewBearerVerifierFromFile(opts.TokenFilePath)
 	if err != nil {
-		return fmt.Errorf("token file %q: %w", opts.TokenFilePath, err)
+		return err
 	}
-
-	tokenBytes := raw
-	if len(tokenBytes) > 0 && tokenBytes[len(tokenBytes)-1] == '\n' {
-		tokenBytes = tokenBytes[:len(tokenBytes)-1]
-	}
-	if len(tokenBytes) == 0 {
-		signing.ZeroBytes(raw) // zero the raw token (best-effort, ADR-009)
-		return fmt.Errorf("token file %q: empty after stripping trailing newline", opts.TokenFilePath)
-	}
-
-	// Hash the token; store sha256(token) inside a signing.Secret so it never
-	// leaks via fmt/slog/JSON.  Zero the raw bytes immediately.
-	//
-	// The 3.2 BearerVerifier constructor replaces this placeholder once it
-	// exists.  For now we hold the hash until RunHTTP exits so the Secret
-	// (and the zeroing below) are exercised from the first commit.
-	hash := sha256.Sum256(tokenBytes)
-	tokenHash := signing.NewSecret(hash) // sha256(token); prevents direct logging
-	signing.ZeroBytes(raw)               // zero raw token (best-effort, ADR-009)
-	_ = tokenHash                        // used by 3.2 verifier; suppress unused warning
 
 	// ── Step 2: Bind the listener ──────────────────────────────────────────
 	//
@@ -174,14 +158,21 @@ func (s *Server) RunHTTP(ctx context.Context, opts HTTPOptions) error {
 
 	// ── Step 5: Assemble the http.Server pipeline ──────────────────────────
 	//
-	// Current assembly order (outermost → innermost):
-	//   [SDK handler]
+	// Current assembly order (outermost → innermost), reading bottom-up as
+	// written (each wrap adds an outer layer):
 	//
-	// Future middleware will slot in as func(http.Handler) http.Handler:
-	//   [3.2] pipeline = bearerVerifier.Middleware(pipeline)   // 401 before SDK sees body
+	//   [3.4] http.MaxBytesHandler → [3.3] reqlog → [3.2] bearer auth → [SDK handler]
+	//
+	// Layers landing in this issue (3.2):
+	//   bearer auth — verifier.Middleware wraps the SDK handler; 401 fires before
+	//   the SDK ever sees the body (no MCP session state created for bad requests).
+	//
+	// Future middleware slots as func(http.Handler) http.Handler without
+	// re-plumbing this function:
 	//   [3.3] pipeline = reqlogMiddleware(pipeline, s.logger)  // req-id + latency log
 	//   [3.4] pipeline = http.MaxBytesHandler(pipeline, 1<<20) // 1 MiB body cap (outermost)
 	var pipeline http.Handler = sdkHandler
+	pipeline = verifier.Middleware(pipeline) // [3.2] 401 before SDK sees body
 
 	httpSrv := &http.Server{
 		Handler: pipeline,

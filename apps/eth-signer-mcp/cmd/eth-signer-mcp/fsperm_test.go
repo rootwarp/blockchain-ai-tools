@@ -12,7 +12,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -576,5 +578,260 @@ func TestBinary_Mode644_NoStrictPerms_ExitCode0(t *testing.T) {
 	code := exitCodeFromError(t, err)
 	if code != 0 {
 		t.Errorf("exit code = %d, want 0 (mode 0644, no --strict-perms should warn not refuse)", code)
+	}
+}
+
+// ── Issue 3.2: token-file permission checks ───────────────────────────────────
+
+// TestApplyPermChecks_TokenFile_TooOpen_NoStrictPerms_Warn verifies that when
+// the token file is world/group-readable without --strict-perms, applyPermChecks
+// emits a WARN (not an error) for the token path.
+//
+// The token file is in the paths slice alongside keystore and password so we
+// exercise the shared code path (same applyPermChecks call, same semantics).
+func TestApplyPermChecks_TokenFile_TooOpen_NoStrictPerms_Warn(t *testing.T) {
+	skipIfRoot(t)
+	t.Parallel()
+
+	keystore := writeTestFile(t, []byte("ks"), 0o600)
+	password := writeTestFile(t, []byte("pw"), 0o600)
+	token := writeTestFile(t, []byte("my-bearer-token"), 0o644) // too open
+
+	var buf bytes.Buffer
+	err := applyPermChecks([]string{keystore, password, token}, false /*strictPerms*/, bufLogger(&buf))
+	if err != nil {
+		t.Fatalf("applyPermChecks(token 0644, strict=false) = %v, want nil (warn not error)", err)
+	}
+
+	lines := splitLogLines(&buf)
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 WARN line (token only), got %d:\n%s", len(lines), buf.String())
+	}
+	entry := parseLogLine(t, lines[0])
+	if entry["level"] != "WARN" {
+		t.Errorf("log level = %q, want WARN", entry["level"])
+	}
+	if entry["path"] != token {
+		t.Errorf("log path = %v, want token path %q", entry["path"], token)
+	}
+}
+
+// TestApplyPermChecks_TokenFile_TooOpen_StrictPerms_Exit2 verifies that when
+// the token file is world/group-readable AND --strict-perms is set,
+// applyPermChecks returns ExitCoder(2) and logs ERROR.
+//
+// This uses the same code path as the keystore/password checks — the test
+// demonstrates that the token file is handled identically.
+func TestApplyPermChecks_TokenFile_TooOpen_StrictPerms_Exit2(t *testing.T) {
+	skipIfRoot(t)
+	t.Parallel()
+
+	keystore := writeTestFile(t, []byte("ks"), 0o600)
+	password := writeTestFile(t, []byte("pw"), 0o600)
+	token := writeTestFile(t, []byte("my-bearer-token"), 0o644) // too open
+
+	var buf bytes.Buffer
+	err := applyPermChecks([]string{keystore, password, token}, true /*strictPerms*/, bufLogger(&buf))
+	if err == nil {
+		t.Fatal("applyPermChecks(token 0644, strict=true) = nil, want ExitCoder(2)")
+	}
+
+	var ec cli.ExitCoder
+	if !errors.As(err, &ec) {
+		t.Fatalf("error does not implement cli.ExitCoder: %T %v", err, err)
+	}
+	if ec.ExitCode() != 2 {
+		t.Errorf("ExitCode() = %d, want 2", ec.ExitCode())
+	}
+
+	lines := splitLogLines(&buf)
+	if len(lines) == 0 {
+		t.Fatal("no log lines produced, want at least one ERROR line")
+	}
+	entry := parseLogLine(t, lines[0])
+	if entry["level"] != "ERROR" {
+		t.Errorf("log level = %q, want ERROR", entry["level"])
+	}
+	if entry["path"] != token {
+		t.Errorf("log path = %v, want token path %q", entry["path"], token)
+	}
+}
+
+// TestApplyPermChecks_TokenFile_NotChecked_WithoutHTTP verifies that when --http
+// is NOT set, the token file path is NOT included in the permission check paths
+// (the binary does not use it on the stdio path).
+//
+// This is a unit-level test of the cmd logic: applyPermChecks is called with
+// only keystore+password (no token) when cfg.HTTP is false.
+func TestApplyPermChecks_TokenFile_NotChecked_WithoutHTTP(t *testing.T) {
+	skipIfRoot(t)
+	t.Parallel()
+
+	// Token file is world-readable — would produce a WARN if checked.
+	token := writeTestFile(t, []byte("bearer-token"), 0o644)
+
+	// Simulate what run() does when cfg.HTTP == false: paths slice = [ks, pw].
+	keystore := writeTestFile(t, []byte("ks"), 0o600)
+	password := writeTestFile(t, []byte("pw"), 0o600)
+
+	var buf bytes.Buffer
+	err := applyPermChecks(
+		[]string{keystore, password}, // token NOT in the list (cfg.HTTP=false)
+		false,
+		bufLogger(&buf),
+	)
+	if err != nil {
+		t.Fatalf("applyPermChecks(no-token-in-list) = %v, want nil", err)
+	}
+
+	// No WARN should appear — the token file was not checked.
+	lines := splitLogLines(&buf)
+	if len(lines) != 0 {
+		t.Errorf("expected 0 log lines (token not checked), got %d:\n%s", len(lines), buf.String())
+	}
+
+	// Keep the reference to avoid "declared and not used".
+	_ = token
+}
+
+// TestBinary_TokenFile_TooOpen_NoStrictPerms_Warn drives the real binary with a
+// world-readable token file and --http but WITHOUT --strict-perms.  The binary
+// must start successfully (HTTP server binds) and exit 0 on SIGTERM.
+// The permission warning is emitted but does not block startup.
+func TestBinary_TokenFile_TooOpen_NoStrictPerms_Warn(t *testing.T) {
+	skipIfRoot(t)
+
+	bin := getTestBinary(t)
+	ks, pw := signingFixtureFiles(t)
+
+	// Read fixture content to copy with controlled permissions.
+	ksContent, err := os.ReadFile(ks)
+	if err != nil {
+		t.Fatalf("read keystore fixture: %v", err)
+	}
+	pwContent, err := os.ReadFile(pw)
+	if err != nil {
+		t.Fatalf("read password fixture: %v", err)
+	}
+	keystore := writeTestFile(t, ksContent, 0o600)
+	password := writeTestFile(t, pwContent, 0o600)
+	// Token file is world-readable → warn, not refuse.
+	token := writeTestFile(t, []byte("warn-test-token-http"), 0o644)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, bin,
+		"--keystore", keystore,
+		"--password-file", password,
+		"--http",
+		"--http-auth-token-file", token,
+	)
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		t.Fatalf("StderrPipe: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("cmd.Start: %v", err)
+	}
+	t.Cleanup(func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+	})
+
+	// Wait for the announce line — confirms HTTP server started.
+	announceFound := make(chan string, 1)
+	go func() {
+		buf := make([]byte, 0, 512)
+		tmp := make([]byte, 1)
+		for {
+			n, readErr := stderrPipe.Read(tmp)
+			if n > 0 {
+				buf = append(buf, tmp[:n]...)
+				for {
+					idx := strings.IndexByte(string(buf), '\n')
+					if idx < 0 {
+						break
+					}
+					line := string(buf[:idx])
+					buf = buf[idx+1:]
+					if strings.Contains(line, "listening on") {
+						announceFound <- line
+						return
+					}
+				}
+			}
+			if readErr != nil {
+				return
+			}
+		}
+	}()
+
+	select {
+	case <-announceFound:
+		// Server started — warning did not block startup.
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout: HTTP server did not announce (token warning should not block startup)")
+	}
+
+	// Send SIGTERM → clean shutdown → exit 0.
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("Signal(SIGTERM): %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case waitErr := <-done:
+		if waitErr != nil {
+			var exitErr *exec.ExitError
+			if errors.As(waitErr, &exitErr) {
+				t.Errorf("exit code = %d; want 0 (token warn should not cause non-zero exit)", exitErr.ExitCode())
+			} else {
+				t.Errorf("cmd.Wait: %v", waitErr)
+			}
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatal("binary did not exit within 8s after SIGTERM")
+	}
+}
+
+// TestBinary_TokenFile_TooOpen_StrictPerms_Exit2 drives the real binary with a
+// world-readable token file, --http, AND --strict-perms.  The binary must refuse
+// to start with exit code 2 — identical behaviour to keystore/password permission
+// refusal.
+func TestBinary_TokenFile_TooOpen_StrictPerms_Exit2(t *testing.T) {
+	skipIfRoot(t)
+
+	bin := getTestBinary(t)
+	ks, pw := signingFixtureFiles(t)
+
+	ksContent, err := os.ReadFile(ks)
+	if err != nil {
+		t.Fatalf("read keystore fixture: %v", err)
+	}
+	pwContent, err := os.ReadFile(pw)
+	if err != nil {
+		t.Fatalf("read password fixture: %v", err)
+	}
+	keystore := writeTestFile(t, ksContent, 0o600)
+	password := writeTestFile(t, pwContent, 0o600)
+	// Token file is world-readable AND --strict-perms → exit 2.
+	token := writeTestFile(t, []byte("refuse-test-token-http"), 0o644)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, bin,
+		"--keystore", keystore,
+		"--password-file", password,
+		"--http",
+		"--http-auth-token-file", token,
+		"--strict-perms",
+	)
+	err = cmd.Run()
+	code := exitCodeFromError(t, err)
+	if code != 2 {
+		t.Errorf("exit code = %d, want 2 (--strict-perms + world-readable token file)", code)
 	}
 }

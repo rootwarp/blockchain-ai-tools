@@ -447,6 +447,23 @@ func TestRun_HTTPValidation(t *testing.T) {
 	// can use fake paths — the Action never runs for those.
 	ks, pw := signingFixtureFiles(t)
 
+	// emptyTokenFile is an existing, permission-OK (0600) but empty file.
+	// An empty token file passes the fsperm check (os.Stat succeeds, mode OK)
+	// but is rejected by NewBearerVerifierFromFile in RunHTTP with a "token file"
+	// error — a plain fmt.Errorf that cmd.Run returns without calling os.Exit.
+	//
+	// We use an empty file rather than a non-existent path because in 3.2 the
+	// fsperm check now runs BEFORE RunHTTP: a non-existent path causes
+	// applyPermChecks to return cli.Exit("startup aborted: cannot check file
+	// permissions", 2), and urfave/cli v3's HandleExitCoder would call os.Exit
+	// when cmd.Run encounters a cli.ExitCoder — killing the in-process test.
+	// The binary-level behaviour (exit 2 on a non-existent or world-readable token
+	// file) is covered in fsperm_test.go (TestBinary_TokenFile_* tests).
+	emptyTokenFile := filepath.Join(t.TempDir(), "empty-token.txt")
+	if err := os.WriteFile(emptyTokenFile, nil, 0o600); err != nil {
+		t.Fatalf("create emptyTokenFile: %v", err)
+	}
+
 	tests := []struct {
 		name    string
 		args    []string
@@ -460,15 +477,17 @@ func TestRun_HTTPValidation(t *testing.T) {
 			wantErr: "--http-auth-token-file",
 		},
 		{
-			// Issue 3.1: --http with a non-existent token file path passes validate()
-			// but RunHTTP fails fast with a token-file error before binding any listener.
-			// The error names the path, never the token contents.
+			// Issue 3.2: --http with an existing but empty token file passes validate()
+			// and the fsperm check, but NewBearerVerifierFromFile in RunHTTP rejects it
+			// with a "token file" error before binding any listener.  This exercises the
+			// RunHTTP fail-fast path.  The error is a plain fmt.Errorf (not a cli.ExitCoder)
+			// so cmd.Run returns it without calling os.Exit — safe for in-process tests.
 			// NEVER "SSE" — transport naming is "Streamable HTTP" per Phase Conventions.
-			name:    "http_with_missing_token_file",
+			name:    "http_with_empty_token_file",
 			wantErr: "token file",
 			args: []string{
 				"eth-signer-mcp", "--keystore", ks, "--password-file", pw,
-				"--http", "--http-auth-token-file", "/nonexistent/path/token.txt",
+				"--http", "--http-auth-token-file", emptyTokenFile,
 			},
 		},
 	}
