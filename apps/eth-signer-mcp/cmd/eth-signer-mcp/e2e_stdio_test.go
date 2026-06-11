@@ -428,11 +428,18 @@ func TestE2E_Stdio_FullSession(t *testing.T) {
 	if mainCloseErr != nil && !isClosedPipeError(mainCloseErr) {
 		t.Errorf("step 7: mainCS.Close: %v", mainCloseErr)
 	}
-	// Assert exit 0: if the SDK's CommandTransport called cmd.Wait() before
-	// returning from Close(), ProcessState will be non-nil.
-	if ps := mainCmd.ProcessState; ps != nil {
-		if ec := ps.ExitCode(); ec != 0 {
-			t.Errorf("step 7: subprocess exit code = %d; want 0 (stdin EOF → clean shutdown)", ec)
+	// Explicitly wait so ProcessState is always populated, regardless of whether
+	// the SDK's pipeRWC.Close() called cmd.Wait() before returning. This removes
+	// the vacuous-pass risk from the early-return branch (stdin.Close() error).
+	waitErr := mainCmd.Wait()
+	{
+		var ee *exec.ExitError
+		if errors.As(waitErr, &ee) {
+			if ee.ExitCode() != 0 {
+				t.Errorf("step 7: subprocess exit code = %d; want 0 (stdin EOF → clean shutdown)", ee.ExitCode())
+			}
+		} else if waitErr != nil && !isClosedPipeError(waitErr) {
+			t.Errorf("step 7: cmd.Wait: %v", waitErr)
 		}
 	}
 
@@ -523,6 +530,13 @@ func TestE2E_Stdio_FullSession(t *testing.T) {
 			"--password-file", passwordPath,
 			"--chain-id", "5",
 		)
+		var chainStderr bytes.Buffer
+		chainCmd.Stderr = &chainStderr
+		t.Cleanup(func() {
+			if t.Failed() {
+				t.Logf("step 5c (chain_id_mismatch) subprocess stderr:\n%s", chainStderr.String())
+			}
+		})
 		chainClient := mcp.NewClient(
 			&mcp.Implementation{Name: "e2e-chain-id-client", Version: "v0.0.1"},
 			nil,
@@ -546,6 +560,20 @@ func TestE2E_Stdio_FullSession(t *testing.T) {
 		})
 		callCancel()
 		assertToolErrorCode(t, mismatchResult, mismatchErr, signing.CodeChainIDMismatch)
+		// Sentinel scan: key material must not appear in chain-id subprocess stderr.
+		{
+			leaked := signing.FixtureKeySentinel().Scan(chainStderr.Bytes())
+			var keyLeaks []string
+			for _, form := range leaked {
+				if form == "address-checksummed" || form == "address-lower-nox" {
+					continue // address legitimately present in startup logs
+				}
+				keyLeaks = append(keyLeaks, form)
+			}
+			if len(keyLeaks) > 0 {
+				t.Errorf("step 5c: fixture private key material leaked in chain-id subprocess stderr in form(s): %v", keyLeaks)
+			}
+		}
 	}
 
 	// ── Step 5d: password_error ───────────────────────────────────────────────
@@ -565,6 +593,13 @@ func TestE2E_Stdio_FullSession(t *testing.T) {
 			"--keystore", keystorePath,
 			"--password-file", wrongPwPath,
 		)
+		var pwStderr bytes.Buffer
+		pwCmd.Stderr = &pwStderr
+		t.Cleanup(func() {
+			if t.Failed() {
+				t.Logf("step 5d (password_error) subprocess stderr:\n%s", pwStderr.String())
+			}
+		})
 		pwClient := mcp.NewClient(
 			&mcp.Implementation{Name: "e2e-pw-client", Version: "v0.0.1"},
 			nil,
@@ -588,6 +623,23 @@ func TestE2E_Stdio_FullSession(t *testing.T) {
 		})
 		callCancel()
 		assertToolErrorCode(t, pwResult, pwErr, signing.CodePasswordError)
+		// Sentinel scan: key material must not appear in password-error subprocess stderr.
+		// This is the highest-risk path: vault.WithSigningKey attempts decryption before
+		// returning ErrDecrypt. Any verbose error wrapping that captured intermediate state
+		// would show up here.
+		{
+			leaked := signing.FixtureKeySentinel().Scan(pwStderr.Bytes())
+			var keyLeaks []string
+			for _, form := range leaked {
+				if form == "address-checksummed" || form == "address-lower-nox" {
+					continue // address legitimately present in startup logs
+				}
+				keyLeaks = append(keyLeaks, form)
+			}
+			if len(keyLeaks) > 0 {
+				t.Errorf("step 5d: fixture private key material leaked in password-error subprocess stderr in form(s): %v", keyLeaks)
+			}
+		}
 	}
 
 	// ── Step 5e: keystore_error (startup refusal) ──────────────────────────────
@@ -628,6 +680,20 @@ func TestE2E_Stdio_FullSession(t *testing.T) {
 		if !strings.Contains(ksStderrStr, "keystore_error") {
 			t.Errorf("step 5e: stderr does not contain %q\nstderr: %s",
 				"keystore_error", ksStderrStr)
+		}
+		// Sentinel scan: key material must not appear in keystore-error subprocess stderr.
+		{
+			leaked := signing.FixtureKeySentinel().Scan(ksStderr.Bytes())
+			var keyLeaks []string
+			for _, form := range leaked {
+				if form == "address-checksummed" || form == "address-lower-nox" {
+					continue // address legitimately present in startup logs (if any)
+				}
+				keyLeaks = append(keyLeaks, form)
+			}
+			if len(keyLeaks) > 0 {
+				t.Errorf("step 5e: fixture private key material leaked in keystore-error subprocess stderr in form(s): %v", keyLeaks)
+			}
 		}
 	}
 }
