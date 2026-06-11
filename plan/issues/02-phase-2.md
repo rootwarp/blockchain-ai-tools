@@ -999,18 +999,18 @@ notes if anything changed). No behavior changes; the full test suite is the safe
 
 **Acceptance Criteria:**
 
-- [ ] `make lint` reports zero issues across the module; no unexplained `//nolint`
+- [x] `make lint` reports zero issues across the module; no unexplained `//nolint`
       directives; `gofmt -s`/`go vet`/`go mod tidy` produce no diff.
-- [ ] No TODO/FIXME/dead-code stubs remain in `internal/signing` or `internal/server`
+- [x] No TODO/FIXME/dead-code stubs remain in `internal/signing` or `internal/server`
       from this phase (grep-verified; intentional P2 markers carry an issue reference).
-- [ ] `ToolError` construction/encoding confirmed confined to the two `errors.go`
+- [x] `ToolError` construction/encoding confirmed confined to the two `errors.go`
       files (grep-verified).
-- [ ] Package docs and `testdata/` READMEs updated and consistent with the architecture
+- [x] Package docs and `testdata/` READMEs updated and consistent with the architecture
       (lifecycle contract + zeroing caveat present in the `signing` package doc).
-- [ ] Full suite green after refactor: `make test` (incl. parity suite, stdio e2e,
+- [x] Full suite green after refactor: `make test` (incl. parity suite, stdio e2e,
       offline gate, leak scans, `-race` where configured) and CI green on the merge
       commit.
-- [ ] No exported-API drift beyond the architecture's public API section (reviewed
+- [x] No exported-API drift beyond the architecture's public API section (reviewed
       diff of `go doc ./internal/signing ./internal/server` before/after).
 
 **Testing Notes:**
