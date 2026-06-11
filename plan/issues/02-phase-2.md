@@ -33,25 +33,25 @@
 
 **Exit criteria (the parity gate):**
 
-- [ ] **Byte-identical RLP parity vs `cast wallet sign-tx` and ethers v6** on every
+- [x] **Byte-identical RLP parity vs `cast wallet sign-tx` and ethers v6** on every
       golden vector, both tx types, chainId 1 and 11155111, including the edge cases:
       EIP-155 `v` vs yParity, empty `data` (`"0x"` → RLP `0x80`), zero `value`, contract
       creation (`to` omitted), padded/leading-zero nonce; plus rejection of a
       checksum-failing mixed-case address and of `chainId = 0` with the correct codes.
-- [ ] Recovered sender == keystore address on every signed vector; every RLP round-trips
+- [x] Recovered sender == keystore address on every signed vector; every RLP round-trips
       through `core/types.Transaction.UnmarshalBinary` to the same hash.
-- [ ] All six error codes observable over MCP as `IsError: true` + `{"code","message"}`
+- [x] All six error codes observable over MCP as `IsError: true` + `{"code","message"}`
       compact JSON in `Content[0]`, asserted by JSON-parsing in e2e tests.
-- [ ] Validation failures never touch the vault (panicking-fake-vault test green for
+- [x] Validation failures never touch the vault (panicking-fake-vault test green for
       every failure class).
-- [ ] Zeroing tests green on success and panic paths; a signing-path panic leaves the
+- [x] Zeroing tests green on success and panic paths; a signing-path panic leaves the
       server serving; leak scan (raw + encoded forms) green over all captured logs and
       outputs.
-- [ ] Offline-import test load-bearing and green; depguard green; CI green on all of
+- [x] Offline-import test load-bearing and green; depguard green; CI green on all of
       the above.
-- [ ] One audit line per successful signing with `request_id`, `tx_hash`, `chain_id`,
+- [x] One audit line per successful signing with `request_id`, `tx_hash`, `chain_id`,
       `nonce` — and nothing from the tx body.
-- [ ] `get_address` returns the EIP-55 address without reading the password file
+- [x] `get_address` returns the EIP-55 address without reading the password file
       (tested with an unreadable password file).
 
 ### Phase Assumptions (recorded inline)
