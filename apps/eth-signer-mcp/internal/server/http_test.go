@@ -518,6 +518,16 @@ func TestRunHTTP_ReadHeaderTimeout(t *testing.T) {
 // The client connection is gated on the ReadyCh signal — never on sleeps.
 // DisableStandaloneSSE is set on the test client to avoid maintaining a
 // persistent SSE stream, keeping this focused smoke test simple.
+//
+// Teardown ordering (deterministic — fixes flakiness from cleanup LIFO races):
+//  1. cs.Close()  — client gone before server shutdown begins
+//  2. cancel()    — cancel server ctx (no active connections → Shutdown drains instantly)
+//  3. <-exitCh    — wait for RunHTTP to exit; assert nil return
+//
+// If cancel() fires while cs is still alive, httpSrv.Shutdown has an open
+// connection to drain and may time out (5 s grace), correctly returning
+// context.DeadlineExceeded — a test-teardown bug, not a production bug.
+// Closing the client first prevents that race entirely.
 func TestRunHTTP_Smoke_Initialize(t *testing.T) {
 	t.Parallel()
 
@@ -533,10 +543,8 @@ func TestRunHTTP_Smoke_Initialize(t *testing.T) {
 	readyCh := make(chan net.Addr, 1)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 
-	// Use a separate exitCh so both the test body and the cleanup can safely
-	// wait for RunHTTP to finish without racing over the same channel.
+	// exitCh is closed when RunHTTP exits; safe to wait on multiple times.
 	done := make(chan error, 1)
 	exitCh := make(chan struct{})
 	go func() {
@@ -547,12 +555,16 @@ func TestRunHTTP_Smoke_Initialize(t *testing.T) {
 		})
 		close(exitCh)
 	}()
+
+	// Safety-net cleanup: cancel + drain without asserting.
+	// This fires only if the test body panics or exits early; normal teardown
+	// is handled explicitly in the body so this is purely a goroutine-leak guard.
 	t.Cleanup(func() {
 		cancel()
 		select {
 		case <-exitCh:
 		case <-time.After(10 * time.Second):
-			t.Error("smoke: RunHTTP did not exit within 10s at cleanup")
+			t.Logf("smoke cleanup: RunHTTP did not exit within 10s (leak guard)")
 		}
 	})
 
@@ -562,7 +574,7 @@ func TestRunHTTP_Smoke_Initialize(t *testing.T) {
 
 	// Connect the SDK v1.6.1 client over Streamable HTTP.
 	// DisableStandaloneSSE keeps the test focused: we only need one round-trip.
-	client := mcp.NewClient(
+	mcpClient := mcp.NewClient(
 		&mcp.Implementation{Name: "test-smoke-client", Version: "v0.0.1"},
 		nil,
 	)
@@ -571,18 +583,13 @@ func TestRunHTTP_Smoke_Initialize(t *testing.T) {
 		DisableStandaloneSSE: true,
 	}
 
+	// connCtx is only for the Connect handshake; release it immediately after.
 	connCtx, connCancel := context.WithTimeout(ctx, 10*time.Second)
-	defer connCancel()
-
-	cs, err := client.Connect(connCtx, transport, nil)
+	cs, err := mcpClient.Connect(connCtx, transport, nil)
+	connCancel() // handshake done; connCtx is no longer needed
 	if err != nil {
 		t.Fatalf("client.Connect: %v", err)
 	}
-	t.Cleanup(func() {
-		if err := cs.Close(); err != nil {
-			t.Logf("smoke: cs.Close: %v (may be benign on shutdown)", err)
-		}
-	})
 
 	// Assert initialize round-trip.
 	result := cs.InitializeResult()
@@ -599,15 +606,26 @@ func TestRunHTTP_Smoke_Initialize(t *testing.T) {
 		t.Error("ServerInfo.Version is empty; want non-empty")
 	}
 
-	// Cancel the server and wait for clean shutdown.
+	// ── Deterministic teardown ─────────────────────────────────────────────
+	//
+	// Step 1: close the client BEFORE cancelling the server.  With cs closed,
+	// the SDK session is gone and httpSrv.Shutdown has no active connections
+	// to drain, so it completes immediately within the grace window.
+	if closeErr := cs.Close(); closeErr != nil {
+		t.Logf("smoke: cs.Close: %v (may be benign if server already closed it)", closeErr)
+	}
+
+	// Step 2: cancel the server ctx.
 	cancel()
+
+	// Step 3: wait for RunHTTP to exit and assert clean return.
 	select {
 	case <-exitCh:
 		// After exitCh closes, done is guaranteed populated (capacity-1 buffer).
 		if err := <-done; err != nil {
 			t.Errorf("RunHTTP returned unexpected error on cancel: %v", err)
 		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("RunHTTP did not return within 10s after cancel")
+	case <-time.After(5 * time.Second):
+		t.Fatal("RunHTTP did not return within 5s after client close + cancel")
 	}
 }
