@@ -194,6 +194,14 @@ func run(ctx context.Context, cmd *cli.Command) error {
 	// bearing from the first commit that enables auth (issue 3.2).
 	// Fail fast if any path is missing, not a regular file, or (when
 	// --strict-perms is set) group/world accessible.
+	//
+	// TOCTOU advisory: applyPermChecks uses os.Stat; the actual file reads happen
+	// later (NewFileKeyVault for the keystore, NewBearerVerifierFromFile for the
+	// token).  Because the server binds only on loopback (ADR-006), a local
+	// attacker who can replace a secret file already has direct filesystem access
+	// and the TOCTOU window is not the meaningful threat boundary.  The perm check
+	// is an operator-facing advisory (warn / --strict-perms refuse), not a
+	// security gate against a local adversary.
 	permPaths := []string{cfg.KeystorePath, cfg.PasswordPath}
 	if cfg.HTTP {
 		permPaths = append(permPaths, cfg.TokenFilePath)

@@ -44,14 +44,28 @@ type BearerVerifier struct {
 }
 
 // NewBearerVerifierFromFile reads the bearer token from path, strips exactly
-// one trailing '\n' (does NOT TrimSpace — tokens may legitimately contain inner
-// spaces), rejects an empty result, stores sha256(token) inside a
-// signing.Secret, zeroes the raw token bytes, and returns the verifier.
+// one trailing '\n' and then one trailing '\r' (to handle CRLF line endings
+// from Windows editors and git-on-Windows), rejects an empty result, stores
+// sha256(token) inside a signing.Secret, zeroes the raw token bytes, and
+// returns the verifier.
+//
+// Stripping order:
+//  1. One trailing '\n' (Unix / CRLF second byte).
+//  2. One trailing '\r' (CRLF first byte, if present after the '\n' is gone).
+//
+// This handles:
+//   - Unix "token\n"   → stored as sha256("token")
+//   - Windows "token\r\n" → stored as sha256("token")
+//   - No newline "token"  → stored as sha256("token")
+//
+// Do NOT use strings.TrimSpace — tokens may legitimately contain inner spaces
+// or other whitespace that the operator deliberately included; we only strip
+// the platform line-ending suffix.
 //
 // Error cases (caller gets a sanitised message naming path + error class only;
 // token contents are NEVER logged or echoed):
 //   - File unreadable / missing → wrapped os error.
-//   - File empty (or newline-only) → descriptive error.
+//   - File empty (or newline/CRLF-only) → descriptive error.
 //
 // SECURITY: token bytes are zeroed before this function returns (best-effort,
 // ADR-009).  Only the sha256 hash — itself wrapped in a signing.Secret — is
@@ -62,12 +76,14 @@ func NewBearerVerifierFromFile(path string) (*BearerVerifier, error) {
 		return nil, fmt.Errorf("token file %q: %w", path, err)
 	}
 
-	// Strip exactly one trailing '\n'.  Do NOT use strings.TrimSpace — tokens
-	// may legitimately contain inner spaces (e.g. multi-word pass-phrases),
-	// and we must not silently strip leading/trailing whitespace that the
-	// operator deliberately included.
+	// Strip exactly one trailing '\n', then one trailing '\r'.
+	// Order matters: LF is always last in both Unix (\n) and Windows (\r\n)
+	// line endings; stripping \n first exposes the \r for the second strip.
 	tokenBytes := raw
 	if len(tokenBytes) > 0 && tokenBytes[len(tokenBytes)-1] == '\n' {
+		tokenBytes = tokenBytes[:len(tokenBytes)-1]
+	}
+	if len(tokenBytes) > 0 && tokenBytes[len(tokenBytes)-1] == '\r' {
 		tokenBytes = tokenBytes[:len(tokenBytes)-1]
 	}
 

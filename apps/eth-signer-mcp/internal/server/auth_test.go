@@ -19,13 +19,12 @@ package server
 // No timing assertions anywhere.
 
 import (
-	"bytes"
 	"crypto/rand"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/rootwarp/blockchain-ai-tools/apps/eth-signer-mcp/internal/signing"
@@ -50,8 +49,9 @@ func writeAuthTokenFile(t *testing.T, token string) string {
 	return f.Name()
 }
 
-// randToken returns n cryptographically-random bytes as a hex string (2n chars).
-// Using hex ensures the token is printable ASCII with no newlines.
+// randTokenBytes returns n cryptographically-random bytes.
+// The bytes themselves are raw; callers that need a printable ASCII token
+// must encode them (e.g. hexEncodeBytes) before use in HTTP headers or files.
 func randTokenBytes(n int) []byte {
 	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {
@@ -94,6 +94,47 @@ func TestNewBearerVerifierFromFile_ValidFile(t *testing.T) {
 	}
 	if v == nil {
 		t.Fatal("NewBearerVerifierFromFile: returned nil verifier")
+	}
+}
+
+// TestNewBearerVerifierFromFile_CRLFFile_MatchesWithoutCR verifies that a token
+// file ending with "\r\n" (Windows/CRLF line ending) is handled correctly: the
+// "\n" AND the trailing "\r" are both stripped, so a client sending
+// "Authorization: Bearer <token>" (without the \r) is authenticated — not
+// permanently rejected because sha256("token\r") != sha256("token").
+//
+// This is a real-world file-creation pattern on Windows and in many editors
+// configured for CRLF endings.  Without the \r strip, every CRLF token file would
+// produce a verifier that silently rejects ALL valid clients with no log/diagnostic.
+func TestNewBearerVerifierFromFile_CRLFFile_MatchesWithoutCR(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("CRLF strip is tested on non-Windows; file semantics differ")
+	}
+
+	token := "crlf-test-token"
+	// Write "token\r\n" — simulates a CRLF-terminated token file.
+	path := writeAuthTokenFile(t, token+"\r\n")
+	v, err := NewBearerVerifierFromFile(path)
+	if err != nil {
+		t.Fatalf("NewBearerVerifierFromFile (CRLF file): unexpected error: %v", err)
+	}
+
+	// The client sends the token WITHOUT any CR or LF — this must succeed.
+	inner := &okHandler{}
+	handler := v.Middleware(inner)
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("CRLF token file: status = %d; want 200 (\\r must be stripped, not stored)",
+			rec.Code)
+	}
+	if !inner.called {
+		t.Error("CRLF token file: next handler not called — verifier stored sha256(token\\r) instead of sha256(token)")
 	}
 }
 
@@ -175,23 +216,68 @@ func TestNewBearerVerifierFromFile_UnreadableFile(t *testing.T) {
 	}
 }
 
-// TestNewBearerVerifierFromFile_TokenContentsNotInError verifies that the error
-// message from an empty-token or read-failure case does NOT contain the literal
-// token text (sanitised error path).
+// TestNewBearerVerifierFromFile_TokenContentsNotInError verifies that error
+// messages from failure paths are sanitised: they name the file path and error
+// class but NEVER echo token contents.
+//
+// Two sub-cases:
+//
+//	(a) Empty file — exercises the "empty after stripping" path.  The token is
+//	    trivially empty, so this only proves the error is non-empty.
+//	(b) Non-empty token file made unreadable (chmod 000) — exercises the
+//	    os.ReadFile error path.  The error MUST contain the file path (so
+//	    operators can diagnose) but MUST NOT contain the sentinel token string.
+//	    This is the path most likely to accidentally echo user-supplied input.
 func TestNewBearerVerifierFromFile_TokenContentsNotInError(t *testing.T) {
 	t.Parallel()
 
-	// File exists but is empty — error must name the path, not the contents.
-	path := writeAuthTokenFile(t, "")
-	_, err := NewBearerVerifierFromFile(path)
-	if err == nil {
-		t.Fatal("expected error for empty file")
-	}
-	// The error message must name the path (so operators can diagnose) but must
-	// not contain token material (empty string, but the contract is checked here).
-	if err.Error() == "" {
-		t.Error("error message is empty; want non-empty diagnostic")
-	}
+	t.Run("empty_file", func(t *testing.T) {
+		t.Parallel()
+		path := writeAuthTokenFile(t, "")
+		_, err := NewBearerVerifierFromFile(path)
+		if err == nil {
+			t.Fatal("expected error for empty file")
+		}
+		if err.Error() == "" {
+			t.Error("error message is empty; want non-empty diagnostic")
+		}
+	})
+
+	t.Run("read_failure_no_token_echo", func(t *testing.T) {
+		t.Parallel()
+		if runtime.GOOS == "windows" {
+			t.Skip("chmod 000 not enforced on Windows")
+		}
+		if os.Getuid() == 0 {
+			t.Skip("running as root: chmod 000 does not prevent reads")
+		}
+
+		// A distinctive sentinel token — must NOT appear in any error message.
+		const sentinelToken = "SENTINEL-SECRET-TOKEN-XYZ-DO-NOT-LOG"
+		path := writeAuthTokenFile(t, sentinelToken)
+		if err := os.Chmod(path, 0o000); err != nil {
+			t.Fatalf("Chmod(0000): %v", err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+
+		_, err := NewBearerVerifierFromFile(path)
+		if err == nil {
+			t.Fatal("expected error for unreadable file, got nil")
+		}
+
+		msg := err.Error()
+		// Error must name the path (operator diagnostic) but never the token.
+		if msg == "" {
+			t.Error("error message is empty; want non-empty diagnostic with path")
+		}
+		// SAFETY: checking for the sentinel string is acceptable here because
+		// this IS a test (not production code) and the assertion is that the
+		// sentinel DOES NOT appear.
+		if strings.Contains(msg, sentinelToken) {
+			// Fail with a sanitised message — never print the sentinel itself.
+			t.Error("error message for read-failure path contains token material; want path+error-class only")
+		}
+	})
 }
 
 // ── BearerVerifier.Middleware — happy path ────────────────────────────────────
@@ -450,57 +536,51 @@ func (r *headerOrderRecorder) WriteHeader(code int) {
 	r.ResponseRecorder.WriteHeader(code)
 }
 
-// ── Leak scan ─────────────────────────────────────────────────────────────────
+// ── Leak scan — structural proof ─────────────────────────────────────────────
 
-// TestMiddleware_LeakScan_BearerSentinel verifies that no form of the bearer
-// token (raw bytes, hex, base64, etc.) appears in any log output captured
-// during verifier construction and middleware invocations.
+// TestMiddleware_LeakScan_BearerSentinel documents and exercises the structural
+// no-log guarantee of auth.go.
 //
-// Strategy:
-//  1. Generate a random token (the "bearer sentinel").
-//  2. Create a BearerVerifier from a file containing the sentinel.
-//  3. Invoke the middleware several times: once with the correct token, once
-//     with a wrong token, once without a header.
-//  4. All log output is captured in a buffer (the middleware does not log, but
-//     we capture to verify no log output contains the sentinel either).
-//  5. Run signing.NewSentinel.Scan over the captured log bytes; assert clean.
+// Protection is STRUCTURAL, not scan-based:
+//   - NewBearerVerifierFromFile makes zero log calls (no logger field, no slog
+//     imports used at the call sites that see the raw token).
+//   - Middleware makes zero log calls — the 401 path writes only
+//     "WWW-Authenticate: Bearer" + 401 status; next is NEVER invoked so no
+//     signing audit line is emitted on rejection.
+//   - Therefore there is no log output to scan; scanning an always-empty buffer
+//     would be a vacuous (permanently-true) assertion that cannot catch a
+//     regression.
 //
-// The leak scan uses the sentinel's encoded forms (hex, base64, etc.) in
-// addition to the raw bytes, ensuring URL-safe base64 paths are covered.
+// What this test DOES assert:
+//  1. Middleware behavioural correctness under sentinel token (happy + 401 paths).
+//  2. No response body on 401 — sentinel token cannot appear in the response body.
+//  3. On the happy path, next IS called (body content is caller-controlled;
+//     auth.go itself writes nothing to the response body).
+//
+// If auth.go ever gains a logger, the log-capture + sentinel.Scan pattern from
+// obs/log_test.go should be applied here.  Until then this structural comment is
+// the correct contract documentation.
 func TestMiddleware_LeakScan_BearerSentinel(t *testing.T) {
 	t.Parallel()
 
-	// ── Step 1: create the bearer sentinel ──────────────────────────────────
-	// Use 32 random bytes so the token is a realistic size (non-trivial encoded forms).
+	// Use 32 random bytes for the sentinel; hex-encode so it is printable ASCII.
 	sentinelRaw := randTokenBytes(32)
-	// Encode as hex so the file contains printable ASCII.
 	sentinelToken := hexEncodeBytes(sentinelRaw)
 
-	// Build the Sentinel BEFORE writing to the file (Sentinel makes a defensive
-	// copy of sentinelRaw so any subsequent zeroing does not affect the scan).
+	// Build the Sentinel for behavioural assertions (encoded forms).
 	sentinel := signing.NewSentinel("bearer-sentinel", sentinelRaw)
-	// Also register the hex-encoded form of the token string itself, since that
-	// is what appears in the Authorization header.
 	sentinel.RegisterForm("token-hex-string", []byte(sentinelToken))
 
-	// ── Step 2: create the verifier ─────────────────────────────────────────
 	path := writeAuthTokenFile(t, sentinelToken)
 	v, err := NewBearerVerifierFromFile(path)
 	if err != nil {
 		t.Fatalf("NewBearerVerifierFromFile: %v", err)
 	}
 
-	// ── Step 3: create a buffer logger and capture all output ───────────────
-	var logBuf bytes.Buffer
-	_ = slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	// (The middleware itself does not log. The buffer captures any future logging
-	// that might be added to the middleware or constructor. Currently it stays empty.)
-
-	// ── Step 4: invoke the middleware several times ──────────────────────────
-	inner := &okHandler{}
-
-	// Happy path: correct token.
+	// ── Happy path: correct token ─────────────────────────────────────────────
+	// Structural guarantee: auth.go writes nothing to the response body.
 	{
+		inner := &okHandler{}
 		handler := v.Middleware(inner)
 		req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
 		req.Header.Set("Authorization", "Bearer "+sentinelToken)
@@ -509,21 +589,40 @@ func TestMiddleware_LeakScan_BearerSentinel(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Errorf("happy-path: status = %d; want 200", rec.Code)
 		}
+		if !inner.called {
+			t.Error("happy-path: next handler not called")
+		}
+		// auth.go writes no body on the happy path — body is caller's responsibility.
+		if body := rec.Body.String(); body != "" {
+			// Any body must not contain sentinel forms.
+			if leaked := sentinel.Scan(rec.Body.Bytes()); len(leaked) > 0 {
+				t.Errorf("happy-path: sentinel found in response body: forms=%v", leaked)
+			}
+		}
 	}
 
-	// Wrong token path.
+	// ── 401 path: wrong token ─────────────────────────────────────────────────
+	// Structural guarantee: 401 response body is ALWAYS empty (auth.go never
+	// writes a body — nothing derived from the token appears in the response).
 	{
 		handler := v.Middleware(panicHandler{t})
 		req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
-		req.Header.Set("Authorization", "Bearer wrong-token-12345")
+		req.Header.Set("Authorization", "Bearer wrong-token-cannot-match")
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 		if rec.Code != http.StatusUnauthorized {
 			t.Errorf("wrong-token: status = %d; want 401", rec.Code)
 		}
+		if body := rec.Body.Bytes(); len(body) > 0 {
+			t.Errorf("wrong-token: response body is non-empty (%d bytes); want empty", len(body))
+			// Also scan — belt-and-suspenders.
+			if leaked := sentinel.Scan(body); len(leaked) > 0 {
+				t.Errorf("wrong-token: sentinel found in 401 body: forms=%v", leaked)
+			}
+		}
 	}
 
-	// Missing header path.
+	// ── 401 path: missing header ──────────────────────────────────────────────
 	{
 		handler := v.Middleware(panicHandler{t})
 		req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
@@ -532,14 +631,9 @@ func TestMiddleware_LeakScan_BearerSentinel(t *testing.T) {
 		if rec.Code != http.StatusUnauthorized {
 			t.Errorf("missing-header: status = %d; want 401", rec.Code)
 		}
-	}
-
-	// ── Step 5: scan the captured log output ─────────────────────────────────
-	logOutput := logBuf.Bytes()
-	if leaked := sentinel.Scan(logOutput); len(leaked) > 0 {
-		// SAFETY: report form names only — never the log buffer or sentinel bytes.
-		t.Errorf("bearer sentinel leaked in log output: forms=%v (sentinel=%q)",
-			leaked, sentinel.Name)
+		if body := rec.Body.Bytes(); len(body) > 0 {
+			t.Errorf("missing-header: response body non-empty (%d bytes); want empty", len(body))
+		}
 	}
 }
 
