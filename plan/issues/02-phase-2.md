@@ -941,17 +941,17 @@ all captured stderr for the audit line and sentinel leaks.
 
 **Acceptance Criteria:**
 
-- [ ] Full MCP session against the real binary completes: `initialize`, `tools/list`
+- [x] Full MCP session against the real binary completes: `initialize`, `tools/list`
       (both tools, strict schemas), `get_address`, happy-path `sign_transaction`.
-- [ ] The happy-path result is byte-identical to the committed `legacy-mainnet.json`
+- [x] The happy-path result is byte-identical to the committed `legacy-mainnet.json`
       reference — binary-level parity.
-- [ ] Error paths observed over the wire for `invalid_input`, `unsupported_type`,
+- [x] Error paths observed over the wire for `invalid_input`, `unsupported_type`,
       `chain_id_mismatch`, `password_error` — each via JSON-parsed `Content[0]`; the
       no-address keystore is refused at startup with a clear `keystore_error` message
       and non-zero exit.
-- [ ] Audit-line and leak-scan assertions over captured stderr pass.
-- [ ] stdin EOF → exit 0; no orphan processes or temp files after the run.
-- [ ] Runs in `make test` (skipped under `-short`), total under ~15 s on a developer
+- [x] Audit-line and leak-scan assertions over captured stderr pass.
+- [x] stdin EOF → exit 0; no orphan processes or temp files after the run.
+- [x] Runs in `make test` (skipped under `-short`), total under ~15 s on a developer
       laptop (light-scrypt decrypts ~50 ms each).
 
 **Testing Notes:**
