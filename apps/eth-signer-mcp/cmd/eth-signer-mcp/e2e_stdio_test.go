@@ -43,12 +43,50 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/rootwarp/blockchain-ai-tools/apps/eth-signer-mcp/internal/signing"
 )
+
+// ─── syncBuffer ────────────────────────────────────────────────────────────────
+
+// syncBuffer is a goroutine-safe bytes.Buffer replacement for subprocess stderr
+// capture.  os/exec's stderr-copier goroutine writes to the buffer concurrently
+// with the test goroutine reading it; bytes.Buffer is NOT safe for concurrent
+// read+write (DATA RACE under -race).  A single mutex guards all access.
+//
+// Bytes() returns a copy of the underlying slice so callers cannot race on the
+// returned slice while the copier goroutine is still writing.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+// Bytes returns a copy of the accumulated bytes.  The copy is taken under the
+// lock so callers get a consistent snapshot even if the subprocess is still
+// running.
+func (s *syncBuffer) Bytes() []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b := s.buf.Bytes()
+	out := make([]byte, len(b))
+	copy(out, b)
+	return out
+}
+
+// String returns the accumulated output as a string (safe for concurrent use).
+func (s *syncBuffer) String() string {
+	return string(s.Bytes())
+}
 
 // ─── Path helpers ──────────────────────────────────────────────────────────────
 
@@ -233,7 +271,7 @@ func TestE2E_Stdio_FullSession(t *testing.T) {
 	mainCtx, mainCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(mainCancel)
 
-	var mainStderr bytes.Buffer
+	var mainStderr syncBuffer
 	mainCmd := exec.CommandContext(mainCtx, bin,
 		"--keystore", keystorePath,
 		"--password-file", passwordPath,
@@ -541,7 +579,7 @@ func TestE2E_Stdio_FullSession(t *testing.T) {
 			"--password-file", passwordPath,
 			"--chain-id", "5",
 		)
-		var chainStderr bytes.Buffer
+		var chainStderr syncBuffer
 		chainCmd.Stderr = &chainStderr
 		t.Cleanup(func() {
 			if t.Failed() {
@@ -604,7 +642,7 @@ func TestE2E_Stdio_FullSession(t *testing.T) {
 			"--keystore", keystorePath,
 			"--password-file", wrongPwPath,
 		)
-		var pwStderr bytes.Buffer
+		var pwStderr syncBuffer
 		pwCmd.Stderr = &pwStderr
 		t.Cleanup(func() {
 			if t.Failed() {
@@ -671,7 +709,7 @@ func TestE2E_Stdio_FullSession(t *testing.T) {
 			"--keystore", noAddressKsPath,
 			"--password-file", passwordPath,
 		)
-		var ksStderr bytes.Buffer
+		var ksStderr syncBuffer
 		ksCmd.Stderr = &ksStderr
 
 		ksRunErr := ksCmd.Run()

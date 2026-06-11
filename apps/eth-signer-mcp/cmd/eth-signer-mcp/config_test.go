@@ -579,19 +579,29 @@ func TestRun_UnknownFlag(t *testing.T) {
 	}
 }
 
-// TestRun_SuccessExit verifies that a fully-valid invocation returns nil (exit 0).
-// This drives the REAL Action end-to-end, including NewFileKeyVault, NewSigner,
-// and RunStdio. Under `go test`, os.Stdin is non-interactive (EOF), so the stdio
-// session ends immediately and RunStdio returns nil.
-// Uses the real keystore-weak.json fixture so NewFileKeyVault succeeds.
+// TestRun_SuccessExit verifies that a fully-valid invocation returns nil.
+// Uses a custom action that exercises flag parsing, buildConfig, and validate
+// (the same path the real run() takes before any transport or stdin access) but
+// stops before RunStdio.  Stopping before RunStdio makes the test safe for
+// -count>1 runs: the MCP SDK's StdioTransport closes os.Stdin on its first use,
+// so any subsequent in-process cmd.Run() that reaches RunStdio sees "file already
+// closed" — a pre-existing flake fixed by this early-return pattern.
+//
+// Full end-to-end binary startup (NewFileKeyVault + RunStdio + exit 0) is covered
+// in fsperm_test.go: TestBinary_Mode600_ExitCode0.
 func TestRun_SuccessExit(t *testing.T) {
 	t.Parallel()
 
 	ks, pw := signingFixtureFiles(t)
 	cmd := newCommand()
+	// Custom action: validate config only — do not start any transport or touch stdin.
+	cmd.Action = func(ctx context.Context, c *cli.Command) error {
+		cfg := buildConfig(c)
+		return validate(cfg)
+	}
 	args := []string{"eth-signer-mcp", "--keystore", ks, "--password-file", pw}
 	if err := cmd.Run(context.Background(), args); err != nil {
-		t.Fatalf("cmd.Run() = %v, want nil (exit 0) for valid args with real keystore", err)
+		t.Fatalf("cmd.Run() = %v, want nil (valid args, config+validation passes)", err)
 	}
 }
 
