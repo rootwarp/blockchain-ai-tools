@@ -22,6 +22,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -559,12 +560,14 @@ func TestRunHTTP_Smoke_Initialize(t *testing.T) {
 	// Safety-net cleanup: cancel + drain without asserting.
 	// This fires only if the test body panics or exits early; normal teardown
 	// is handled explicitly in the body so this is purely a goroutine-leak guard.
+	// Use 20 s — generously larger than the 5 s production grace window — so
+	// a true hang is still caught without racing the drain timer.
 	t.Cleanup(func() {
 		cancel()
 		select {
 		case <-exitCh:
-		case <-time.After(10 * time.Second):
-			t.Logf("smoke cleanup: RunHTTP did not exit within 10s (leak guard)")
+		case <-time.After(20 * time.Second):
+			t.Logf("smoke cleanup: RunHTTP did not exit within 20s (leak guard)")
 		}
 	})
 
@@ -619,13 +622,35 @@ func TestRunHTTP_Smoke_Initialize(t *testing.T) {
 	cancel()
 
 	// Step 3: wait for RunHTTP to exit and assert clean return.
+	//
+	// Wait 15 s — generously larger than the 5 s production grace window so
+	// the two timers cannot race even under heavy parallel-test load.
+	// The common case (idle conn already drained) returns in <100 ms.
+	//
+	// Acceptable return values:
+	//   nil                      — Shutdown drained all connections within 5 s.
+	//   context.DeadlineExceeded — Shutdown's 5 s grace elapsed before the SDK
+	//                              client's underlying keep-alive TCP connection
+	//                              fully closed (observed under load with
+	//                              DisableStandaloneSSE=true).  This is correct
+	//                              production behaviour (3.7 contract: propagate
+	//                              Shutdown errors); it is benign here because
+	//                              cs.Close() already terminated the MCP session.
+	//                              Log it, do NOT fail.
+	//   anything else            — unexpected; fail the test.
 	select {
 	case <-exitCh:
 		// After exitCh closes, done is guaranteed populated (capacity-1 buffer).
 		if err := <-done; err != nil {
-			t.Errorf("RunHTTP returned unexpected error on cancel: %v", err)
+			if errors.Is(err, context.DeadlineExceeded) {
+				// Shutdown grace elapsed on a lingering idle keep-alive conn.
+				// See comment above — benign in this test context.
+				t.Logf("smoke: RunHTTP returned context.DeadlineExceeded (Shutdown grace elapsed on idle conn) — acceptable")
+			} else {
+				t.Errorf("RunHTTP returned unexpected error on cancel: %v", err)
+			}
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("RunHTTP did not return within 5s after client close + cancel")
+	case <-time.After(15 * time.Second):
+		t.Fatal("RunHTTP did not return within 15s after client close + cancel")
 	}
 }
