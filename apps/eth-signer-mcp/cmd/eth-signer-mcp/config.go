@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"strings"
 )
 
@@ -47,9 +48,20 @@ func validate(cfg config) error {
 	if cfg.HTTP && cfg.TokenFilePath == "" {
 		return fmt.Errorf("--http-auth-token-file is required when --http is set")
 	}
-	// TODO(Phase 3): when cfg.HTTP is set, validate HTTPAddr via net.SplitHostPort
-	// and ensure the host resolves to loopback only. The error message must not
-	// echo cfg.HTTPAddr (architecture §Error Handling: never echo raw input).
+	// When --http is set, validate that --http-addr is a loopback address
+	// (ADR-006: bind only on loopback).  We parse host and IP; the error message
+	// deliberately does NOT echo cfg.HTTPAddr (architecture §Error Handling: never
+	// echo raw user input in error messages).
+	if cfg.HTTP && cfg.HTTPAddr != "" {
+		host, _, splitErr := net.SplitHostPort(cfg.HTTPAddr)
+		if splitErr != nil {
+			return fmt.Errorf("--http-addr: invalid host:port — must be a loopback address (e.g. 127.0.0.1:0 or [::1]:0)")
+		}
+		ip := net.ParseIP(host)
+		if ip == nil || !ip.IsLoopback() {
+			return fmt.Errorf("--http-addr must be a loopback address (127.0.0.1 or [::1]); non-loopback binds are rejected (ADR-006)")
+		}
+	}
 	if cfg.ChainIDGuard != nil && *cfg.ChainIDGuard == 0 {
 		return fmt.Errorf("--chain-id 0 is rejected: chain-id 0 is replay-unprotected; use a non-zero chain-id")
 	}

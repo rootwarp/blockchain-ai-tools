@@ -114,11 +114,22 @@ func (s *Server) RunHTTP(ctx context.Context, opts HTTPOptions) error {
 		return fmt.Errorf("RunHTTP listen %q: %w", addr, err)
 	}
 
+	// Defense-in-depth: reject a non-loopback bound address even if validate()
+	// was bypassed (ADR-006 loopback-only invariant).  This guards against
+	// mis-configuration in future call sites that do not go through cmd.
+	tcpBound, ok := ln.Addr().(*net.TCPAddr)
+	if !ok || !tcpBound.IP.IsLoopback() {
+		_ = ln.Close()
+		return fmt.Errorf("RunHTTP: bound address is not loopback (ADR-006); check --http-addr")
+	}
+
 	// ── Step 3: Announce the bound address ─────────────────────────────────
 	//
 	// Print to stderr (defaulting to os.Stderr; overridden by stderrW in
 	// tests).  The 3.8 e2e harness parses the exact
 	// "eth-signer-mcp listening on 127.0.0.1:<port>" shape — keep it stable.
+	// The announce line is written BEFORE signalling ReadyCh so that any reader
+	// of ReadyCh can be certain the line has already been emitted.
 	stderrW := opts.stderrW
 	if stderrW == nil {
 		stderrW = os.Stderr
@@ -127,8 +138,15 @@ func (s *Server) RunHTTP(ctx context.Context, opts HTTPOptions) error {
 	s.logger.Info("http server listening", "addr", ln.Addr().String())
 
 	// Signal test seams AFTER the announce line has been written.
+	// Use a select so a slow/absent receiver + ctx cancellation does not leak
+	// the open listener (the blocking send would otherwise hang RunHTTP).
 	if opts.ReadyCh != nil {
-		opts.ReadyCh <- ln.Addr()
+		select {
+		case opts.ReadyCh <- ln.Addr():
+		case <-ctx.Done():
+			_ = ln.Close()
+			return ctx.Err()
+		}
 	}
 
 	// ── Step 4: Construct the SDK StreamableHTTPHandler ────────────────────

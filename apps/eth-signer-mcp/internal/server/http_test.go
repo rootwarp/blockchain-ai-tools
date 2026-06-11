@@ -273,14 +273,9 @@ func TestRunHTTP_BindsLoopback(t *testing.T) {
 		t.Fatal("RunHTTP did not return within 5s after cancel")
 	}
 
-	// Check the return value after we know RunHTTP exited.
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Errorf("RunHTTP returned non-nil on clean cancel: %v", err)
-		}
-	default:
-		// done channel was already drained or empty; that's OK here
+	// After exitCh closes, done is guaranteed populated (capacity-1 buffer).
+	if err := <-done; err != nil {
+		t.Errorf("RunHTTP returned non-nil on clean cancel: %v", err)
 	}
 }
 
@@ -356,6 +351,84 @@ func TestRunHTTP_BindFailure_NoAnnounce(t *testing.T) {
 		t.Errorf("ReadyCh received %v; want no signal on bind failure", addr)
 	default:
 		// correct: no signal
+	}
+}
+
+// TestRunHTTP_ReadyCh_CtxCancelDoesNotLeakListener: if ctx is cancelled before
+// anyone reads the ReadyCh, RunHTTP must release the listener and return promptly
+// rather than blocking on the channel send and leaking the open fd.
+//
+// Scenario: ReadyCh is unbuffered.  We cancel the ctx before reading from
+// ReadyCh.  RunHTTP must exit (with ctx.Err()) within a generous 3 s window.
+func TestRunHTTP_ReadyCh_CtxCancelDoesNotLeakListener(t *testing.T) {
+	t.Parallel()
+
+	srv := testServer(t)
+	tokenFile := writeTokenFile(t, "leak-test-token")
+	// Unbuffered: a blocking send would deadlock.
+	readyCh := make(chan net.Addr) // unbuffered, intentional
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan error, 1)
+	exit := make(chan struct{})
+	go func() {
+		done <- srv.RunHTTP(ctx, HTTPOptions{
+			Addr:          "127.0.0.1:0",
+			TokenFilePath: tokenFile,
+			ReadyCh:       readyCh,
+		})
+		close(exit)
+	}()
+
+	// Cancel ctx without consuming readyCh — this would hang the old code.
+	cancel()
+
+	select {
+	case <-exit:
+		// RunHTTP returned: check it was a ctx error, not nil (clean exit
+		// would be wrong here since we never served anything).
+		err := <-done
+		if err == nil {
+			// context.Canceled is expected; nil would mean the server somehow
+			// completed cleanly which is impossible with an unbuffered readyCh.
+			t.Error("RunHTTP returned nil; want ctx.Err() when readyCh is unread")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("RunHTTP did not return within 3s after ctx cancel with unread readyCh (listener leak)")
+	}
+}
+
+// TestRunHTTP_NonLoopbackAddr_DefenseInDepth: RunHTTP must close the listener
+// and return an error if the resolved bound address is not loopback, even if
+// validate() was bypassed (defense-in-depth per ADR-006).
+//
+// This test calls RunHTTP directly with Addr "0.0.0.0:0", skipping cmd's
+// validate(); the check inside RunHTTP itself must catch it.
+func TestRunHTTP_NonLoopbackAddr_DefenseInDepth(t *testing.T) {
+	t.Parallel()
+
+	srv := testServer(t)
+	tokenFile := writeTokenFile(t, "defense-in-depth-token")
+	readyCh := make(chan net.Addr, 1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := srv.RunHTTP(ctx, HTTPOptions{
+		Addr:          "0.0.0.0:0",
+		TokenFilePath: tokenFile,
+		ReadyCh:       readyCh,
+	})
+	if err == nil {
+		t.Fatal("RunHTTP returned nil; want error when bound addr is not loopback")
+	}
+
+	// No announce was signalled.
+	select {
+	case addr := <-readyCh:
+		t.Errorf("ReadyCh received %v; want no signal on non-loopback bind", addr)
+	default:
 	}
 }
 
@@ -530,13 +603,9 @@ func TestRunHTTP_Smoke_Initialize(t *testing.T) {
 	cancel()
 	select {
 	case <-exitCh:
-		// RunHTTP exited; check its return value.
-		select {
-		case err := <-done:
-			if err != nil {
-				t.Errorf("RunHTTP returned unexpected error on cancel: %v", err)
-			}
-		default:
+		// After exitCh closes, done is guaranteed populated (capacity-1 buffer).
+		if err := <-done; err != nil {
+			t.Errorf("RunHTTP returned unexpected error on cancel: %v", err)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("RunHTTP did not return within 10s after cancel")

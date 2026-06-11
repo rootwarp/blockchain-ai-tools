@@ -164,6 +164,54 @@ func TestValidate_Rules(t *testing.T) {
 				HTTPAddr: "127.0.0.1:0", LogLevel: "DEBUG",
 			},
 		},
+		// --- http-addr loopback validation (only when --http is set) ---
+		{
+			// IPv6 loopback is accepted when --http is set.
+			name: "valid_httpaddr_ipv6_loopback_with_http",
+			cfg: config{
+				KeystorePath: "/k", PasswordPath: "/p",
+				HTTP: true, TokenFilePath: "/t",
+				HTTPAddr: "[::1]:0", LogLevel: "info",
+			},
+		},
+		{
+			// Without --http the HTTPAddr value is not validated.
+			name: "httpaddr_not_validated_without_http",
+			cfg: config{
+				KeystorePath: "/k", PasswordPath: "/p",
+				HTTP: false, HTTPAddr: "0.0.0.0:9999", LogLevel: "info",
+			},
+		},
+		{
+			// 0.0.0.0 (all-interfaces) with --http is rejected; error must NOT echo the addr.
+			name: "invalid_httpaddr_all_interfaces",
+			cfg: config{
+				KeystorePath: "/k", PasswordPath: "/p",
+				HTTP: true, TokenFilePath: "/t",
+				HTTPAddr: "0.0.0.0:8080", LogLevel: "info",
+			},
+			wantErr: "--http-addr",
+		},
+		{
+			// A non-loopback RFC-1918 address with --http is rejected.
+			name: "invalid_httpaddr_private_ip",
+			cfg: config{
+				KeystorePath: "/k", PasswordPath: "/p",
+				HTTP: true, TokenFilePath: "/t",
+				HTTPAddr: "192.168.1.1:8080", LogLevel: "info",
+			},
+			wantErr: "--http-addr",
+		},
+		{
+			// Malformed host:port is rejected.
+			name: "invalid_httpaddr_malformed",
+			cfg: config{
+				KeystorePath: "/k", PasswordPath: "/p",
+				HTTP: true, TokenFilePath: "/t",
+				HTTPAddr: "not-a-host-port", LogLevel: "info",
+			},
+			wantErr: "--http-addr",
+		},
 		// --- error paths ---
 		{
 			name:    "missing_keystore",
