@@ -12,6 +12,11 @@
 #   → logs a clear warning and runs ethers-only; exits 0.
 #   → vectors carry meta.oracles.cast = "not-run-in-this-env"
 #
+# When .foundry-version is ABSENT:
+#   → cast oracle is skipped with a clear warning (version cannot be verified).
+#   → This prevents accidentally committing vectors produced with an unverified
+#     cast version that might produce different output from the pinned version.
+#
 # Prerequisites:
 #   • Node.js + ethers@6 installed in scripts/node_modules/
 #     (run `npm install --prefix scripts ethers@6` once)
@@ -23,8 +28,9 @@
 #   npm install --prefix scripts ethers@6   # first time only
 #   scripts/regen-vectors.sh
 #
-# Private key is sourced from (single disclosure path):
+# Private key is sourced from (single disclosure path, TEST-ONLY):
 #   apps/eth-signer-mcp/internal/signing/testdata/README.md
+# Do NOT copy the key scalar into this script; the single disclosure path is the README.
 
 set -euo pipefail
 
@@ -33,8 +39,9 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 VECTORS_DIR="${REPO_ROOT}/apps/eth-signer-mcp/internal/signing/testdata/vectors"
 FOUNDRY_VERSION_FILE="${REPO_ROOT}/.foundry-version"
 
-# Private key — sourced from apps/eth-signer-mcp/internal/signing/testdata/README.md
-# Do NOT duplicate the provenance story here; that file is the single disclosure path.
+# Private key — TEST-ONLY key sourced from testdata/README.md (single disclosure path).
+# Do NOT duplicate the provenance story here; that README is the canonical reference.
+# WARNING: This key is committed in plaintext for testing only. Never use for real funds.
 FIXTURE_KEY="1ab42cc412b618bdea3a599e3c9bae199ebf030895b039e9db1e30dafb12b727"
 
 # ---------------------------------------------------------------------------
@@ -48,12 +55,17 @@ EXPECTED_FOUNDRY_VERSION=""
 
 if [ -f "${FOUNDRY_VERSION_FILE}" ]; then
   EXPECTED_FOUNDRY_VERSION="$(cat "${FOUNDRY_VERSION_FILE}" | tr -d '[:space:]')"
+else
+  echo "WARNING: .foundry-version not found at ${FOUNDRY_VERSION_FILE}."
+  echo "  Cannot verify cast version. Skipping cast oracle to prevent committing"
+  echo "  vectors produced with an unverified Foundry version."
+  echo "  To enable dual-oracle: create .foundry-version with the pinned tag (e.g. v1.7.1)."
 fi
 
-if command -v cast >/dev/null 2>&1; then
+if [ -n "${EXPECTED_FOUNDRY_VERSION}" ] && command -v cast >/dev/null 2>&1; then
   CAST_ACTUAL_VERSION="$(cast --version 2>&1 | head -1)"
   # Check if the version string contains the expected tag
-  if [ -n "${EXPECTED_FOUNDRY_VERSION}" ] && ! echo "${CAST_ACTUAL_VERSION}" | grep -qF "${EXPECTED_FOUNDRY_VERSION}"; then
+  if ! echo "${CAST_ACTUAL_VERSION}" | grep -qF "${EXPECTED_FOUNDRY_VERSION}"; then
     echo "WARNING: cast version mismatch."
     echo "  expected (from .foundry-version): ${EXPECTED_FOUNDRY_VERSION}"
     echo "  actual:                           ${CAST_ACTUAL_VERSION}"
@@ -64,9 +76,9 @@ if command -v cast >/dev/null 2>&1; then
     CAST_AVAILABLE=1
     echo "cast found: ${CAST_ACTUAL_VERSION}"
   fi
-else
+elif [ -n "${EXPECTED_FOUNDRY_VERSION}" ]; then
   echo "WARNING: cast not found on PATH. Running ethers-only oracle."
-  echo "  To enable dual-oracle: install Foundry ${EXPECTED_FOUNDRY_VERSION:-<see .foundry-version>}"
+  echo "  To enable dual-oracle: install Foundry ${EXPECTED_FOUNDRY_VERSION}"
   echo "  then re-run this script."
 fi
 
@@ -93,9 +105,6 @@ mkdir -p "${VECTORS_DIR}"
 ETHERS_OUTPUT="$(node "${ETHERS_SCRIPT}" "${VECTORS_DIR}" 2>&1)"
 echo "${ETHERS_OUTPUT}" | grep -v '^__ETHERS_RESULTS__' | grep -v '^{"raw_tx'
 
-# Extract the JSON results line from ethers output
-ETHERS_JSON="$(echo "${ETHERS_OUTPUT}" | grep -A1 '^__ETHERS_RESULTS__' | tail -1)"
-
 # ---------------------------------------------------------------------------
 # 3. (Optional) Run cast oracle and byte-compare
 # ---------------------------------------------------------------------------
@@ -117,7 +126,7 @@ if [ "${CAST_AVAILABLE}" -eq 1 ]; then
   #   --gas-limit <n>
   #   --gas-price <wei>   (legacy)
   #   --priority-gas-price <wei> and --gas-price <wei>  (EIP-1559)
-  #   --private-key <key>
+  #   --private-key <key>  (TEST-ONLY key — see testdata/README.md)
 
   MISMATCH_COUNT=0
 
@@ -223,6 +232,8 @@ else
   echo ""
   if [ "${CAST_VERSION_MISMATCH}" -eq 1 ]; then
     echo "cast oracle SKIPPED (version mismatch — see warning above)."
+  elif [ -z "${EXPECTED_FOUNDRY_VERSION}" ]; then
+    echo "cast oracle SKIPPED (.foundry-version absent — see warning above)."
   else
     echo "cast oracle SKIPPED (not installed)."
   fi

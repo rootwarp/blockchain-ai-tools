@@ -33,9 +33,18 @@ Private key (hex): 1ab42cc412b618bdea3a599e3c9bae199ebf030895b039e9db1e30dafb12b
 Password:          test-only-password-do-not-reuse
 ```
 
-This is the **only** place in the codebase where the raw private key scalar appears
-(besides the generator `gen_fixtures.go`). Do not copy it elsewhere. Downstream tests
-use `signing.FixtureKeySentinel()` to detect leaks in captured output.
+The raw private key scalar appears in the following files (all clearly marked TEST-ONLY;
+do not add new copies):
+
+| File | Purpose |
+|------|---------|
+| This `README.md` | Primary human-readable disclosure |
+| `gen_fixtures.go` | Generates the three keystore files from this key |
+| `scripts/regen-vectors.sh` | Passes the key to `cast wallet sign-tx` for dual-oracle comparison |
+| `scripts/regen-vectors-ethers.mjs` | Passes the key to ethers v6 for vector generation |
+| `internal/signing/fixture_sentinel.go` | Derives leak-scan sentinel (hex constant, not raw scalar) |
+
+Downstream tests use `signing.FixtureKeySentinel()` to detect leaks in captured output.
 
 ---
 

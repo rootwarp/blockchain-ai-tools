@@ -16,7 +16,8 @@
  * `npm install ethers@6` run inside scripts/ or a parent directory).
  *
  * Output: one <name>.json per signing vector in output-dir.
- * Rejection vectors are written by regen-vectors.sh (no oracle output needed).
+ * Rejection vectors are static hand-written JSON files (no oracle signing needed;
+ * they only define the expected error code and input, not a signed transaction output).
  *
  * No network calls are made. All signing is fully offline.
  */
@@ -48,14 +49,14 @@ const TO = '0x9858EfFD232B4033E47d90003D41EC34EcaEda94';
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Parse a TxRequest-style numeric string (decimal or 0x-hex) to BigInt. */
+/**
+ * Parse a TxRequest-style numeric string (decimal or 0x-hex) to BigInt.
+ * JavaScript's BigInt() constructor natively handles both "0x..."-prefixed hex
+ * strings and plain decimal strings, so no explicit prefix check is needed.
+ */
 function parseBigInt(s) {
   if (typeof s === 'bigint') return s;
-  const str = String(s).trim();
-  if (str.startsWith('0x') || str.startsWith('0X')) {
-    return BigInt(str);
-  }
-  return BigInt(str);
+  return BigInt(String(s).trim());
 }
 
 /** Convert a BigInt to a 0x-prefixed lowercase hex string. */
@@ -245,8 +246,11 @@ async function main() {
 
   mkdirSync(outputDir, { recursive: true });
 
-  // Fixed timestamp for deterministic committed output.
-  // Update this when regenerating for a new oracle version.
+  // REGEN_TIMESTAMP is a deterministic placeholder for the regenerated_at field.
+  // Using a fixed value (rather than Date.now()) keeps git diffs minimal: re-running
+  // the script on identical inputs produces identical JSON. Update this timestamp
+  // manually when intentionally regenerating vectors for a new oracle version or
+  // after a go-ethereum bump so that drift is attributable to a specific event.
   const REGEN_TIMESTAMP = '2026-06-11T00:00:00Z';
 
   const ethersVersion = ethers.version;

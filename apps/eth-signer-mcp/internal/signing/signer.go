@@ -48,10 +48,17 @@ type Signer struct {
 // NewSigner constructs a Signer with the given vault and options. The returned
 // Signer is immediately ready for concurrent use.
 //
+// Panics if vault is nil: a nil vault cannot be used and a panic at construction
+// time is preferable to a nil-pointer dereference at signing time (which would be
+// harder to attribute to a wiring bug in cmd).
+//
 // The logger falls back to slog.Default() when opts.Logger is nil, so callers
 // that have not yet configured a logger get working (default) output rather than
 // a nil-pointer panic.
 func NewSigner(vault KeyVault, opts SignerOptions) *Signer {
+	if vault == nil {
+		panic("signing: NewSigner requires a non-nil vault")
+	}
 	logger := opts.Logger
 	if logger == nil {
 		logger = slog.Default()
@@ -214,10 +221,13 @@ func (s *Signer) SignTransaction(ctx context.Context, req TxRequest) (result *Si
 	//
 	// Locked fields: request_id, tx_hash, chain_id, nonce.
 	// The tx body — to, value, calldata — is NEVER logged (may be operator-sensitive).
+	//
+	// chain_id is emitted as a numeric uint64 (validate guarantees IsUint64()) for
+	// better log aggregation and querying in downstream log tools.
 	s.logger.Info("signing: transaction signed successfully",
 		"request_id", reqID,
 		"tx_hash", signResult.Hash,
-		"chain_id", parsed.chainID.String(),
+		"chain_id", parsed.chainID.Uint64(),
 		"nonce", parsed.nonce,
 	)
 

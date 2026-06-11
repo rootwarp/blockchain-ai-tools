@@ -62,7 +62,9 @@ func toolResult(err error) (*mcp.CallToolResult, error) {
 	})
 	if jsonErr != nil {
 		// Fallback: this cannot happen for static strings, but be safe.
-		payload = []byte(`{"code":"internal_error","message":"failed to encode error"}`)
+		// Use signing.CodeInternalError constant (not a hardcoded string) so this
+		// stays in sync with the taxonomy if the constant is ever renamed.
+		payload = []byte(`{"code":"` + signing.CodeInternalError + `","message":"failed to encode error"}`)
 	}
 
 	result := &mcp.CallToolResult{

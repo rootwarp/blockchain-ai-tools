@@ -16,6 +16,10 @@ import (
 // even hex length, so len(decoded) is the canonical measure.
 const maxDataBytes = 256 * 1024 // 262,144
 
+// maxBigIntBits is the maximum bit length allowed for value and fee fields (256 bits).
+// Values exceeding this cannot be validly encoded in an Ethereum transaction's RLP.
+const maxBigIntBits = 256
+
 // parsedTx is the normalised intermediate representation produced by validate and
 // consumed by build.go (Issue 2.5).  All string inputs have been parsed into their
 // canonical Go types; every rule check has passed.
@@ -99,6 +103,14 @@ func validate(req TxRequest, guard *uint64) (*parsedTx, *ToolError) {
 		return nil, &ToolError{
 			Code:    CodeInvalidInput,
 			Message: "chainId: must not be zero (would select the replay-unprotected Homestead signer)",
+		}
+	}
+	// chainId must fit in uint64: go-ethereum's EIP-155 signer requires it for the
+	// V computation (chainId*2+35); values > 2^64-1 cannot be used safely.
+	if !chainID.IsUint64() {
+		return nil, &ToolError{
+			Code:    CodeInvalidInput,
+			Message: "chainId: must fit in uint64 (value exceeds 2^64-1)",
 		}
 	}
 
@@ -207,6 +219,12 @@ func validate(req TxRequest, guard *uint64) (*parsedTx, *ToolError) {
 			Message: "value: must be a decimal or 0x-hex integer",
 		}
 	}
+	if value.BitLen() > maxBigIntBits {
+		return nil, &ToolError{
+			Code:    CodeInvalidInput,
+			Message: "value: exceeds maximum allowed size (256 bits)",
+		}
+	}
 
 	var gasPrice, gasTipCap, gasFeeCap *big.Int
 	switch txType {
@@ -218,6 +236,12 @@ func validate(req TxRequest, guard *uint64) (*parsedTx, *ToolError) {
 				Message: "gasPrice: must be a decimal or 0x-hex integer",
 			}
 		}
+		if gasPrice.BitLen() > maxBigIntBits {
+			return nil, &ToolError{
+				Code:    CodeInvalidInput,
+				Message: "gasPrice: exceeds maximum allowed size (256 bits)",
+			}
+		}
 	case 2:
 		gasTipCap, err = parseBigInt(req.MaxPriorityFeePerGas)
 		if err != nil {
@@ -226,11 +250,23 @@ func validate(req TxRequest, guard *uint64) (*parsedTx, *ToolError) {
 				Message: "maxPriorityFeePerGas: must be a decimal or 0x-hex integer",
 			}
 		}
+		if gasTipCap.BitLen() > maxBigIntBits {
+			return nil, &ToolError{
+				Code:    CodeInvalidInput,
+				Message: "maxPriorityFeePerGas: exceeds maximum allowed size (256 bits)",
+			}
+		}
 		gasFeeCap, err = parseBigInt(req.MaxFeePerGas)
 		if err != nil {
 			return nil, &ToolError{
 				Code:    CodeInvalidInput,
 				Message: "maxFeePerGas: must be a decimal or 0x-hex integer",
+			}
+		}
+		if gasFeeCap.BitLen() > maxBigIntBits {
+			return nil, &ToolError{
+				Code:    CodeInvalidInput,
+				Message: "maxFeePerGas: exceeds maximum allowed size (256 bits)",
 			}
 		}
 	}
@@ -287,9 +323,11 @@ func parseTxType(s string) (uint8, *ToolError) {
 // parseBigInt parses a decimal or 0x-prefixed hex string into a non-negative *big.Int.
 //
 //   - Empty string → error.
-//   - "0x" alone (no hex digits after the prefix) → error.
-//   - "0x..." hex (leading zeros accepted, e.g. "0x0009" → 9).
-//   - Decimal string ("-1" or any negative) → error.
+//   - Leading "+" or "-" sign prefix → error (sign prefixes rejected; canonical form only).
+//   - "0x" or "0X" alone (no hex digits after the prefix) → error.
+//   - "0x..." or "0X..." hex (leading zeros accepted; e.g. "0x0009" → 9).
+//   - Decimal with leading zeros ("007") → error (canonical form only; "0" itself is valid).
+//   - Decimal string resulting in a negative value → error (caught by Sign() < 0 check).
 //   - Any other non-numeric content → error.
 //
 // This function is a building block for validate; callers map its error to a
@@ -299,6 +337,12 @@ func parseBigInt(s string) (*big.Int, error) {
 	if s == "" {
 		return nil, errors.New("empty string")
 	}
+	// Reject any explicit sign prefix (+ or -) to enforce canonical form.
+	// "-" would produce a negative (caught below), but "+" is accepted by big.Int.SetString
+	// and must also be rejected.
+	if s[0] == '+' || s[0] == '-' {
+		return nil, errors.New("sign prefix not allowed")
+	}
 	n := new(big.Int)
 	var ok bool
 	if strings.HasPrefix(s, "0x") || strings.HasPrefix(s, "0X") {
@@ -306,8 +350,19 @@ func parseBigInt(s string) (*big.Int, error) {
 		if hexDigits == "" {
 			return nil, errors.New("hex number has no digits after the 0x prefix")
 		}
+		// Reject sign prefix inside the hex part (e.g. "0x+1"): big.Int.SetString
+		// accepts a leading "+" in hex mode, but we enforce canonical form.
+		if hexDigits[0] == '+' || hexDigits[0] == '-' {
+			return nil, errors.New("sign prefix not allowed in hex literal")
+		}
 		_, ok = n.SetString(hexDigits, 16)
 	} else {
+		// Reject decimal leading zeros (e.g. "007") — not canonical.
+		// The single character "0" is the valid zero; any longer string starting
+		// with "0" is a leading-zero violation.
+		if len(s) > 1 && s[0] == '0' {
+			return nil, errors.New("decimal leading zeros not allowed")
+		}
 		_, ok = n.SetString(s, 10)
 	}
 	if !ok {
@@ -380,11 +435,14 @@ func parseData(s string) ([]byte, *ToolError) {
 //
 // Rules:
 //   - Empty string → nil (contract creation; valid for both tx types).
-//   - Must be exactly 42 characters (0x/0X prefix + 40 hex chars = 20 bytes).
+//   - Must be exactly 42 characters (0x or 0X prefix + 40 hex chars = 20 bytes).
 //   - common.IsHexAddress must pass (valid hex, correct length).
+//   - Both "0x" and "0X" prefixes are accepted: the 40-char hex portion is extracted
+//     after the first two characters regardless of prefix case.
 //   - All-lowercase and all-uppercase addresses are accepted checksum-agnostic.
 //   - Mixed-case (contains both upper- and lower-case hex letters a–f / A–F) must
-//     match the EIP-55 checksum: compare against common.HexToAddress(to).Hex().
+//     match the EIP-55 checksum: compare the hex portion against
+//     common.HexToAddress(s).Hex() (which always returns a "0x"-prefixed canonical form).
 //
 // Returns *ToolError{Code: CodeInvalidInput} on any violation.
 func parseToAddress(s string) (*common.Address, *ToolError) {
@@ -401,6 +459,8 @@ func parseToAddress(s string) (*common.Address, *ToolError) {
 		}
 	}
 	// hexPart is the 40-character hex portion after the "0x"/"0X" prefix.
+	// Both prefix variants are normalised here; the prefix case does not affect
+	// the EIP-55 checksum check or the decoded address.
 	hexPart := s[2:]
 
 	// EIP-55 rule: apply only when the address contains both upper- and lower-case
@@ -409,8 +469,9 @@ func parseToAddress(s string) (*common.Address, *ToolError) {
 		// common.HexToAddress(s).Hex() returns the canonical EIP-55 form:
 		//   "0x" (lowercase) + checksummed 40-char hex.
 		canonical := common.HexToAddress(s).Hex()
-		// Normalise the input prefix to lowercase "0x" for comparison
-		// (0X-prefixed inputs are otherwise always rejected by the string equality).
+		// Normalise the input prefix to lowercase "0x" for comparison so that
+		// 0X-prefixed inputs with a correct checksum are accepted (the checksum
+		// applies only to the 40 hex chars, not the prefix).
 		normalized := "0x" + hexPart
 		if canonical != normalized {
 			return nil, &ToolError{

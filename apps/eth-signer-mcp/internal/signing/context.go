@@ -23,11 +23,16 @@ func WithRequestID(ctx context.Context, id string) context.Context {
 }
 
 // RequestIDFromContext returns the request ID stored in ctx by a prior WithRequestID
-// call. The second return value is false if no request ID has been set.
+// call, and a boolean indicating whether an ID was set.
 //
-// The signing package uses this to populate the audit log line; callers that do
-// not set a request ID (e.g. in tests that call SignTransaction directly) will
-// receive an empty string and ok == false.
+// Returns ("", false) if no request ID has been set (e.g. in tests that call
+// SignTransaction directly without going through the server handler).
+//
+// The returned ID is used only as an opaque correlation token in log output. It is
+// never parsed, interpreted, or included in any wire response. Callers producing
+// request IDs (e.g. the server handler's UUIDv4 generator) are responsible for
+// keeping the ID length reasonable; excessively long IDs inflate every log line
+// that carries the field. The UUIDv4 format (36 chars) is the expected maximum.
 func RequestIDFromContext(ctx context.Context) (string, bool) {
 	v := ctx.Value(requestIDKey{})
 	if v == nil {

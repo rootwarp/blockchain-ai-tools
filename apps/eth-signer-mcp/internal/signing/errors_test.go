@@ -8,8 +8,10 @@ import (
 	"testing"
 )
 
-// TestToolError_Error verifies the Error() string format for both the
-// with-cause and without-cause cases.
+// TestToolError_Error verifies the Error() string format. Error() returns
+// "Code: Message" in all cases — Cause is intentionally excluded to prevent
+// accidental leakage of internal error details through the error string. Use
+// Unwrap() or errors.Is/As to access Cause programmatically.
 func TestToolError_Error(t *testing.T) {
 	t.Parallel()
 
@@ -23,14 +25,21 @@ func TestToolError_Error(t *testing.T) {
 		}
 	})
 
-	t.Run("with-cause", func(t *testing.T) {
+	// Even with a Cause set, Error() must NOT include Cause.Error() to prevent
+	// accidental leakage of internal error details into caller-visible strings.
+	// Cause is accessible via Unwrap() / errors.Is / errors.As.
+	t.Run("with-cause-cause-not-in-error-string", func(t *testing.T) {
 		t.Parallel()
-		cause := errors.New("underlying error")
+		cause := errors.New("underlying-secret-cause")
 		te := &ToolError{Code: CodePasswordError, Message: "bad password", Cause: cause}
 		got := te.Error()
-		want := "password_error: bad password: underlying error"
+		want := "password_error: bad password"
 		if got != want {
 			t.Errorf("Error() = %q, want %q", got, want)
+		}
+		// Cause must not bleed into Error().
+		if contains(got, "underlying-secret-cause") {
+			t.Errorf("Error() leaks Cause text: %q", got)
 		}
 	})
 }

@@ -219,8 +219,22 @@ func run(ctx context.Context, cmd *cli.Command) error {
 		// the log format is JSON (operators running the binary directly may not
 		// parse JSON log lines). The logger also emits it for structured log
 		// consumers.
-		fmt.Fprintf(os.Stderr, "eth-signer-mcp: keystore startup error: %v\n", err)
-		logger.Error("keystore startup error", "error", err.Error())
+		//
+		// The *signing.ToolError's Cause is emitted as a separate slog field (not
+		// interpolated into the message string) for symmetric log discipline: the
+		// Cause is operator-visible but never part of the stable message field.
+		var te *signing.ToolError
+		if errors.As(err, &te) && te.Cause != nil {
+			fmt.Fprintf(os.Stderr, "eth-signer-mcp: keystore startup error: %s\n", te.Message)
+			logger.Error("keystore startup error",
+				"code", te.Code,
+				"message", te.Message,
+				"cause", te.Cause.Error(),
+			)
+		} else {
+			fmt.Fprintf(os.Stderr, "eth-signer-mcp: keystore startup error: %v\n", err)
+			logger.Error("keystore startup error", "error", err.Error())
+		}
 		return fmt.Errorf("keystore startup error: %w", err)
 	}
 	logger.Info("keystore loaded", "address", vault.Address().Hex())

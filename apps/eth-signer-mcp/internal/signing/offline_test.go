@@ -84,11 +84,19 @@ func TestOfflineImports(t *testing.T) {
 	// dependencies — go-ethereum crypto primitives, standard library packages,
 	// etc. — can be added without modifying this test. Only network-capable
 	// packages need to appear here.
+	//
+	// Validate that all deny-list entries are non-empty path literals. A blank
+	// path would never appear in the visited map and would silently defeat the gate.
 	forbidden := []string{
 		"net/http",
 		"net/rpc",
 		"github.com/ethereum/go-ethereum/ethclient",
 		"github.com/ethereum/go-ethereum/rpc",
+	}
+	for _, f := range forbidden {
+		if f == "" {
+			t.Fatalf("deny-list contains an empty path literal — this would silently defeat the gate")
+		}
 	}
 
 	cfg := &packages.Config{
@@ -106,6 +114,19 @@ func TestOfflineImports(t *testing.T) {
 		t.Fatal("packages.Load returned no packages for signing")
 	}
 
+	// Fail loudly if packages.Load itself encountered load errors (e.g. a broken
+	// import graph). A broken-but-non-fatal load would produce an incomplete graph
+	// that could pass vacuously — missing the very packages the test is meant to
+	// detect.
+	for _, pkg := range pkgs {
+		for _, loadErr := range pkg.Errors {
+			t.Errorf("packages.Load error in %q: %v", pkg.PkgPath, loadErr)
+		}
+	}
+	if t.Failed() {
+		t.FailNow() // stop early if load errors were found; remaining checks would be unreliable
+	}
+
 	// Walk the transitive import graph, collecting all reachable package paths
 	// (visited) and recording the direct importer of each package (parent).
 	// The parent map enables diagnostic messages that name the offending edge.
@@ -113,6 +134,17 @@ func TestOfflineImports(t *testing.T) {
 	parent := make(map[string]string)
 	for _, pkg := range pkgs {
 		walkImports(pkg, visited, parent)
+	}
+
+	// Positive control: assert that github.com/ethereum/go-ethereum/crypto IS
+	// reachable in the import graph. If it is missing, the walk has not traversed
+	// the real go-ethereum dependency tree and may be passing vacuously on a broken
+	// or empty import graph.
+	const goEthereumCrypto = "github.com/ethereum/go-ethereum/crypto"
+	if !visited[goEthereumCrypto] {
+		t.Errorf("positive-control failure: %q not found in import graph — "+
+			"the walk may not have traversed go-ethereum; was packages.Load successful?",
+			goEthereumCrypto)
 	}
 
 	// Fail if any forbidden package is reachable from internal/signing.

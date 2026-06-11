@@ -5,6 +5,12 @@ bin/
 *.so
 *.dylib
 
+# Stray module-named binaries built directly inside app directories (e.g. by
+# `go build .` run inside apps/eth-signer-mcp/ instead of from the repo root).
+# The canonical output location is bin/ (via `make build`).
+apps/*/eth-signer-mcp
+apps/*/eth-signer-mcp.exe
+
 # Test & coverage artifacts
 *.test
 *.out

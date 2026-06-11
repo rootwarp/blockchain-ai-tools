@@ -1,11 +1,14 @@
 // Package server — handlers.go — Issue 2.7.
 // Handler closures for sign_transaction and get_address.
 //
-// Each handler:
+// sign_transaction handler:
 //  1. Generates a UUIDv4 request_id (crypto/rand, no new dependency).
 //  2. Attaches the ID to the context via signing.WithRequestID.
 //  3. Calls the signer and routes the result through toolResult / protocol error.
 //  4. Logs the ToolError.Cause (if any) with request_id before encoding.
+//
+// get_address handler does NOT generate a request_id — no signing occurs and no
+// audit line is emitted; the address is served from the boot-time snapshot.
 //
 // Tool-level vs protocol-level error routing (ADR-004):
 //   - *signing.ToolError → toolResult encodes {"code","message"}; IsError=true; nil Go error.

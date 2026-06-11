@@ -582,9 +582,7 @@ func TestValidate_Rule8_DataInvalidHexChars(t *testing.T) {
 func TestValidate_Rule8_DataExactly256KiB(t *testing.T) {
 	t.Parallel()
 	// 256 KiB = 262,144 bytes.  Build a 0x-prefixed even-length hex string.
-	hexBytes := make([]byte, 262144)
 	hexStr := "0x" + strings.Repeat("aa", 262144)
-	_ = hexBytes
 	r := baseValidLegacyReq()
 	r.Data = hexStr
 	p := mustValidate(t, r, nil)
@@ -1049,6 +1047,19 @@ func TestParseBigInt(t *testing.T) {
 		{in: "abc", wantErr: true},
 		{in: "0xGG", wantErr: true},
 		{in: "1.5", wantErr: true},
+
+		// sign-prefix rejection (new in 2.12)
+		{in: "+1", wantErr: true}, // leading "+" rejected
+		{in: "-0", wantErr: true}, // negative sign prefix rejected
+
+		// decimal leading-zero rejection (new in 2.12)
+		{in: "007", wantErr: true}, // leading zeros in decimal rejected
+		{in: "01", wantErr: true},  // single leading zero rejected
+
+		// 0X uppercase prefix (valid hex; accepted)
+		{in: "0X1", wantVal: 1},
+		{in: "0XFF", wantVal: 255},
+		{in: "0x+1", wantErr: true}, // "+" after 0x is not valid hex
 	}
 
 	for _, tc := range tests {
@@ -1162,6 +1173,170 @@ func TestHasMixedCase(t *testing.T) {
 	}
 }
 
+// ─── chainId uint64 overflow ──────────────────────────────────────────────────
+
+// TestValidate_Rule1_ChainIDTooBigForUint64 verifies that chainId > 2^64-1 is
+// rejected as invalid_input. go-ethereum's EIP-155 signer requires chainId to
+// fit in uint64 for the V computation; values beyond this range are unusable.
+func TestValidate_Rule1_ChainIDTooBigForUint64(t *testing.T) {
+	t.Parallel()
+	r := baseValidLegacyReq()
+	// 2^64 = 18446744073709551616 (one beyond uint64 max)
+	r.ChainID = "18446744073709551616"
+	requireErrCode(t, r, nil, CodeInvalidInput)
+}
+
+// ─── value / fee fields > 256 bits ────────────────────────────────────────────
+
+// TestValidate_Rule7_ValueOver256Bits verifies that a value with BitLen > 256 is
+// rejected at validation rather than reaching RLP encoding.
+func TestValidate_Rule7_ValueOver256Bits(t *testing.T) {
+	t.Parallel()
+	r := baseValidLegacyReq()
+	// 2^256 = one beyond the 256-bit limit; hex requires 65 hex chars.
+	r.Value = "0x10000000000000000000000000000000000000000000000000000000000000000"
+	requireErrCode(t, r, nil, CodeInvalidInput)
+}
+
+// TestValidate_Rule7_ValueExactly256BitsAccepted verifies that a value with
+// BitLen == 256 (2^256 - 1) is accepted (boundary value is valid).
+func TestValidate_Rule7_ValueExactly256BitsAccepted(t *testing.T) {
+	t.Parallel()
+	r := baseValidLegacyReq()
+	// 2^256 - 1: max 256-bit value, exactly at the boundary.
+	r.Value = "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+	mustValidate(t, r, nil)
+}
+
+// TestValidate_Rule7_GasPriceOver256Bits verifies that oversized gasPrice is rejected.
+func TestValidate_Rule7_GasPriceOver256Bits(t *testing.T) {
+	t.Parallel()
+	r := baseValidLegacyReq()
+	r.GasPrice = "0x10000000000000000000000000000000000000000000000000000000000000000"
+	requireErrCode(t, r, nil, CodeInvalidInput)
+}
+
+// TestValidate_Rule7_MaxFeePerGasOver256Bits verifies that oversized maxFeePerGas is rejected.
+func TestValidate_Rule7_MaxFeePerGasOver256Bits(t *testing.T) {
+	t.Parallel()
+	r := baseValid1559Req()
+	r.MaxFeePerGas = "0x10000000000000000000000000000000000000000000000000000000000000000"
+	requireErrCode(t, r, nil, CodeInvalidInput)
+}
+
+// TestValidate_Rule7_MaxPriorityFeePerGasOver256Bits verifies that oversized
+// maxPriorityFeePerGas is rejected.
+func TestValidate_Rule7_MaxPriorityFeePerGasOver256Bits(t *testing.T) {
+	t.Parallel()
+	r := baseValid1559Req()
+	r.MaxPriorityFeePerGas = "0x10000000000000000000000000000000000000000000000000000000000000000"
+	requireErrCode(t, r, nil, CodeInvalidInput)
+}
+
+// ─── 0X (uppercase-X) prefix for to address ──────────────────────────────────
+
+// TestValidate_Rule9_To0XPrefix covers the 0X-prefix variants for parseToAddress.
+// The 0X prefix (uppercase X) is accepted by common.IsHexAddress, and the EIP-55
+// checksum applies to the 40 hex chars only (not the prefix case).
+func TestValidate_Rule9_To0XPrefix(t *testing.T) {
+	t.Parallel()
+
+	// Correct EIP-55 address with 0X prefix — must be accepted.
+	// The checksum is the same as for the 0x-prefixed form.
+	correctChecksumHex := FixtureTestAddress[2:] // strip "0x"
+
+	tests := []struct {
+		name    string
+		to      string
+		wantErr bool
+	}{
+		{
+			name: "0X-correct-checksum",
+			to:   "0X" + correctChecksumHex,
+		},
+		{
+			name:    "0X-fail-checksum",
+			to:      "0X" + "9858efFD232B4033E47d90003D41EC34EcaEda94", // one char flipped
+			wantErr: true,
+		},
+		{
+			// All-lowercase with 0X prefix: no EIP-55 check needed.
+			name: "0X-all-lower",
+			to:   "0X" + "9858effd232b4033e47d90003d41ec34ecaeda94",
+		},
+		{
+			// All-uppercase with 0X prefix: no EIP-55 check needed.
+			name: "0X-all-upper",
+			to:   "0X" + "9858EFFD232B4033E47D90003D41EC34ECAEDA94",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := baseValidLegacyReq()
+			r.To = tc.to
+			_, err := validate(r, nil)
+			if tc.wantErr && err == nil {
+				t.Fatalf("validate: expected error for %q, got nil", tc.to)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("validate: unexpected error for %q: code=%q message=%q",
+					tc.to, err.Code, err.Message)
+			}
+		})
+	}
+}
+
+// ─── parseBigInt sign-prefix and leading-zero rejection ──────────────────────
+
+// TestParseBigInt_SignPrefixRejected verifies that "+" and "-" sign prefixes
+// are rejected explicitly (not accepted as canonical form).
+func TestParseBigInt_SignPrefixRejected(t *testing.T) {
+	t.Parallel()
+
+	for _, s := range []string{"+1", "+0", "-0", "-1"} {
+		s := s
+		t.Run(s, func(t *testing.T) {
+			t.Parallel()
+			_, err := parseBigInt(s)
+			if err == nil {
+				t.Errorf("parseBigInt(%q): expected error, got nil", s)
+			}
+		})
+	}
+}
+
+// TestParseBigInt_DecimalLeadingZeroRejected verifies that decimal strings with
+// leading zeros (except "0" itself) are rejected.
+func TestParseBigInt_DecimalLeadingZeroRejected(t *testing.T) {
+	t.Parallel()
+
+	for _, s := range []string{"007", "01", "00", "0123"} {
+		s := s
+		t.Run(s, func(t *testing.T) {
+			t.Parallel()
+			_, err := parseBigInt(s)
+			if err == nil {
+				t.Errorf("parseBigInt(%q): expected error (leading zeros), got nil", s)
+			}
+		})
+	}
+}
+
+// TestParseBigInt_SingleZeroAccepted verifies that "0" (single zero) is accepted.
+func TestParseBigInt_SingleZeroAccepted(t *testing.T) {
+	t.Parallel()
+	n, err := parseBigInt("0")
+	if err != nil {
+		t.Fatalf("parseBigInt(\"0\"): unexpected error: %v", err)
+	}
+	if n.Sign() != 0 {
+		t.Errorf("parseBigInt(\"0\") = %v, want 0", n)
+	}
+}
+
 // ─── Fuzz tests ───────────────────────────────────────────────────────────────
 //
 // These fuzz functions run as normal tests against their seed corpus during CI
@@ -1178,6 +1353,7 @@ func FuzzParseBigInt(f *testing.F) {
 		"", "0", "1", "-1",
 		"0x0", "0x1", "0xff", "0xFF", "0x0009",
 		"0x", "0xGG", "abc", "1.5",
+		"+1", "-0", "007", "01", // sign-prefix and leading-zero cases
 		"18446744073709551615", // max uint64
 		"18446744073709551616", // max uint64 + 1
 		"115792089237316195423570985008687907853269984665640564039457584007913129639935", // 2^256 - 1

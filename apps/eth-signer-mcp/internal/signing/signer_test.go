@@ -543,18 +543,23 @@ func TestSigner_PanicRecovery(t *testing.T) {
 // TestSigner_AuditLine verifies that exactly one info-level audit log line is
 // emitted per successful signing, containing request_id, tx_hash, chain_id, nonce
 // — and that to, value, and calldata are NEVER logged.
+//
+// chain_id is emitted as a numeric uint64 (e.g. the JSON value 1, not "1" or "0x1")
+// for better log aggregation in downstream log tools.
 func TestSigner_AuditLine(t *testing.T) {
 	t.Parallel()
 	s, logBuf, _ := newTestSigner(t)
 
 	// Distinctive values that must NOT appear in logs.
+	// Using an address distinct from the signer's own address to catch leaks.
+	distinctiveTo := "0x9858EfFD232B4033E47d90003D41EC34EcaEda94"
 	distinctiveValue := "7654321000000000000" // 7.65 ETH in wei
 	distinctiveDataContent := "c0ffee"        // hex content inside data field
 	req := TxRequest{
 		Type:     "legacy",
 		ChainID:  "1",
 		Nonce:    "42",
-		To:       "0x9858EfFD232B4033E47d90003D41EC34EcaEda94",
+		To:       distinctiveTo,
 		Value:    distinctiveValue,
 		Data:     "0x" + distinctiveDataContent,
 		Gas:      "21000",
@@ -583,7 +588,17 @@ func TestSigner_AuditLine(t *testing.T) {
 		}
 	}
 
-	// Tx body MUST NOT be logged at any level.
+	// chain_id must be a numeric value in the JSON log (uint64, not a string).
+	// For chainId=1, the JSON must contain "chain_id":1 (numeric), not "chain_id":"1".
+	if !bytes.Contains(logOutput, []byte(`"chain_id":1`)) {
+		t.Errorf("audit line chain_id is not numeric uint64 in JSON output: %s", logOutput)
+	}
+
+	// Tx body MUST NOT be logged at any level: to, value, calldata.
+	// distinctiveTo is the to-address used above; assert it does not appear in logs.
+	if bytes.Contains(logOutput, []byte(distinctiveTo)) {
+		t.Errorf("'to' field (%q) leaked into logs", distinctiveTo)
+	}
 	if bytes.Contains(logOutput, []byte(distinctiveValue)) {
 		t.Errorf("'value' field (%q) leaked into logs", distinctiveValue)
 	}
@@ -596,6 +611,18 @@ func TestSigner_AuditLine(t *testing.T) {
 	if leaked := sentinel.Scan(logOutput); len(leaked) > 0 {
 		t.Errorf("key sentinel leaked in audit logs form(s): %v", leaked)
 	}
+}
+
+// TestSigner_NilVaultPanics verifies that NewSigner panics when passed a nil vault,
+// making wiring errors diagnosable at construction time rather than at signing time.
+func TestSigner_NilVaultPanics(t *testing.T) {
+	t.Parallel()
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("NewSigner(nil vault): expected panic, got none")
+		}
+	}()
+	_ = NewSigner(nil, SignerOptions{})
 }
 
 // TestSigner_NoAuditLineOnValidationError verifies that no log is emitted for a

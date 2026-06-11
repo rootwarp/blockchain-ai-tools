@@ -4,10 +4,6 @@ import "log/slog"
 
 // Error code constants for ToolError. These codes are stable and cross the wire.
 // They mirror the six PRD codes defined in the architecture's §Error Handling section.
-//
-// NOTE (interim): This file was introduced in Issue 2.2 as an interim home for the
-// ToolError type and code constants. Issue 2.6 finalises the full six-code taxonomy
-// and adds the LogValue/nil-guard improvements identified in the 2.2 code review.
 const (
 	// CodeKeystoreError is returned when the keystore file is missing, unreadable,
 	// malformed, or has an unusable "address" field. This is a boot-time failure.
@@ -61,10 +57,11 @@ type ToolError struct {
 	Cause error `json:"-"`
 }
 
-// Error implements the error interface.
-// It includes the cause if present, so wrapped errors are diagnosable in logs
-// without any serialisation to the wire (the server layer encodes only Code and
-// Message).
+// Error implements the error interface. It returns "Code: Message" — it does NOT
+// interpolate Cause.Error() to prevent accidental leakage of internal error details
+// or secret-bearing error messages into log lines that embed the error string.
+// The Cause is available via Unwrap() for errors.Is/As, and must be logged
+// separately at the call site (e.g. as a distinct slog field).
 //
 // Nil-receiver safe: calling Error() on a nil *ToolError returns a static string
 // rather than panicking, preventing accidental nil-pointer dereferences at log sites.
@@ -72,13 +69,11 @@ func (e *ToolError) Error() string {
 	if e == nil {
 		return "internal_error: <nil ToolError>"
 	}
-	if e.Cause != nil {
-		return e.Code + ": " + e.Message + ": " + e.Cause.Error()
-	}
 	return e.Code + ": " + e.Message
 }
 
 // Unwrap returns the underlying cause so errors.Is/As work through the chain.
+// The cause is accessible programmatically but is never included in Error().
 func (e *ToolError) Unwrap() error {
 	if e == nil {
 		return nil

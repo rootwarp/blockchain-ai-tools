@@ -458,12 +458,10 @@ func TestSignTransaction_NonToolErrorIsProtocol(t *testing.T) {
 			t.Error("got IsError=true result instead of protocol error")
 		}
 	}
-	// result must be nil for a protocol error.
+	// result must be nil for a protocol-level error (no tool result is produced).
 	if result != nil {
-		// The SDK may return a result even for protocol errors in some configurations.
-		// The key assertion is that we got a non-nil error.
-		t.Logf("Note: result non-nil alongside non-nil err; err=%v, result.IsError=%v",
-			err, result.IsError)
+		t.Errorf("result must be nil alongside a protocol error; got result.IsError=%v (err=%v)",
+			result.IsError, err)
 	}
 }
 
