@@ -189,26 +189,26 @@ re-plumbing.
 
 **Acceptance Criteria:**
 
-- [ ] `RunHTTP(ctx, opts)` with a valid token file binds
+- [x] `RunHTTP(ctx, opts)` with a valid token file binds
       `127.0.0.1:0` by default, prints `listening on 127.0.0.1:<port>`
       to stderr after `Listen` succeeds, and serves MCP Streamable HTTP
       until `ctx` cancels.
-- [ ] The bound listener address is loopback — asserted via the
+- [x] The bound listener address is loopback — asserted via the
       listener's resolved `*net.TCPAddr`, not by string parsing.
-- [ ] Missing, unreadable, or empty (after one-`\n` strip) token file →
+- [x] Missing, unreadable, or empty (after one-`\n` strip) token file →
       `RunHTTP` returns an error **before any listener is bound**
       (asserted: no port opened); `cmd` exits non-zero with a sanitized
       one-line stderr message naming the path, never its contents.
-- [ ] `--http-addr` override is honored; bind failure (address in use)
+- [x] `--http-addr` override is honored; bind failure (address in use)
       returns an error without printing the announce line.
-- [ ] The SDK handler is constructed with DNS-rebinding/localhost
+- [x] The SDK handler is constructed with DNS-rebinding/localhost
       protection enabled; the deliberate zero-value option fields are
       documented in a comment citing the 1.7 spike note.
-- [ ] `http.Server.ReadHeaderTimeout` is set (5 s).
-- [ ] A smoke test drives one `initialize` round-trip over real
+- [x] `http.Server.ReadHeaderTimeout` is set (5 s).
+- [x] A smoke test drives one `initialize` round-trip over real
       Streamable HTTP with the SDK v1.6.1 test client (auth not yet
       enforced in this issue's pipeline; the test is updated in 3.2).
-- [ ] `go test -race ./internal/server/...` green; depguard green
+- [x] `go test -race ./internal/server/...` green; depguard green
       (`server` imports only `signing` + `obs` internally).
 
 **Testing Notes:**
