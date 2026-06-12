@@ -158,21 +158,24 @@ func (s *Server) RunHTTP(ctx context.Context, opts HTTPOptions) error {
 
 	// ── Step 5: Assemble the http.Server pipeline ──────────────────────────
 	//
-	// Current assembly order (outermost → innermost), reading bottom-up as
-	// written (each wrap adds an outer layer):
+	// Assembly order, outermost → innermost (each line wraps what came before):
 	//
 	//   [3.4] http.MaxBytesHandler → [3.3] reqlog → [3.2] bearer auth → [SDK handler]
 	//
-	// Layers landing in this issue (3.2):
-	//   bearer auth — verifier.Middleware wraps the SDK handler; 401 fires before
-	//   the SDK ever sees the body (no MCP session state created for bad requests).
+	// Layers assembled here:
+	//   [3.2] bearer auth — verifier.Middleware wraps the SDK handler; 401 fires
+	//         BEFORE the SDK ever sees the body (no MCP session state for bad requests).
+	//   [3.3] reqlog — newRequestLogMiddleware wraps auth; sits OUTSIDE auth so even
+	//         401/403 responses are request-logged (issue 3.3 pipeline-order contract).
 	//
-	// Future middleware slots as func(http.Handler) http.Handler without
-	// re-plumbing this function:
-	//   [3.3] pipeline = reqlogMiddleware(pipeline, s.logger)  // req-id + latency log
+	// Layer pending:
 	//   [3.4] pipeline = http.MaxBytesHandler(pipeline, 1<<20) // 1 MiB body cap (outermost)
+	//
+	// Each layer is a func(http.Handler) http.Handler — future layers slot in
+	// without re-plumbing this function.
 	var pipeline http.Handler = sdkHandler
-	pipeline = verifier.Middleware(pipeline) // [3.2] 401 before SDK sees body
+	pipeline = verifier.Middleware(pipeline)               // [3.2] 401 before SDK sees body
+	pipeline = newRequestLogMiddleware(s.logger)(pipeline) // [3.3] reqlog outside auth — even 401s are logged
 
 	httpSrv := &http.Server{
 		Handler: pipeline,

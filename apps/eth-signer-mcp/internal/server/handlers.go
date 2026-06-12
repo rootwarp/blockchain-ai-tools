@@ -67,7 +67,9 @@ func generateRequestID() string {
 
 // makeSignTransactionHandler returns a ToolHandlerFor for the sign_transaction
 // tool. It:
-//  1. Generates a request_id and attaches it to ctx.
+//  1. Reuses an existing request_id from ctx (set by the HTTP reqlog middleware)
+//     when present; generates a new UUIDv4 when absent (stdio path, Phase 2
+//     behaviour unchanged).
 //  2. Calls signer.SignTransaction(ctx, args).
 //  3. Routes *signing.ToolError via toolResult (IsError wire encoding).
 //  4. Routes non-ToolError as a protocol-level JSON-RPC error.
@@ -81,8 +83,15 @@ func makeSignTransactionHandler(
 		_ *mcp.CallToolRequest,
 		args signing.TxRequest,
 	) (*mcp.CallToolResult, *signing.SignResult, error) {
-		reqID := generateRequestID()
-		ctx = signing.WithRequestID(ctx, reqID)
+		// Reuse the request_id set by the HTTP reqlog middleware when present.
+		// On the stdio path (no middleware), none is set: generate a new one.
+		// This ensures the HTTP audit line's request_id is correlated with the
+		// HTTP reqlog line's request_id (issue 3.3 correlation requirement).
+		reqID, ok := signing.RequestIDFromContext(ctx)
+		if !ok {
+			reqID = generateRequestID()
+			ctx = signing.WithRequestID(ctx, reqID)
+		}
 
 		result, err := sp.SignTransaction(ctx, args)
 		if err != nil {
