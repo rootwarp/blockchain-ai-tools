@@ -17,5 +17,9 @@ toolchain go1.26.4
 
 use (
 	./apps/eth-signer-mcp
+	// scripts/demo is a demo-only module (stdio + HTTP fallback clients).
+	// It is NOT under apps/ or libs/, so it is outside Makefile discovery:
+	// `make lint`, `make test`, and `make build` do NOT cover it.
+	// Added by hand deliberately — see docs/demo.md for usage.
 	./scripts/demo
 )

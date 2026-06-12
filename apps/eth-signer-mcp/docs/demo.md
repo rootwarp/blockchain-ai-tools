@@ -130,7 +130,7 @@ connecting to eth-signer-mcp via stdio (CommandTransport) ...
   NOTE: off-localhost exposure is unsupported
 ```
 
-Server stderr (JSON structured logs):
+Server stderr (JSON structured logs, timestamps omitted for readability — full timestamped log in `docs/demo-assets/stdio-session.txt`):
 
 ```json
 {"level":"INFO","msg":"eth-signer-mcp starting","log_level":"info"}
