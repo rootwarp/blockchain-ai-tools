@@ -379,22 +379,22 @@ the 3.5 pipeline-order regression test.
 
 **Acceptance Criteria:**
 
-- [ ] Every HTTP request — including 401s and 403s — produces exactly
+- [x] Every HTTP request — including 401s and 403s — produces exactly
       one log line with `request_id`, `remote_addr`, `status`,
       `latency_ms`; asserted by parsing captured JSON stderr.
-- [ ] `request_id` is propagated via `signing.WithRequestID`; a
+- [x] `request_id` is propagated via `signing.WithRequestID`; a
       successful `sign_transaction` over HTTP yields an audit line
       (task 2.6) whose `request_id` equals the HTTP request log line's
       `request_id` — the correlation test.
-- [ ] When the SDK exposes no request id (per the 1.7 spike note's
+- [x] When the SDK exposes no request id (per the 1.7 spike note's
       finding), ids are UUIDv4 and unique across concurrent requests.
-- [ ] No request body bytes, no `Authorization` header value, and no
+- [x] No request body bytes, no `Authorization` header value, and no
       other header values appear in any captured log at any level —
       leak scan (raw + encoded forms) green over captured HTTP logs.
-- [ ] Status capture is correct for: handler 200, middleware-written
+- [x] Status capture is correct for: handler 200, middleware-written
       401, SDK-written 403, and a handler that never calls
       `WriteHeader`.
-- [ ] `go test -race ./internal/server/...` green.
+- [x] `go test -race ./internal/server/...` green.
 
 **Testing Notes:**
 
