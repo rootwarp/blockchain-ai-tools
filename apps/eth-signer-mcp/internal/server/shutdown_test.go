@@ -29,7 +29,7 @@ package server
 //   writeTokenFile      — http_test.go
 //   randTokenBytes      — auth_test.go
 //   hexEncodeBytes      — auth_test.go
-//   signingTestdataPathBounds — bounds_test.go
+//   signingTestdataPath — handlers_test.go
 //   validSign1559Args   — bounds_test.go
 //
 // No goroutine leaks: -race clean.  No time.Sleep calls anywhere.

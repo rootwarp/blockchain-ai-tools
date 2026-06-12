@@ -6,7 +6,7 @@
 // # Streamable HTTP pipeline
 //
 // RunHTTP assembles the middleware pipeline in a single place (http.go, Step 5).
-// All tests exercise this pipeline via RunHTTP — no test builds its own
+// All integration tests exercise this pipeline via RunHTTP — no integration test builds its own
 // divergent pipeline.  The pipeline order, outermost to innermost, is:
 //
 //	[1] http.MaxBytesHandler  — 1 MiB body cap (ADR-006); wraps the entire

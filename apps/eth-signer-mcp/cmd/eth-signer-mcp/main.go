@@ -102,7 +102,7 @@ func newCommand() *cli.Command {
 			},
 			&cli.StringFlag{
 				Name:  "http-auth-token-file",
-				Usage: "path to bearer auth token file (required with --http); file must be chmod 600; use --strict-perms to enforce the permission check at startup",
+				Usage: "path to bearer auth token file (required with --http); should be chmod 600 (group/world-readable is a warning by default; use --strict-perms to refuse startup)",
 			},
 			&cli.Uint64Flag{
 				// --chain-id has no default: nil when unset means "no guard".
