@@ -51,6 +51,21 @@ import (
 // behavior fails with the right diagnostic.  Path is relative to the app module root.
 const spikeNoteRef = "docs/mcp-sdk-spike.md"
 
+// hardeningSignTxValidBody is a schema-valid JSON-RPC tools/call body for
+// sign_transaction with a legacy (type 0) transaction.  All required TxRequest
+// fields are present (type, chainId, nonce, value, data, gas) plus gasPrice for
+// the legacy type, and NO extra fields (the inferred schema has
+// additionalProperties:false — unknown fields are rejected before handler dispatch).
+//
+// This body is used in the auth 401 recording seam (test c).  The seam is LIVE:
+// if auth were bypassed and the request reached the SDK handler, schema validation
+// would PASS and the stub's SignTransaction would be invoked (signCalled.Add(1)).
+//
+// Using arguments:{} (missing all required fields) would make the seam VACUOUS:
+// schema validation would fail before handler dispatch, keeping signCalled at 0
+// even if auth were entirely removed — the assertion would prove nothing.
+const hardeningSignTxValidBody = `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"sign_transaction","arguments":{"type":"0x0","chainId":"1","nonce":"0x0","to":"0x9858EfFD232B4033E47d90003D41EC34EcaEda94","value":"0x0","data":"0x","gas":"0x5208","gasPrice":"0x4a817c800"}}}`
+
 // ── (a) Bind layer ─────────────────────────────────────────────────────────────
 
 // TestHardeningMatrix_Bind verifies that the default configuration's resolved
@@ -122,8 +137,10 @@ func TestHardeningMatrix_Rebind_ValidBearer_Returns403(t *testing.T) {
 	t.Parallel()
 
 	const token = "rebind-valid-bearer-403-hardening"
-	// noopStub panics if SignTransaction is called; since the SDK 403s before
-	// dispatching tools, the panic never fires — this is the recording seam.
+	// testServer uses noopStub.  The request body is an initialize method (not
+	// tools/call), so SignTransaction cannot be reached regardless of the 403.
+	// The 403 status code is the authoritative DNS-rebinding assertion; the absence
+	// of a panic is incidental (the initialize method never dispatches a tool).
 	srv := testServer(t)
 	tokenFile := writeTokenFile(t, token+"\n")
 	readyCh := make(chan net.Addr, 1)
@@ -259,9 +276,14 @@ func TestHardeningMatrix_Auth_Returns401_SigningNeverRan(t *testing.T) {
 			req, err := http.NewRequestWithContext(context.Background(),
 				http.MethodPost,
 				fmt.Sprintf("http://%s/mcp", addr.String()),
-				// Use a sign_transaction call body so the stub would be invoked
-				// if the SDK handler is ever reached — proving the seam is live.
-				strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"sign_transaction","arguments":{}}}`),
+				// Use a schema-valid sign_transaction body (hardeningSignTxValidBody) so
+				// the recording seam is LIVE.  All required TxRequest fields are present;
+				// additionalProperties:false is satisfied (no extra fields).
+				// If auth were bypassed, schema validation would PASS and SignTransaction
+				// would be invoked (signCalled.Add(1) fires, test fails loudly).
+				// Using arguments:{} would be VACUOUS: schema validation would fail before
+				// handler dispatch, keeping signCalled=0 regardless of auth.
+				strings.NewReader(hardeningSignTxValidBody),
 			)
 			if err != nil {
 				t.Fatalf("hardening auth %q: NewRequest: %v", tc.name, err)
@@ -571,12 +593,18 @@ func TestHardeningMatrix_PipelineOrder_UnauthorizedIsReqlogged(t *testing.T) {
 	addr := waitReady(t, readyCh, 5*time.Second)
 
 	// Send a request without an Authorization header — auth will return 401.
-	// We use http.Post (not the SDK client) to keep this test simple and direct.
-	resp, err := http.Post(
+	// Use NewRequestWithContext with a deadline so a server hang cannot block indefinitely.
+	postCtx, postCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer postCancel()
+	postReq, err := http.NewRequestWithContext(postCtx, http.MethodPost,
 		fmt.Sprintf("http://%s/mcp", addr.String()),
-		"application/json",
 		strings.NewReader(`{}`),
 	)
+	if err != nil {
+		t.Fatalf("pipeline-reg-ii: NewRequest: %v", err)
+	}
+	postReq.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(postReq)
 	if err != nil {
 		t.Fatalf("pipeline-reg-ii: POST: %v", err)
 	}

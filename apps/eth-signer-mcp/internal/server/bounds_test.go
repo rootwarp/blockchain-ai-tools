@@ -283,7 +283,7 @@ func validSign1559Args() map[string]any {
 func serverHealthCheck(t *testing.T, addr net.Addr, token string) {
 	t.Helper()
 	req, err := http.NewRequestWithContext(context.Background(),
-		http.MethodPost, fmt.Sprintf("http://%s", addr.String()),
+		http.MethodPost, fmt.Sprintf("http://%s/mcp", addr.String()),
 		strings.NewReader("{}"))
 	if err != nil {
 		t.Errorf("serverHealthCheck: NewRequest: %v", err)
