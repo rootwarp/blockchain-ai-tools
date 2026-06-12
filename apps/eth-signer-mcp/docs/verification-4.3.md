@@ -153,7 +153,7 @@ Advisory DB references:
 Searched all shipped docs and code comments in `apps/eth-signer-mcp/` for advisory claims:
 
 ```
-grep -rn "exploitable|open DoS|advisory|GO-2026|not affected|unaffected|bump when" \
+grep -rEn "exploitable|open DoS|advisory|GO-2026|not affected|unaffected|bump when" \
   apps/eth-signer-mcp/ --include="*.md" --include="*.go"
 ```
 
@@ -161,6 +161,7 @@ Findings:
 - `cmd/eth-signer-mcp/main.go:200`: comment reads "TOCTOU advisory: applyPermChecks uses os.Stat; the actual file reads happen" — this refers to a POSIX TOCTOU concern about permission checks, not a go-ethereum advisory. Not a false advisory claim. No change needed.
 - `docs/mcp-sdk-spike.md:80`: "DoS hygiene" in context of session timeout — not an advisory claim. No change needed.
 - `README.md:259`: "`govulncheck ./...` runs in CI (workflow from issue 1.2) against all pinned dependencies on every push." — only the verified not-affected fact and govulncheck-in-CI statement. Permitted. ✅
+- `docs/demo.md`: no hits. ✅
 
 **Result:** No manual advisory claims found in shipped docs or code comments. Sweep clean. ✅
 

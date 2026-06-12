@@ -169,6 +169,11 @@ func TestSigner_NonKDFOverhead_Light(t *testing.T) {
 	// inflate the delta under concurrent-package load.
 	s := newBenchSigner(t, keystorePath, passwordPath)
 
+	// Guard against a phantom pass if the iteration constant is accidentally zero.
+	if overheadIterations == 0 {
+		t.Fatal("overheadIterations is 0: timing loop would be a phantom pass")
+	}
+
 	// Force a GC collection before the timing loop to reduce GC-pause variance
 	// from allocations made during test setup (a known source of delta spikes).
 	runtime.GC()
@@ -188,7 +193,10 @@ func TestSigner_NonKDFOverhead_Light(t *testing.T) {
 		medTotal, medKDF, delta)
 
 	if delta < 0 {
-		t.Logf("WARNING: negative delta (%v) — unexpected; KDF measurement may be slower than total", delta)
+		// Negative delta is measurement noise (KDF measurement landed slightly
+		// slower than total). Not a failure — median over 7 iterations smooths
+		// this out in practice. Log it plainly without alarming wording.
+		t.Logf("measurement noise: negative delta (%v) — KDF median exceeded total median; not a failure", delta)
 	}
 
 	const limit = 10 * time.Millisecond
@@ -243,18 +251,23 @@ func TestSigner_NonKDFOverhead_Standard(t *testing.T) {
 	// from allocations made during test setup.
 	runtime.GC()
 
+	// Guard against a phantom pass if the iteration constant is accidentally zero.
+	if overheadIterations == 0 {
+		t.Fatal("overheadIterations is 0: timing loop would be a phantom pass")
+	}
+
 	// Pin the goroutine to one OS thread for the duration of the timing loop.
 	// This prevents other goroutines (e.g. from concurrently running test packages)
 	// from stealing CPU time between the KDF completion and the end of SignTransaction,
 	// which is the narrow non-KDF window where preemption inflates the delta.
 	runtime.LockOSThread()
+	defer runtime.UnlockOSThread() // ensures unlock on all paths, including t.Fatalf inside the loop
 	var totalTimes, kdfTimes []time.Duration
 	for i := 0; i < overheadIterations; i++ {
 		// Measure total FIRST, then KDF, to avoid ordering bias (see Light test comment).
 		totalTimes = append(totalTimes, measureSignTime(t, s))
 		kdfTimes = append(kdfTimes, measureKDFTime(t, keystoreJSON, password))
 	}
-	runtime.UnlockOSThread()
 
 	medTotal := medianDuration(totalTimes)
 	medKDF := medianDuration(kdfTimes)
@@ -264,7 +277,10 @@ func TestSigner_NonKDFOverhead_Standard(t *testing.T) {
 		medTotal, medKDF, delta)
 
 	if delta < 0 {
-		t.Logf("WARNING: negative delta (%v) — unexpected; KDF measurement may be slower than total", delta)
+		// Negative delta is measurement noise (KDF measurement landed slightly
+		// slower than total). Not a failure — median over 7 iterations smooths
+		// this out in practice. Log it plainly without alarming wording.
+		t.Logf("measurement noise: negative delta (%v) — KDF median exceeded total median; not a failure", delta)
 	}
 
 	const limit = 10 * time.Millisecond
@@ -283,6 +299,11 @@ func TestSigner_NonKDFOverhead_Standard(t *testing.T) {
 // The 200 ms bound is therefore generous on any developer-class machine.
 func TestSigner_ColdStart_Light(t *testing.T) {
 	t.Parallel()
+
+	// Guard against a phantom pass if the iteration constant is accidentally zero.
+	if coldStartIterations == 0 {
+		t.Fatal("coldStartIterations is 0: timing loop would be a phantom pass")
+	}
 
 	keystorePath := testdataFile(t, "keystore-light.json")
 	passwordPath := testdataFile(t, "password.txt")
@@ -305,19 +326,23 @@ func TestSigner_ColdStart_Light(t *testing.T) {
 }
 
 // TestSigner_ColdStart_Standard asserts the same < 200 ms cold-start bound against
-// the standard-scrypt fixture (N=262144). Skipped under -short for structural
-// consistency with the other standard-scrypt tests; construction itself has no KDF
-// cost so the timing is identical to the light case in practice.
+// the standard-scrypt fixture (N=262144).
+//
+// No testing.Short() guard: construction has no KDF cost (I/O + JSON parse only,
+// ~20–70 µs per ADR-010 measurements). The "standard-scrypt" label refers to the
+// fixture file's KDF parameters, not the construction operation being measured here.
 //
 // NOTE: This test is NOT t.Parallel() — consistent with TestSigner_NonKDFOverhead_Standard.
 func TestSigner_ColdStart_Standard(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping standard-scrypt cold-start test under -short")
-	}
 	// NOT t.Parallel() — consistent with NonKDFOverhead_Standard.
 
 	keystorePath := testdataFile(t, "keystore-standard.json")
 	passwordPath := testdataFile(t, "password.txt")
+
+	// Guard against a phantom pass if the iteration constant is accidentally zero.
+	if coldStartIterations == 0 {
+		t.Fatal("coldStartIterations is 0: timing loop would be a phantom pass")
+	}
 
 	// GC before the loop to reduce GC-pause variance.
 	runtime.GC()
