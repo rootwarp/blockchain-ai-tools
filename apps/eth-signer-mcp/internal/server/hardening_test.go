@@ -361,10 +361,11 @@ func TestHardeningMatrix_Auth_Returns401_SigningNeverRan(t *testing.T) {
 // TestHardeningMatrix_BodyCap_OversizedRejected re-asserts the 1 MiB body cap
 // inside the hardening matrix so the matrix is complete on its own.
 //
-// A >1 MiB syntactically valid JSON body (oversized via a "_pad" field, so the
-// rejection is attributable to the byte cap and not to a JSON-syntax failure) is
-// sent with a VALID bearer token.  The SDK handler receives the request but the
-// body read triggers MaxBytesReader, causing json.Decoder to fail.
+// A schema-valid >1 MiB sign_transaction body (oversized via the data field,
+// so the rejection is attributable to the byte cap and not to a JSON-syntax failure
+// or an additionalProperties violation) is sent with a VALID bearer token.  The SDK
+// handler receives the request but the body read triggers MaxBytesReader, causing
+// json.Decoder to fail.
 //
 // SDK v1.6.1 observed behavior (pinned):
 //
@@ -499,7 +500,7 @@ func TestHardeningMatrix_PipelineOrder_OversizedBadToken(t *testing.T) {
 	addr := waitReady(t, readyCh, 5*time.Second)
 
 	// Oversized body: same schema-valid construction as (d) body-cap test.
-	// oversizedSignTxBody uses the data field for bulk (≈1.14 MiB), no _pad field.
+	// oversizedSignTxBody uses the data field for bulk (≈1.14 MiB); no extra fields.
 	req, err := http.NewRequestWithContext(context.Background(),
 		http.MethodPost,
 		fmt.Sprintf("http://%s/mcp", addr.String()),

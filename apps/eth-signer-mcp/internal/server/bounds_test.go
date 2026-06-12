@@ -317,7 +317,7 @@ func serverHealthCheck(t *testing.T, addr net.Addr, token string) {
 // PASS (all required TxRequest fields present, no unknown fields) and the stub
 // handler would be called — making toolCalled > 0 a real assertion.
 //
-// Using an unknown _pad field was VACUOUS: additionalProperties:false causes schema
+// Using an unknown extra field was VACUOUS: additionalProperties:false causes schema
 // validation to fail before handler dispatch, keeping toolCalled=0 regardless of
 // whether the body cap fires — the seam would prove nothing about the cap.
 func oversizedSignTxBody() string {
@@ -335,8 +335,9 @@ func oversizedSignTxBody() string {
 // TestMaxBytesHandler_OversizedBodyRejected verifies that a request body > 1 MiB
 // is rejected BEFORE the MCP/SDK handler processes it.
 //
-// The body is a syntactically valid JSON-RPC frame with an oversized "_pad" field
-// so the rejection is attributable to the byte cap, not a JSON syntax error.
+// The body is a schema-valid JSON-RPC frame with the oversized payload in the data
+// field, so the rejection is attributable to the byte cap and not to a JSON syntax
+// error or an additionalProperties violation.
 //
 // SDK v1.6.1 observed rejection behavior (pinned):
 //   - MaxBytesReader wraps r.Body; when the SDK's json.Decoder reads past 1 MiB,
@@ -372,7 +373,7 @@ func TestMaxBytesHandler_OversizedBodyRejected(t *testing.T) {
 
 	// Build a schema-valid JSON-RPC frame whose body exceeds 1 MiB.
 	// oversizedSignTxBody uses the data field for bulk (≈1.14 MiB), keeping all
-	// arguments within the TxRequest schema (no unknown fields, no _pad).
+	// arguments within the TxRequest schema (no unknown fields).
 	// This makes the seam LIVE: schema-validation passes if the cap is bypassed,
 	// so toolCallCount would actually increment if the handler were reached.
 	body := oversizedSignTxBody()
