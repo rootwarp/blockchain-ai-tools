@@ -8,14 +8,14 @@
 #   4. Reads the bound host:port from the server's startup stderr (no sleeps on the happy path).
 #   5. Calls: initialize, tools/list, get_address, sign_transaction (bearer in every request).
 #   6. Asserts the returned rawTransaction is byte-equal to the committed golden vector.
-#   7. Demonstrates: missing bearer → 401; forged Host header → 403.
+#   7. Demonstrates: missing bearer → 401; wrong bearer → 401; forged Host header → 403.
 #   8. Kills the server; removes the throwaway token file; exits 0.
 #
 # Usage:
 #   scripts/demo/http-demo.sh [--no-build]
 #
 # Requirements:
-#   curl, python3 (JSON extraction), and a POSIX shell.
+#   curl, python3 (JSON extraction), openssl (token generation), and a POSIX shell.
 #
 # Security notes:
 #   - The throwaway token file is created outside the repo tree via mktemp.
@@ -80,17 +80,23 @@ chmod 600 "$TOKEN_FILE"
 openssl rand -hex 32 > "$TOKEN_FILE"
 TOKEN="$(cat "$TOKEN_FILE")"  # read token for use in headers (never echoed)
 
-# Cleanup trap: kill the server (if still running) and remove the token file.
-# The SERVER_PID variable is set after the server starts.
+# ── Cleanup trap ──────────────────────────────────────────────────────────────
+# SERVER_PID and STDERR_FILE are declared here (before the trap registration) so
+# cleanup() can always `rm -f` them even if they were never assigned — an empty
+# string makes rm -f a safe no-op.
 SERVER_PID=""
+STDERR_FILE=""
+
 cleanup() {
   if [ -n "$SERVER_PID" ]; then
     kill "$SERVER_PID" 2>/dev/null || true
     wait "$SERVER_PID" 2>/dev/null || true
   fi
   rm -f "$TOKEN_FILE"
+  rm -f "$STDERR_FILE"
 }
-trap cleanup EXIT INT TERM
+# EXIT only — avoids double-fire: the shell delivers EXIT on signal-caused exit too.
+trap cleanup EXIT
 
 # ── Start the server ─────────────────────────────────────────────────────────
 # Capture stderr to a temp file so we can scrape the bound address without
@@ -116,8 +122,13 @@ while [ $I -lt 100 ]; do
   sleep 0.1
   I=$((I + 1))
 done
-rm -f "$STDERR_FILE"
-[ -n "$ADDR" ] || die "server did not print 'listening on' within 10 s"
+# On failure: emit the captured startup stderr for diagnostics BEFORE dying.
+# STDERR_FILE is cleaned up by the EXIT trap (not here), so it is available here.
+if [ -z "$ADDR" ]; then
+  echo "--- server startup stderr (diagnostics) ---" >&2
+  cat "$STDERR_FILE" >&2
+  die "server did not print 'listening on' within 10 s"
+fi
 ok "server bound at http://$ADDR"
 
 # Verify the server is still running.
@@ -125,55 +136,55 @@ kill -0 "$SERVER_PID" 2>/dev/null || die "server process exited prematurely"
 
 MCP_URL="http://$ADDR/mcp"
 
-# Helper: POST to MCP and return the SSE data line (extracts 'data: {...}' content).
+# Helper: POST to MCP and return the SSE response.
 # Args: request_body [session_id]
+# Uses set -- to build the optional session-id header without word-splitting.
 mcp_call() {
   REQ_BODY="$1"
   SID="${2:-}"
-  EXTRA_HEADERS=""
   if [ -n "$SID" ]; then
-    EXTRA_HEADERS="-H Mcp-Session-Id:$SID"
+    set -- -H "Mcp-Session-Id: $SID"
+  else
+    set --
   fi
-  # shellcheck disable=SC2086
-  RESP="$(curl -s \
+  curl -s \
     -X POST "$MCP_URL" \
     -H "Content-Type: application/json" \
     -H "Accept: application/json, text/event-stream" \
     -H "Authorization: Bearer $TOKEN" \
-    $EXTRA_HEADERS \
+    "$@" \
     -d "$REQ_BODY" \
-    --max-time 30)"
-  echo "$RESP"
+    --max-time 30
 }
 
 # Helper: extract rawTransaction from a structuredContent SSE data response.
+# JSON data is passed via the MCP_DATA env var; the quoted heredoc (<<'EOF')
+# prevents shell expansion of the Python source.
 extract_raw_tx() {
   DATA_LINE="$(echo "$1" | grep '^data: ' | sed 's/^data: //')"
-  python3 -c "
-import json, sys
-d = json.loads(sys.stdin.read())
+  MCP_DATA="$DATA_LINE" python3 <<'EOF'
+import json, os
+d = json.loads(os.environ['MCP_DATA'])
 sc = d.get('result', {}).get('structuredContent', {})
 print(sc.get('rawTransaction', ''))
-" <<EOF
-$DATA_LINE
 EOF
 }
 
-# Helper: extract field from structuredContent
+# Helper: extract a named field from structuredContent.
+# The field name is passed via sys.argv[1] (not interpolated into Python source).
+# JSON data is passed via the MCP_DATA env var; the quoted heredoc (<<'EOF')
+# prevents shell expansion of the Python source.
 extract_sc_field() {
   DATA_LINE="$(echo "$1" | grep '^data: ' | sed 's/^data: //')"
-  FIELD="$2"
-  python3 -c "
-import json, sys
-d = json.loads(sys.stdin.read())
+  MCP_DATA="$DATA_LINE" python3 - "$2" <<'EOF'
+import json, os, sys
+d = json.loads(os.environ['MCP_DATA'])
 sc = d.get('result', {}).get('structuredContent', {})
-print(sc.get('$FIELD', ''))
-" <<EOF
-$DATA_LINE
+print(sc.get(sys.argv[1], ''))
 EOF
 }
 
-# Helper: extract HTTP status from raw curl -si output
+# Helper: extract HTTP status code from raw curl -si output.
 http_status() {
   echo "$1" | head -1 | awk '{print $2}'
 }
@@ -190,7 +201,9 @@ INIT_RESP="$(curl -si \
 INIT_STATUS="$(http_status "$INIT_RESP")"
 [ "$INIT_STATUS" = "200" ] || die "initialize: expected HTTP 200, got $INIT_STATUS"
 
-SESSION_ID="$(echo "$INIT_RESP" | grep -i "^mcp-session-id:" | sed 's/.*Mcp-Session-Id: //' | tr -d '\r')"
+# Case-insensitive header extraction: strip "HeaderName: " using [^:]* pattern so
+# the sed expression is independent of the actual capitalisation the server sends.
+SESSION_ID="$(echo "$INIT_RESP" | grep -i "^mcp-session-id:" | sed 's/^[^:]*:[[:space:]]*//' | tr -d '\r')"
 [ -n "$SESSION_ID" ] || die "initialize: no Mcp-Session-Id header in response"
 ok "initialized; session=$SESSION_ID"
 

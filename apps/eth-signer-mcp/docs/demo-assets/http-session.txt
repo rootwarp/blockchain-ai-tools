@@ -2,7 +2,10 @@ HTTP demo session transcript — eth-signer-mcp Issue 4.1
 Captured: 2026-06-12   Keystore: keystore-light.json (light-scrypt, N=4096, ~50 ms)
 Decoder:  ethers v6 (cast not available on this machine; see vectors/cast-version.txt)
 Scrubbing: bearer token never appears in output or server logs; no absolute home paths
-           (relative paths used). Ephemeral port (58526) is local to this run.
+           (relative paths used). Ephemeral ports are local to each run.
+Note: the SCRIPT OUTPUT section is from the original demo run (session T36SQD3MNIDWOGLSR5ZNFSTZBV,
+      port 58526). The SERVER STDERR section was re-captured on a verification run (session
+      R6YWJN5S3MBY2KZ6H2MOQEWN5T, port 58927) to ensure all log lines are present and accurate.
 
 === COMMAND ===
 
@@ -39,23 +42,24 @@ Scrubbing: bearer token never appears in output or server logs; no absolute home
 
 === SERVER STDERR (JSON structured logs) ===
 
-{"time":"2026-06-12T18:44:06.987945+09:00","level":"INFO","msg":"eth-signer-mcp starting","log_level":"info"}
-{"time":"2026-06-12T18:44:06.988075+09:00","level":"WARN","msg":"file is group/world accessible; consider chmod 600 (use --strict-perms to refuse)","path":"apps/eth-signer-mcp/internal/signing/testdata/keystore-light.json"}
-{"time":"2026-06-12T18:44:06.988089+09:00","level":"WARN","msg":"file is group/world accessible; consider chmod 600 (use --strict-perms to refuse)","path":"apps/eth-signer-mcp/internal/signing/testdata/password.txt"}
-{"time":"2026-06-12T18:44:06.988158+09:00","level":"INFO","msg":"keystore loaded","address":"0x9858EfFD232B4033E47d90003D41EC34EcaEda94"}
-eth-signer-mcp listening on 127.0.0.1:58526
-{"time":"2026-06-12T18:44:06.988645+09:00","level":"INFO","msg":"http server listening","addr":"127.0.0.1:58526"}
-{"time":"2026-06-12T18:44:08.037255+09:00","level":"INFO","msg":"server connecting"}
-{"time":"2026-06-12T18:44:08.037317+09:00","level":"INFO","msg":"server session connected","session_id":"T36SQD3MNIDWOGLSR5ZNFSTZBV"}
-{"time":"2026-06-12T18:44:08.038011+09:00","level":"INFO","msg":"http request","request_id":"cccf68eb-caaa-48ea-97af-6bb0430bf797","remote_addr":"127.0.0.1:58527","status":200,"latency_ms":0}
-{"time":"2026-06-12T18:44:08.067576+09:00","level":"INFO","msg":"http request","request_id":"b24024d8-f3b3-4af9-8f4d-d10d96405eca","remote_addr":"127.0.0.1:58528","status":202,"latency_ms":0}
-{"time":"2026-06-12T18:44:08.067645+09:00","level":"INFO","msg":"session initialized"}
-{"time":"2026-06-12T18:44:08.076974+09:00","level":"INFO","msg":"http request","request_id":"46b5d4c3-a3ed-4abf-8c92-c3091384d687","remote_addr":"127.0.0.1:58529","status":200,"latency_ms":0}
-{"time":"2026-06-12T18:44:08.110847+09:00","level":"INFO","msg":"http request","request_id":"3e03acd9-15c4-46eb-895f-99ddfe49832a","remote_addr":"127.0.0.1:58530","status":200,"latency_ms":0}
-{"time":"2026-06-12T18:44:08.159696+09:00","level":"INFO","msg":"signing: transaction signed successfully","request_id":"cccf68eb-caaa-48ea-97af-6bb0430bf797","tx_hash":"0xfa41dd66cc50da67d7e59d1b7277e794cbe69d5b10deb88a9ca2930fae65a239","chain_id":1,"nonce":0}
-{"time":"2026-06-12T18:44:08.159829+09:00","level":"INFO","msg":"http request","request_id":"24747e11-f4c9-4527-aeb9-97223cb5baae","remote_addr":"127.0.0.1:58531","status":200,"latency_ms":36}
-{"time":"2026-06-12T18:44:08.173526+09:00","level":"INFO","msg":"http request","request_id":"8adda3e3-265b-420b-b4af-4f70567af9a5","remote_addr":"127.0.0.1:58532","status":401,"latency_ms":0}
-{"time":"2026-06-12T18:44:08.180686+09:00","level":"INFO","msg":"http request","request_id":"e813cae3-377e-4689-8f1e-1d328f1ce2c8","remote_addr":"127.0.0.1:58533","status":403,"latency_ms":0}
+{"time":"2026-06-12T19:16:38.234480+09:00","level":"INFO","msg":"eth-signer-mcp starting","log_level":"info"}
+{"time":"2026-06-12T19:16:38.234602+09:00","level":"WARN","msg":"file is group/world accessible; consider chmod 600 (use --strict-perms to refuse)","path":"apps/eth-signer-mcp/internal/signing/testdata/keystore-light.json"}
+{"time":"2026-06-12T19:16:38.234615+09:00","level":"WARN","msg":"file is group/world accessible; consider chmod 600 (use --strict-perms to refuse)","path":"apps/eth-signer-mcp/internal/signing/testdata/password.txt"}
+{"time":"2026-06-12T19:16:38.234686+09:00","level":"INFO","msg":"keystore loaded","address":"0x9858EfFD232B4033E47d90003D41EC34EcaEda94"}
+eth-signer-mcp listening on 127.0.0.1:58927
+{"time":"2026-06-12T19:16:38.235168+09:00","level":"INFO","msg":"http server listening","addr":"127.0.0.1:58927"}
+{"time":"2026-06-12T19:16:38.364244+09:00","level":"INFO","msg":"server connecting"}
+{"time":"2026-06-12T19:16:38.364276+09:00","level":"INFO","msg":"server session connected","session_id":"R6YWJN5S3MBY2KZ6H2MOQEWN5T"}
+{"time":"2026-06-12T19:16:38.364619+09:00","level":"INFO","msg":"http request","request_id":"b0511fa6-6cc9-4ec4-85ae-e2899c86b5b1","remote_addr":"127.0.0.1:58928","status":200,"latency_ms":0}
+{"time":"2026-06-12T19:16:38.490138+09:00","level":"INFO","msg":"http request","request_id":"36cfce25-b36c-4dba-8aff-e56770f1ee96","remote_addr":"127.0.0.1:58929","status":202,"latency_ms":0}
+{"time":"2026-06-12T19:16:38.490200+09:00","level":"INFO","msg":"session initialized"}
+{"time":"2026-06-12T19:16:38.611604+09:00","level":"INFO","msg":"http request","request_id":"57ad11cb-c088-4f3b-b1e1-f04bc1b4683b","remote_addr":"127.0.0.1:58930","status":200,"latency_ms":0}
+{"time":"2026-06-12T19:16:38.736661+09:00","level":"INFO","msg":"http request","request_id":"c9ba2c9a-6e7d-4714-9315-5f10860fac7f","remote_addr":"127.0.0.1:58931","status":200,"latency_ms":0}
+{"time":"2026-06-12T19:16:38.921477+09:00","level":"INFO","msg":"signing: transaction signed successfully","request_id":"b0511fa6-6cc9-4ec4-85ae-e2899c86b5b1","tx_hash":"0xfa41dd66cc50da67d7e59d1b7277e794cbe69d5b10deb88a9ca2930fae65a239","chain_id":1,"nonce":0}
+{"time":"2026-06-12T19:16:38.921649+09:00","level":"INFO","msg":"http request","request_id":"27ad1c20-d667-46ba-8a2e-04bb95d5dcd4","remote_addr":"127.0.0.1:58932","status":200,"latency_ms":54}
+{"time":"2026-06-12T19:16:39.277787+09:00","level":"INFO","msg":"http request","request_id":"bc989557-adbd-4e93-9195-66ba8da00c3b","remote_addr":"127.0.0.1:58933","status":401,"latency_ms":0}
+{"time":"2026-06-12T19:16:39.424310+09:00","level":"INFO","msg":"http request","request_id":"f8a85285-b18c-43aa-8250-1b0ec1af5113","remote_addr":"127.0.0.1:58934","status":401,"latency_ms":0}
+{"time":"2026-06-12T19:16:39.567327+09:00","level":"INFO","msg":"http request","request_id":"bce3c8cf-231c-4974-a8b1-db93dbcc13fb","remote_addr":"127.0.0.1:58935","status":403,"latency_ms":0}
 
 === RAW CURL OUTPUT (tool calls — illustrative, condensed) ===
 
@@ -131,8 +135,14 @@ Same raw transaction as the stdio demo; output is byte-identical (ADR-002 transp
   also never written to any file inside the repo tree).
 - The signing audit log line (level INFO, msg "signing: transaction signed successfully")
   contains: request_id, tx_hash, chain_id, nonce. No key material, no tx body, no password.
-- The request_id in the audit line matches the request_id in the corresponding http request
-  log line (reqlog + audit correlation confirmed).
+- The signing audit log line carries the request_id of the INITIALIZE HTTP request
+  (b0511fa6 here, the first reqlog line with status 200). The go-sdk's
+  StreamableHTTPHandler routes tool calls through the session context established by
+  the initialize call, so all tool handlers share that session's request_id. The
+  sign_transaction POST's own reqlog line (27ad1c20, status 200, latency 54 ms) has a
+  different request_id — that is the transport-layer request, not the tool-handler
+  context. Correct correlation: initialize reqlog request_id == signing audit
+  request_id (this property is verified by parity_transport_test.go).
 - The transaction is NOT broadcast. The binary makes no outbound network calls (ADR-007).
 - The WARN lines are expected for the committed keystore fixtures (chmod 644 from git).
   In production: chmod 600 your keystore and password files.
