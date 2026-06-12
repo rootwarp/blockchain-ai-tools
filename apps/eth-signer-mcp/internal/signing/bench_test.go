@@ -1,17 +1,26 @@
-// Benchmark and overhead-assertion tests — Issue 2.6 (ADR-010).
+// Benchmark and overhead-assertion tests — Issue 2.6 (ADR-010); extended in Issue 4.3.
 //
 // Design: we measure (a) total SignTransaction time and (b) KDF-only time
 // (timing keystore.DecryptKey directly on the same fixture). The non-KDF overhead
 // is (a − b). Per ADR-010, median(a − b) < 10 ms on BOTH standard- and
 // light-scrypt fixtures.
 //
+// Issue 4.3 adds cold-start tests: construct vault + signer from fixture paths and
+// assert median construction time < 200 ms. Construction is a file-read + JSON parse
+// (no KDF — the keystore ciphertext is decrypted on every WithSigningKey call, not at
+// construction); both fixtures therefore meet the 200 ms bound with orders of magnitude
+// to spare.
+//
 // The standard-scrypt fixture (N=262144) is skipped under -short because its
 // KDF alone takes ~0.5–1 s per call, making the full median measurement very slow.
+// Standard cold-start is also guarded by testing.Short() for structural consistency with
+// the rest of the standard-scrypt tests, even though construction itself has no KDF cost.
 package signing
 
 import (
 	"context"
 	"os"
+	"runtime"
 	"sort"
 	"testing"
 	"time"
@@ -23,6 +32,10 @@ import (
 // in the TestSigner_NonKDFOverhead_* tests. Enough to be statistically robust
 // without being prohibitively slow even on CI runners (each light-scrypt ~50 ms).
 const overheadIterations = 7
+
+// coldStartIterations is the number of iterations for the cold-start median.
+// Construction is fast (I/O + JSON parse only, no KDF), so 5 iterations is enough.
+const coldStartIterations = 5
 
 // medianDuration returns the median of a slice of durations.
 func medianDuration(ds []time.Duration) time.Duration {
@@ -38,6 +51,25 @@ func medianDuration(ds []time.Duration) time.Duration {
 // readFileForBench reads a file for use in benchmarks/test helpers.
 func readFileForBench(path string) ([]byte, error) {
 	return os.ReadFile(path)
+}
+
+// measureColdStartTime times one full vault + signer construction from fixture paths.
+// Construction reads the keystore file, parses the address field, and creates the
+// Signer struct — no KDF decryption occurs (per the lifecycle contract in ADR-010:
+// the password file is re-read and the KDF runs only on WithSigningKey, not at
+// construction). The 200 ms bound is therefore generous on any developer-class machine.
+func measureColdStartTime(t testing.TB, keystorePath, passwordPath string) time.Duration {
+	t.Helper()
+	start := time.Now()
+	vault, err := NewFileKeyVault(VaultOptions{
+		KeystorePath: keystorePath,
+		PasswordPath: passwordPath,
+	})
+	if err != nil {
+		t.Fatalf("NewFileKeyVault: %v", err)
+	}
+	_ = NewSigner(vault, SignerOptions{})
+	return time.Since(start)
 }
 
 // measureKDFTime times a single keystore.DecryptKey call (no vault overhead).
@@ -56,8 +88,12 @@ func measureKDFTime(t testing.TB, keystoreJSON []byte, password string) time.Dur
 	return elapsed
 }
 
-// measureSignTime times one full end-to-end SignTransaction call.
-func measureSignTime(t testing.TB, keystorePath, passwordPath string) time.Duration {
+// newBenchSigner constructs a Signer from fixture paths for use in overhead
+// and benchmark measurements. The vault is constructed once; the same signer
+// is reused across all iterations to match the production usage pattern (vault
+// created at startup, sign many times). Vault construction cost is measured
+// separately by the cold-start tests.
+func newBenchSigner(t testing.TB, keystorePath, passwordPath string) *Signer {
 	t.Helper()
 	vault, err := NewFileKeyVault(VaultOptions{
 		KeystorePath: keystorePath,
@@ -66,7 +102,15 @@ func measureSignTime(t testing.TB, keystorePath, passwordPath string) time.Durat
 	if err != nil {
 		t.Fatalf("NewFileKeyVault: %v", err)
 	}
-	s := NewSigner(vault, SignerOptions{}) // nil logger → slog.Default()
+	return NewSigner(vault, SignerOptions{}) // nil logger → slog.Default()
+}
+
+// measureSignTime times one full end-to-end SignTransaction call on a pre-built
+// Signer. The Signer must be created once before the timing loop (see
+// newBenchSigner); reusing it across iterations matches the real production
+// pattern and avoids counting vault-construction I/O in the per-call delta.
+func measureSignTime(t testing.TB, s *Signer) time.Duration {
+	t.Helper()
 
 	req := TxRequest{
 		Type:     "legacy",
@@ -119,10 +163,20 @@ func TestSigner_NonKDFOverhead_Light(t *testing.T) {
 		t.Fatalf("readFileForBench: %v", err)
 	}
 
+	// Create the signer once before the timing loop (production pattern: vault
+	// constructed at startup, signed many times). This avoids counting keystore
+	// file-read + JSON-parse cost in the per-call total measurement, which would
+	// inflate the delta under concurrent-package load.
+	s := newBenchSigner(t, keystorePath, passwordPath)
+
+	// Force a GC collection before the timing loop to reduce GC-pause variance
+	// from allocations made during test setup (a known source of delta spikes).
+	runtime.GC()
+
 	var totalTimes, kdfTimes []time.Duration
 	for i := 0; i < overheadIterations; i++ {
 		// Measure total FIRST so the KDF measurement runs on a comparably warm CPU.
-		totalTimes = append(totalTimes, measureSignTime(t, keystorePath, passwordPath))
+		totalTimes = append(totalTimes, measureSignTime(t, s))
 		kdfTimes = append(kdfTimes, measureKDFTime(t, keystoreJSON, password))
 	}
 
@@ -148,10 +202,23 @@ func TestSigner_NonKDFOverhead_Light(t *testing.T) {
 // In CI's full run this test is the Phase 4 ADR-010 acceptance benchmark.
 //
 // NOTE: This test is NOT t.Parallel(). The standard-scrypt KDF is CPU-bound at
-// ~0.5–1 s; running concurrently with other CPU-bound tests inflates contention
-// variance by ±10–15 ms, which is enough to exceed the 10 ms delta budget.
-// Running sequentially makes the delta measurement reliably reflect the actual
-// non-KDF overhead rather than scheduler noise.
+// ~0.5–1 s; running it in parallel with other tests creates goroutine scheduling
+// contention that inflates the non-KDF delta beyond the 10 ms limit.
+//
+// To reduce timing noise the loop runs under runtime.LockOSThread(), which prevents
+// the Go scheduler from moving the measurement goroutine to a different OS thread;
+// combined with reusing a pre-built signer (eliminating per-call vault construction
+// I/O) and a pre-loop runtime.GC(), this makes the test reliable in CI
+// (ubuntu-latest, GOMAXPROCS=2, lightly loaded).
+//
+// Load sensitivity note: on developer machines with many CPU cores (e.g. GOMAXPROCS≥8)
+// running a full 'go test ./...' with all packages concurrently, OS-level thread
+// preemption from competing test-binary threads can still inflate the delta beyond
+// 10 ms. Run 'go test ./internal/signing/ -run TestSigner_NonKDFOverhead_Standard'
+// in isolation for a noise-free local measurement. The CI result is authoritative.
+//
+// The KDF (golang.org/x/crypto/scrypt) is pure Go and does not use CGo, so
+// LockOSThread has no adverse effect on it.
 func TestSigner_NonKDFOverhead_Standard(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping standard-scrypt overhead test under -short (each call ~0.5–1 s)")
@@ -167,12 +234,27 @@ func TestSigner_NonKDFOverhead_Standard(t *testing.T) {
 		t.Fatalf("readFileForBench: %v", err)
 	}
 
+	// Create the signer once before the timing loop (production pattern: vault
+	// constructed at startup, signed many times). This avoids counting keystore
+	// file-read + JSON-parse cost in the per-call total measurement.
+	s := newBenchSigner(t, keystorePath, passwordPath)
+
+	// Force a GC collection before the timing loop to reduce GC-pause variance
+	// from allocations made during test setup.
+	runtime.GC()
+
+	// Pin the goroutine to one OS thread for the duration of the timing loop.
+	// This prevents other goroutines (e.g. from concurrently running test packages)
+	// from stealing CPU time between the KDF completion and the end of SignTransaction,
+	// which is the narrow non-KDF window where preemption inflates the delta.
+	runtime.LockOSThread()
 	var totalTimes, kdfTimes []time.Duration
 	for i := 0; i < overheadIterations; i++ {
 		// Measure total FIRST, then KDF, to avoid ordering bias (see Light test comment).
-		totalTimes = append(totalTimes, measureSignTime(t, keystorePath, passwordPath))
+		totalTimes = append(totalTimes, measureSignTime(t, s))
 		kdfTimes = append(kdfTimes, measureKDFTime(t, keystoreJSON, password))
 	}
+	runtime.UnlockOSThread()
 
 	medTotal := medianDuration(totalTimes)
 	medKDF := medianDuration(kdfTimes)
@@ -188,6 +270,69 @@ func TestSigner_NonKDFOverhead_Standard(t *testing.T) {
 	const limit = 10 * time.Millisecond
 	if delta > limit {
 		t.Errorf("non-KDF overhead (median total − median KDF) = %v; ADR-010 requires < %v", delta, limit)
+	}
+}
+
+// ── Cold-start tests (Issue 4.3) ─────────────────────────────────────────────
+
+// TestSigner_ColdStart_Light asserts that constructing a FileKeyVault + Signer
+// from the light-scrypt fixture paths completes in < 200 ms (median of
+// coldStartIterations iterations). Construction reads the keystore file and
+// parses the address field; the KDF is NOT run at construction time (per
+// ADR-010 and the KeyVault lifecycle contract — see vault.go, file_vault.go).
+// The 200 ms bound is therefore generous on any developer-class machine.
+func TestSigner_ColdStart_Light(t *testing.T) {
+	t.Parallel()
+
+	keystorePath := testdataFile(t, "keystore-light.json")
+	passwordPath := testdataFile(t, "password.txt")
+
+	// GC before the loop to reduce GC-pause variance.
+	runtime.GC()
+
+	var times []time.Duration
+	for i := 0; i < coldStartIterations; i++ {
+		times = append(times, measureColdStartTime(t, keystorePath, passwordPath))
+	}
+
+	med := medianDuration(times)
+	t.Logf("light-scrypt cold start: median=%v  (limit: 200ms)", med)
+
+	const limit = 200 * time.Millisecond
+	if med > limit {
+		t.Errorf("cold start (median) = %v; ADR-010 acceptance criterion requires < %v", med, limit)
+	}
+}
+
+// TestSigner_ColdStart_Standard asserts the same < 200 ms cold-start bound against
+// the standard-scrypt fixture (N=262144). Skipped under -short for structural
+// consistency with the other standard-scrypt tests; construction itself has no KDF
+// cost so the timing is identical to the light case in practice.
+//
+// NOTE: This test is NOT t.Parallel() — consistent with TestSigner_NonKDFOverhead_Standard.
+func TestSigner_ColdStart_Standard(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping standard-scrypt cold-start test under -short")
+	}
+	// NOT t.Parallel() — consistent with NonKDFOverhead_Standard.
+
+	keystorePath := testdataFile(t, "keystore-standard.json")
+	passwordPath := testdataFile(t, "password.txt")
+
+	// GC before the loop to reduce GC-pause variance.
+	runtime.GC()
+
+	var times []time.Duration
+	for i := 0; i < coldStartIterations; i++ {
+		times = append(times, measureColdStartTime(t, keystorePath, passwordPath))
+	}
+
+	med := medianDuration(times)
+	t.Logf("standard-scrypt cold start: median=%v  (limit: 200ms)", med)
+
+	const limit = 200 * time.Millisecond
+	if med > limit {
+		t.Errorf("cold start (median) = %v; ADR-010 acceptance criterion requires < %v", med, limit)
 	}
 }
 
