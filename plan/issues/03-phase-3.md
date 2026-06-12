@@ -670,21 +670,21 @@ Streamable HTTP** against the light-scrypt fixture must show:
 
 **Acceptance Criteria:**
 
-- [ ] N ≥ 8 parallel `sign_transaction` calls over real Streamable
+- [x] N ≥ 8 parallel `sign_transaction` calls over real Streamable
       HTTP all succeed; every signature independently verified
       (decode, recovered sender == fixture address; golden
       byte-equality where the input matches a committed vector).
-- [ ] Instrumented vault proves max concurrent decrypts == 1 —
+- [x] Instrumented vault proves max concurrent decrypts == 1 —
       serialization asserted on instrumentation, not timing.
-- [ ] Memory bounded: structural bound via the ==1 gauge plus a
+- [x] Memory bounded: structural bound via the ==1 gauge plus a
       `ReadMemStats` sanity assertion on heap growth during the burst.
-- [ ] Test runs under `go test -race` in CI with zero race findings.
-- [ ] No cross-call bleed: responses pair with their requests; N
+- [x] Test runs under `go test -race` in CI with zero race findings.
+- [x] No cross-call bleed: responses pair with their requests; N
       distinct `request_id`s in HTTP logs; each success has its own
       correlated audit line.
-- [ ] Leak scan (raw + encoded forms) green over all captured logs and
+- [x] Leak scan (raw + encoded forms) green over all captured logs and
       response bytes from the burst.
-- [ ] The test is present, unconditioned, and green in CI — no skip
+- [x] The test is present, unconditioned, and green in CI — no skip
       path exists.
 
 **Testing Notes:**
