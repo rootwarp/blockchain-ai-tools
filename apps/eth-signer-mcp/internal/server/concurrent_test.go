@@ -46,6 +46,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -85,13 +86,16 @@ type concSignResult struct {
 // Nonce uniqueness is required across all N entries so the test can verify
 // response-to-request pairing via the decoded transaction nonce.
 //
-// Entries 0–1 match committed golden vectors exactly; goldenRawTx is set.
+// Entries 0–1 match committed golden vectors exactly; goldenRawTx is loaded
+// from the JSON files (never hardcoded) to track regenerations automatically.
 // Entries 2–9 are synthetic with nonces 100–107 (not in any golden vector).
-func concurrentSignTable() []concSignCase {
+func concurrentSignTable(t *testing.T) []concSignCase {
+	t.Helper()
 	return []concSignCase{
 		// ── Golden vector: 1559-mainnet (nonce=42) ────────────────────────────
-		// Source: internal/signing/testdata/vectors/1559-mainnet.json
-		// All tx fields match exactly; goldenRawTx == expected.raw_tx verbatim.
+		// Source: internal/signing/testdata/vectors/1559-mainnet.json.
+		// All tx fields match exactly; goldenRawTx is loaded from the file so
+		// the assertion automatically tracks vector regenerations.
 		{
 			name: "golden-1559-mainnet",
 			args: map[string]any{
@@ -105,11 +109,11 @@ func concurrentSignTable() []concSignCase {
 				"maxFeePerGas":         "30000000000",
 				"maxPriorityFeePerGas": "2000000000",
 			},
-			goldenRawTx: "0x02f878012a84773594008506fc23ac00830186a0949858effd232b4033e47d90003d41ec34ecaeda94880de0b6b3a764000084cafebabec080a09c4861a936548597508b2582117dc2603d11b53d7da9db676204df34dca5ee49a048349fb03c9991300fdb9dff1569609d0bf2e4ad94a256b4624627219b262b99",
+			goldenRawTx: loadGoldenRawTx(t, "1559-mainnet.json"),
 		},
 		// ── Golden vector: legacy-mainnet (nonce=0) ───────────────────────────
-		// Source: internal/signing/testdata/vectors/legacy-mainnet.json
-		// All tx fields match exactly; goldenRawTx == expected.raw_tx verbatim.
+		// Source: internal/signing/testdata/vectors/legacy-mainnet.json.
+		// All tx fields match exactly; goldenRawTx is loaded from the file.
 		{
 			name: "golden-legacy-mainnet",
 			args: map[string]any{
@@ -122,7 +126,7 @@ func concurrentSignTable() []concSignCase {
 				"gas":      "100000",
 				"gasPrice": "20000000000",
 			},
-			goldenRawTx: "0xf871808504a817c800830186a0949858effd232b4033e47d90003d41ec34ecaeda94880de0b6b3a764000084deadbeef26a082dc9bb5c5916b7728febf0a7269cef831012cf86eb0f2a4c69aa77ba92755dea073b452e7edc29e44a5f2b6887e90d59aec9ca1b81c858f592362e45a4e9ffcac",
+			goldenRawTx: loadGoldenRawTx(t, "legacy-mainnet.json"),
 		},
 		// ── Synthetic EIP-1559 cases (nonces 100–107) ─────────────────────────
 		// These nonces do not appear in any committed golden vector.
@@ -136,6 +140,37 @@ func concurrentSignTable() []concSignCase {
 		{name: "synthetic-1559-n106", args: concSynth1559Args("106")},
 		{name: "synthetic-1559-n107", args: concSynth1559Args("107")},
 	}
+}
+
+// loadGoldenRawTx reads the committed golden vector file and returns the
+// expected.raw_tx string.  This ensures golden values are always in sync with
+// the committed JSON — no risk of silent drift if vectors are regenerated.
+//
+// vectorFile is the bare filename (e.g. "1559-mainnet.json") under
+// internal/signing/testdata/vectors/.
+func loadGoldenRawTx(t *testing.T, vectorFile string) string {
+	t.Helper()
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatalf("loadGoldenRawTx: runtime.Caller(0) failed")
+	}
+	path := filepath.Join(filepath.Dir(thisFile), "..", "signing", "testdata", "vectors", vectorFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("loadGoldenRawTx %q: %v", vectorFile, err)
+	}
+	var v struct {
+		Expected struct {
+			RawTx string `json:"raw_tx"`
+		} `json:"expected"`
+	}
+	if jsonErr := json.Unmarshal(data, &v); jsonErr != nil {
+		t.Fatalf("loadGoldenRawTx %q: json.Unmarshal: %v", vectorFile, jsonErr)
+	}
+	if v.Expected.RawTx == "" {
+		t.Fatalf("loadGoldenRawTx %q: expected.raw_tx is empty", vectorFile)
+	}
+	return v.Expected.RawTx
 }
 
 // concSynth1559Args returns a minimal valid EIP-1559 argument map with the given
@@ -228,7 +263,9 @@ func TestConcurrentSignTransaction_SerializedDecrypts(t *testing.T) {
 	endpoint := fmt.Sprintf("http://%s", addr.String())
 
 	// ── 4. Build test table and sanity-check N ───────────────────────────────
-	table := concurrentSignTable()
+	// concurrentSignTable loads golden raw_tx values from the committed JSON files
+	// (not hardcoded) so assertions automatically track vector regenerations.
+	table := concurrentSignTable(t)
 	N := len(table)
 	if N < 8 {
 		// Structural canary: table shrinkage must fail loudly.
@@ -403,6 +440,13 @@ func TestConcurrentSignTransaction_SerializedDecrypts(t *testing.T) {
 	// recording vault's fn body (i.e. past semaphore + ctx re-check + KDF).
 	// The Phase 2 vault semaphore of 1 (task 2.2) must keep this at exactly 1.
 	//
+	// Proof chain:
+	//   The vault semaphore is a capacity-1 channel.  file_vault.go's
+	//   WithSigningKey sends on it (acquire) before calling fn and receives
+	//   (release) in a LIFO defer that fires after fn returns — the semaphore
+	//   is held across the entire fn body, which includes the KDF call.
+	//   Therefore maxActiveFn == 1 proves no two KDF allocations ever overlapped.
+	//
 	// This is an instrumentation-based assertion — never a wall-clock check.
 	// ═══════════════════════════════════════════════════════════════════════
 	maxConc := rv.maxActiveFn.Load()
@@ -540,19 +584,47 @@ func TestConcurrentSignTransaction_SerializedDecrypts(t *testing.T) {
 	}
 
 	// Collect response bytes: only rawTransaction values (no JSON wrappers).
-	// Scanning with the bearer sentinel ensures the token never appears in outputs.
-	// Key sentinel NOT used here: the fixture address legitimately appears in
-	// rawTransaction (as the RLP-encoded 'to' field) — that is expected behaviour.
 	var responseBytes bytes.Buffer
 	for _, res := range results {
 		if !res.isError {
 			responseBytes.WriteString(res.rawTx)
 		}
 	}
-	if leaked := bearerSentinel.Scan(responseBytes.Bytes()); len(leaked) > 0 {
+	respOut := responseBytes.Bytes()
+
+	// Scan response bytes with the bearer sentinel.
+	// The bearer token must never appear in signing outputs.
+	if leaked := bearerSentinel.Scan(respOut); len(leaked) > 0 {
 		// SAFETY: report form names only.
 		t.Errorf("concurrent leak-scan: bearer token found in response bytes: forms=%v "+
 			"(sentinel=%q). The bearer token must never appear in signing outputs.",
 			leaked, bearerSentinel.Name)
+	}
+
+	// Scan response bytes for the fixture private-key SCALAR specifically.
+	//
+	// The full FixtureKeySentinel includes the fixture address, which legitimately
+	// appears in rawTransaction as the RLP-encoded 'to' field — scanning the full
+	// sentinel on responses produces a false positive on the address form.
+	// Instead we build a scalar-only sentinel (raw bytes + hex/base64 forms of the
+	// 32-byte secret, WITHOUT the address forms) and scan the response bytes with it.
+	//
+	// The scalar hex is the single fixture private key disclosed in
+	// internal/signing/testdata/README.md and fixture_sentinel.go (TEST-ONLY key).
+	// It must never appear in any signed transaction output (r/s values are derived
+	// from the scalar but do not contain it; the to-field is the address, not the scalar).
+	const fixtureScalarHex = "1ab42cc412b618bdea3a599e3c9bae199ebf030895b039e9db1e30dafb12b727"
+	scalarRaw, scalarDecErr := hex.DecodeString(fixtureScalarHex)
+	if scalarDecErr != nil {
+		t.Fatalf("concurrent leak-scan: decode fixture scalar hex: %v", scalarDecErr)
+	}
+	// signing.NewSentinel registers: raw bytes, hex-lower, hex-upper, base64 forms.
+	// It does NOT register the address (that is address-derived, not the scalar itself).
+	scalarSentinel := signing.NewSentinel("fixture-private-key-scalar", scalarRaw)
+	if leaked := scalarSentinel.Scan(respOut); len(leaked) > 0 {
+		// SAFETY: report form names only, never the scalar bytes.
+		t.Errorf("concurrent leak-scan: fixture private-key scalar found in response bytes: forms=%v "+
+			"(sentinel=%q). The private-key scalar must NEVER appear in any signed output.",
+			leaked, scalarSentinel.Name)
 	}
 }
