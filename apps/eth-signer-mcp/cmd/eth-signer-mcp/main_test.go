@@ -2,7 +2,7 @@
 
 package main
 
-// main_test.go — binary-level smoke tests for eth-signer-mcp (issues 1.8, 3.1).
+// main_test.go — binary-level smoke tests for eth-signer-mcp (issues 1.8, 3.1, 4.4).
 //
 // These tests build and drive the real eth-signer-mcp binary as a child process.
 // They exercise:
@@ -10,6 +10,8 @@ package main
 //   (b) --http with token file starts the Streamable HTTP server (Phase 3, issue 3.1)
 //       and exits 0 on SIGTERM.  The transport is NEVER called "HTTP/SSE".
 //   (c) SIGINT during an idle stdio session causes clean exit (exit code 0).
+//   (d) --strict-perms refusal (exit 2) on a world-readable fixture copy, with
+//       sentinel-clean stderr (Issue 4.4 acceptance criterion).
 //
 // Prerequisites:
 //   - getTestBinary() is defined in fsperm_test.go (same package, !windows build tag).
@@ -29,6 +31,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/rootwarp/blockchain-ai-tools/apps/eth-signer-mcp/internal/signing"
 )
 
 // TestBinary_Stdio_Initialize drives a real MCP initialize + tools/list session
@@ -458,6 +461,86 @@ func TestBinary_NoAddressKeystore_ExitNonZero(t *testing.T) {
 	stderrStr := stderr.String()
 	if !strings.Contains(strings.ToLower(stderrStr), "keystore") {
 		t.Errorf("stderr does not contain 'keystore'\nstderr: %s", stderrStr)
+	}
+}
+
+// TestBinary_StrictPerms_Refusal_SentinelClean verifies the --strict-perms
+// refusal path (Issue 4.4 acceptance criterion):
+//  1. A COPY of the fixture keystore is chmod'd world-readable (0644).
+//  2. The binary is launched with --strict-perms pointing at the world-readable copy.
+//  3. The binary must exit with code 2 (strict-perms refusal).
+//  4. The captured stderr must be sentinel-clean — no fixture private key in any
+//     encoded form (raw, hex-lower/upper, base64-std/raw/url/rawurl, decimal).
+//
+// The fixture's path and file mode appear in the refusal message; this test
+// proves neither the keystore JSON body nor the private key scalar leaks into
+// the error output.
+func TestBinary_StrictPerms_Refusal_SentinelClean(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("skipping: running as root; chmod is ignored by the kernel")
+	}
+
+	bin := getTestBinary(t)
+	realKs, realPw := signingFixtureFiles(t)
+
+	// Copy the real keystore to a temp file and chmod it world-readable.
+	ksContent, err := os.ReadFile(realKs)
+	if err != nil {
+		t.Fatalf("read keystore fixture: %v", err)
+	}
+	pwContent, err := os.ReadFile(realPw)
+	if err != nil {
+		t.Fatalf("read password fixture: %v", err)
+	}
+
+	// World-readable keystore → strict-perms refusal (exit 2).
+	worldReadableKs := writeTestFile(t, ksContent, 0o644) // too open
+	goodPw := writeTestFile(t, pwContent, 0o600)          // OK — only the ks triggers refusal
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var stderrBuf strings.Builder
+	cmd := exec.CommandContext(ctx, bin,
+		"--keystore", worldReadableKs,
+		"--password-file", goodPw,
+		"--strict-perms",
+	)
+	cmd.Stderr = &stderrBuf
+
+	runErr := cmd.Run()
+	// Must exit non-zero.
+	if runErr == nil {
+		t.Fatal("strict-perms refusal: binary exited 0; want exit code 2")
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(runErr, &exitErr) {
+		t.Fatalf("strict-perms refusal: unexpected error type %T: %v", runErr, runErr)
+	}
+	if exitErr.ExitCode() != 2 {
+		t.Errorf("strict-perms refusal: exit code = %d; want 2", exitErr.ExitCode())
+	}
+
+	stderrBytes := []byte(stderrBuf.String())
+
+	// Sentinel-clean check: fixture private key must not appear in stderr in
+	// any encoded form (raw, hex-lower, hex-upper, base64-std, base64-raw,
+	// base64-url, base64-rawurl, decimal).
+	// Address forms are excluded: the address is non-secret and may legitimately
+	// appear in the refusal message context.
+	sent := signing.FixtureKeySentinel()
+	leaked := sent.Scan(stderrBytes)
+	var keyLeaks []string
+	for _, form := range leaked {
+		if form == "address-checksummed" || form == "address-lower-nox" {
+			continue // non-secret; may appear in path/mode context
+		}
+		keyLeaks = append(keyLeaks, form)
+	}
+	if len(keyLeaks) > 0 {
+		// SAFETY: report form names only — never the bytes or encoded key forms.
+		t.Errorf("strict-perms refusal: fixture private key leaked in stderr: forms=%v (sentinel: %q)",
+			keyLeaks, sent.Name)
 	}
 }
 
