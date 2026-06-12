@@ -198,7 +198,6 @@ func TestTransportParity_SignResult(t *testing.T) {
 	httpCS := sdkClient(t, testCtx, httpEndpoint, httpTokenStr) // bounds_test.go
 
 	for _, tc := range table {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			args := parityTxToArgs(tc.vector.Tx)
 
@@ -590,21 +589,27 @@ func TestTransportParity_ToolsListSchema(t *testing.T) {
 		}
 	}
 
-	// ── Teardown: SIGTERM HTTP subprocess ─────────────────────────────────────────
+	// ── Teardown: SIGTERM HTTP subprocess → assert exit 0 ─────────────────────────
 	if closeErr := httpCS.Close(); closeErr != nil {
 		t.Logf("schema parity HTTP teardown: httpCS.Close: %v (benign)", closeErr)
 	}
 	if sigErr := httpProc.cmd.Process.Signal(syscall.SIGTERM); sigErr != nil {
 		t.Logf("schema parity HTTP teardown: SIGTERM: %v", sigErr)
 	}
+	var schemaHTTPWaitErr error
 	select {
-	case <-httpProc.waitCh:
+	case schemaHTTPWaitErr = <-httpProc.waitCh:
 	case <-time.After(8 * time.Second):
-		t.Log("schema parity HTTP teardown: binary did not exit within 8s")
+		t.Fatal("schema parity HTTP teardown: binary did not exit within 8s after SIGTERM")
 	}
 	select {
 	case <-httpProc.doneCh:
 	case <-time.After(2 * time.Second):
+		t.Log("schema parity HTTP teardown: stderr scanner did not finish within 2s")
+	}
+	if schemaHTTPWaitErr != nil {
+		t.Errorf("schema parity HTTP teardown: exit error: %v; want exit 0 on SIGTERM",
+			schemaHTTPWaitErr)
 	}
 
 	// ── Leak scan: stdio stderr ───────────────────────────────────────────────────

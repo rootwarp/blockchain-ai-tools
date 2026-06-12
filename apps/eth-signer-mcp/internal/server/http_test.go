@@ -71,6 +71,10 @@ func writeTokenFile(t *testing.T, content string) string {
 	if err := f.Close(); err != nil {
 		t.Fatalf("writeTokenFile: Close: %v", err)
 	}
+	// Explicit chmod so a future change to a laxer CreateTemp default is caught.
+	if err := os.Chmod(f.Name(), 0o600); err != nil {
+		t.Fatalf("writeTokenFile: Chmod(0600): %v", err)
+	}
 	return f.Name()
 }
 

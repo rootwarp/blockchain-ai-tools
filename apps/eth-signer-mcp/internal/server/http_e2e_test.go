@@ -460,7 +460,9 @@ func TestE2E_HTTP_FullSession(t *testing.T) {
 		schemaJSON, _ := json.Marshal(addrTool.InputSchema)
 		var schema map[string]json.RawMessage
 		if jsonErr := json.Unmarshal(schemaJSON, &schema); jsonErr == nil {
-			if ap, exists := schema["additionalProperties"]; exists {
+			if ap, exists := schema["additionalProperties"]; !exists {
+				t.Error("step 2: get_address InputSchema missing 'additionalProperties'")
+			} else {
 				var apVal bool
 				if jsonErr := json.Unmarshal(ap, &apVal); jsonErr != nil || apVal {
 					t.Errorf("step 2: get_address additionalProperties = %s; want false", ap)
@@ -610,7 +612,11 @@ func TestE2E_HTTP_FullSession(t *testing.T) {
 		case <-time.After(8 * time.Second):
 			t.Log("step 5c: chain-id subprocess did not exit within 8s after SIGTERM")
 		}
-		<-cmProc.doneCh // wait for scanner goroutine to finish
+		select {
+		case <-cmProc.doneCh:
+		case <-time.After(4 * time.Second):
+			t.Log("step 5c: scanner goroutine did not finish within 4s after wait timeout")
+		}
 
 		cmStderrBytes := cmProc.stderr.Bytes()
 		cmLeaked := signing.FixtureKeySentinel().Scan(cmStderrBytes)
@@ -664,7 +670,11 @@ func TestE2E_HTTP_FullSession(t *testing.T) {
 		case <-time.After(8 * time.Second):
 			t.Log("step 5d: password-error subprocess did not exit within 8s after SIGTERM")
 		}
-		<-pwProc.doneCh
+		select {
+		case <-pwProc.doneCh:
+		case <-time.After(4 * time.Second):
+			t.Log("step 5d: scanner goroutine did not finish within 4s after wait timeout")
+		}
 
 		pwStderrBytes := pwProc.stderr.Bytes()
 		pwLeaked := signing.FixtureKeySentinel().Scan(pwStderrBytes)
@@ -689,8 +699,9 @@ func TestE2E_HTTP_FullSession(t *testing.T) {
 	// NOTE: internal_error is NOT force-able through the real binary without a fault
 	// hook.  It is covered by TestSignTransaction_SixCodesWireEncoding in handlers_test.go.
 	{
-		ksErrToken := hexEncodeBytes(randTokenBytes(16)) + "\n"
-		ksErrTokenFile := writeTokenFile(t, ksErrToken)
+		ksErrRaw := randTokenBytes(16)
+		defer signing.ZeroBytes(ksErrRaw) // NOTE 4: zero raw bytes per ADR-009 hygiene
+		ksErrTokenFile := writeTokenFile(t, hexEncodeBytes(ksErrRaw)+"\n")
 
 		ksCtx, ksCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer ksCancel()
@@ -716,6 +727,10 @@ func TestE2E_HTTP_FullSession(t *testing.T) {
 			t.Error("step 5e: exit code = 0; want non-zero for no-address keystore")
 		}
 		ksStderrStr := ksStderr.String()
+		// strings.Contains is justified here: the binary exits before the HTTP server
+		// starts, so there is no MCP Content[0] to JSON-parse. The startup error is
+		// emitted as a plain-text line to stderr (fmt.Fprintf in main.go run()). This
+		// is NOT precedent against the JSON-parse discipline used for all MCP error paths.
 		if !strings.Contains(ksStderrStr, "keystore_error") {
 			t.Errorf("step 5e: stderr missing 'keystore_error'\nstderr: %s", ksStderrStr)
 		}
