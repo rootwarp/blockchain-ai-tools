@@ -65,6 +65,13 @@ import (
 //	    "B never ran the KDF" is proven by fnCallsTotal staying at 1 while
 //	    withSigningKeyCallsTotal == 2.
 //
+//	activeAtEntry / maxActiveAtEntry — gauge tracking concurrent goroutines
+//	    between the vault ENTRY and the return of inner.WithSigningKey (i.e.
+//	    callers racing at the vault entrance before the semaphore decides the
+//	    winner). maxActiveAtEntry ≥ 2 proves that at least two callers reached
+//	    the recording vault concurrently, making maxActiveFn == 1 non-vacuous:
+//	    the semaphore actually had to serialize real concurrent callers.
+//
 // withSigningKeySecondCh is closed the first time withSigningKeyCallsTotal reaches
 // 2 — it is a one-shot notification that B has entered the vault path. The test
 // gates bCancel() on this channel so it can be certain B is in the semaphore-wait
@@ -82,6 +89,8 @@ type recordingKeyVault struct {
 
 	// Instrumentation atomics (safe for concurrent use).
 	withSigningKeyCallsTotal atomic.Int32 // vault-entry count (before semaphore)
+	activeAtEntry            atomic.Int32 // goroutines currently between entry and inner return
+	maxActiveAtEntry         atomic.Int32 // high-water mark of activeAtEntry (non-vacuity gauge)
 	activeFn                 atomic.Int32 // goroutines currently inside fn
 	maxActiveFn              atomic.Int32 // high-water mark of activeFn
 	fnCallsTotal             atomic.Int32 // fn invocations (KDF ran + fn entered)
@@ -123,6 +132,23 @@ func (v *recordingKeyVault) WithSigningKey(ctx context.Context, fn func(signing.
 		case <-v.withSigningKeySecondCh: // already closed
 		default:
 			close(v.withSigningKeySecondCh)
+		}
+	}
+
+	// Track concurrent goroutines at vault entry (before semaphore).
+	// This gauge is incremented here and decremented via defer (after inner returns),
+	// so it measures callers racing between vault entry and semaphore release.
+	// maxActiveAtEntry ≥ 2 proves that real concurrent callers arrived, making
+	// the maxActiveFn == 1 serialization proof non-vacuous.
+	entryCur := v.activeAtEntry.Add(1)
+	defer v.activeAtEntry.Add(-1)
+	for {
+		old := v.maxActiveAtEntry.Load()
+		if entryCur <= old {
+			break
+		}
+		if v.maxActiveAtEntry.CompareAndSwap(old, entryCur) {
+			break
 		}
 	}
 

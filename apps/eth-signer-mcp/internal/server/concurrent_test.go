@@ -77,8 +77,9 @@ type concSignCase struct {
 type concSignResult struct {
 	idx     int    // index into the test table
 	rawTx   string // "0x..."-prefixed rawTransaction; empty when isError=true
+	rawJSON string // full SignResult JSON text (tc.Text) from Content[0]; empty on error
 	isError bool
-	errText string // concise error description for the main-goroutine report
+	errText string // server error-response body or protocol error; appended to leak-scan buffer
 }
 
 // concurrentSignTable returns the N test cases for the burst.
@@ -249,7 +250,10 @@ func TestConcurrentSignTransaction_SerializedDecrypts(t *testing.T) {
 	// so the server drains cleanly without racing session teardown.
 	rawToken := randTokenBytes(32)       // randTokenBytes defined in auth_test.go
 	tokenStr := hexEncodeBytes(rawToken) // hexEncodeBytes defined in auth_test.go
-	defer signing.ZeroBytes(rawToken)    // zero raw bytes after the test completes
+	// Best-effort zeroing of the raw token bytes (ADR-009).
+	// NOTE: tokenStr (the hex wire form), the token file on disk, SDK transport
+	// buffers, and sentinel defensive copies are GC-only — not covered by this call.
+	defer signing.ZeroBytes(rawToken)
 	tokenFile := writeTokenFile(t, tokenStr+"\n")
 	readyCh := make(chan net.Addr, 1)
 
@@ -352,7 +356,11 @@ func TestConcurrentSignTransaction_SerializedDecrypts(t *testing.T) {
 					}
 					return
 				}
-				results[i] = concSignResult{idx: i, rawTx: sr.RawTransaction}
+				// rawJSON is the FULL SignResult JSON (tc.Text), which includes
+				// rawTransaction, signature.{r,s,v}, hash, and from.
+				// Scanning rawJSON catches leaks through any output field, not
+				// just rawTransaction.
+				results[i] = concSignResult{idx: i, rawTx: sr.RawTransaction, rawJSON: tc.Text}
 			}
 		}()
 	}
@@ -463,6 +471,23 @@ func TestConcurrentSignTransaction_SerializedDecrypts(t *testing.T) {
 		t.Errorf("fnCallsTotal = %d; want %d (one per signing call)", got, want)
 	}
 
+	// Non-vacuity guard: maxActiveAtEntry must be ≥ 2.
+	//
+	// maxActiveAtEntry tracks how many goroutines were simultaneously present
+	// between vault entry and inner.WithSigningKey return (i.e. racing for the
+	// semaphore).  If this is < 2, some upstream stage (HTTP server, auth, SDK)
+	// serialized all calls before they reached the vault, and the maxActiveFn == 1
+	// assertion above would be vacuously true — it would prove nothing about the
+	// semaphore.  ≥ 2 concurrent callers at the vault entrance confirms the
+	// semaphore actually had to arbitrate real contention.
+	if entryMax := rv.maxActiveAtEntry.Load(); entryMax < 2 {
+		t.Errorf("maxActiveAtEntry = %d; want ≥ 2. "+
+			"Fewer than 2 goroutines reached the vault concurrently; the "+
+			"decrypt-serialization proof (maxActiveFn == 1) is vacuous — "+
+			"≥ 2 calls must race the semaphore for maxActiveFn == 1 to prove anything.",
+			entryMax)
+	}
+
 	// ═══════════════════════════════════════════════════════════════════════
 	// Assertion (4): Memory bounded
 	//
@@ -551,17 +576,27 @@ func TestConcurrentSignTransaction_SerializedDecrypts(t *testing.T) {
 	// ═══════════════════════════════════════════════════════════════════════
 	// Assertion (7): Leak scan
 	//
-	// Sentinel (a): Bearer token must not appear in logs OR response bytes.
-	// Sentinel (b): Fixture private key (FixtureKeySentinel) must not appear in
-	//               logs.  NOTE: FixtureKeySentinel includes the fixture address,
-	//               which legitimately appears in rawTransaction (as the 'to' field)
-	//               and in the 'from' JSON field — response bytes are therefore
-	//               scanned with the bearer sentinel only to avoid false positives.
+	// Response surface scanned: full SignResult JSON (rawJSON) for success results,
+	// errText for error results.  This covers rawTransaction, signature.{r,s,v},
+	// hash, from, and error-response bodies — no output channel is left unscanned.
+	//
+	// Sentinel (a): Bearer token — must not appear in logs OR response surface.
+	// Sentinel (b): FixtureKeySentinel — must not appear in logs.
+	//   NOTE: FixtureKeySentinel includes the fixture ADDRESS, which legitimately
+	//   appears in rawJSON (as the 'to' field in rawTransaction and in the 'from'
+	//   JSON field).  Scanning the full sentinel on responses would produce false
+	//   positives on the address form; response bytes are scanned with the scalar-
+	//   only sentinel instead.
+	// Sentinel (c): Scalar-only sentinel — scans response bytes for the 32-byte
+	//   private key scalar (WITHOUT address forms), which must NEVER appear in any
+	//   signed output (r/s values are derived but do not contain the scalar).
 	// ═══════════════════════════════════════════════════════════════════════
 
 	// Bearer token sentinel.
 	bearerSentinel := signing.NewSentinel("concurrent-bearer-token", rawToken)
-	// Register the hex-encoded string form so ASCII appearances are also caught.
+	// Belt-and-braces: NewSentinel already derives "hex-lower" from rawToken; since
+	// tokenStr == hexEncodeBytes(rawToken) this RegisterForm is a no-op duplicate
+	// (sentinel.RegisterForm deduplicates silently).  Kept for explicitness.
 	bearerSentinel.RegisterForm("bearer-hex-string", []byte(tokenStr))
 
 	// Fixture private key sentinel (includes address forms — scanned on logs only).
@@ -583,11 +618,18 @@ func TestConcurrentSignTransaction_SerializedDecrypts(t *testing.T) {
 			leaked, keySentinel.Name)
 	}
 
-	// Collect response bytes: only rawTransaction values (no JSON wrappers).
+	// Collect the full response surface for leak scanning (SF-2 + SF-3):
+	//   - Success: append rawJSON (full SignResult JSON — covers rawTransaction,
+	//     signature.{r,s,v}, hash, and from), not just rawTx.
+	//   - Error: append errText (server error-response body verbatim — a possible
+	//     leak surface if signing error messages incorporate secret material).
+	// Including both paths ensures no output channel is left unscanned.
 	var responseBytes bytes.Buffer
 	for _, res := range results {
-		if !res.isError {
-			responseBytes.WriteString(res.rawTx)
+		if res.isError {
+			responseBytes.WriteString(res.errText)
+		} else {
+			responseBytes.WriteString(res.rawJSON)
 		}
 	}
 	respOut := responseBytes.Bytes()
