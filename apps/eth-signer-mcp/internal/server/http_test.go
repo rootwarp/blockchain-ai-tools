@@ -649,13 +649,13 @@ func TestRunHTTP_Smoke_Initialize(t *testing.T) {
 
 	// Step 3: wait for RunHTTP to exit and assert clean return.
 	//
-	// Wait 15 s — generously larger than the 5 s production grace window so
+	// Wait 15 s — generously larger than the 3 s production grace window so
 	// the two timers cannot race even under heavy parallel-test load.
 	// The common case (idle conn already drained) returns in <100 ms.
 	//
 	// Acceptable return values:
-	//   nil                      — Shutdown drained all connections within 5 s.
-	//   context.DeadlineExceeded — Shutdown's 5 s grace elapsed before the SDK
+	//   nil                      — Shutdown drained all connections within 3 s.
+	//   context.DeadlineExceeded — Shutdown's 3 s grace elapsed before the SDK
 	//                              client's underlying keep-alive TCP connection
 	//                              fully closed (observed under load with
 	//                              DisableStandaloneSSE=true).  This is correct

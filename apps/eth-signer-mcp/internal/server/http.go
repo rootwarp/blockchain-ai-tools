@@ -1,6 +1,6 @@
 package server
 
-// http.go — Issues 3.1 + 3.2: Streamable HTTP transport (RunHTTP).
+// http.go — Issues 3.1 + 3.2 + 3.7: Streamable HTTP transport (RunHTTP).
 //
 // RunHTTP is the second transport over the same *mcp.Server that RunStdio uses
 // (ADR-002: one server, two transports; tools are registered once in New).
@@ -18,11 +18,13 @@ package server
 //       MaxBytesHandler (3.4) → reqlog (3.3) → bearer auth (3.2) → SDK handler
 //     Each layer is a func(http.Handler) http.Handler — future layers slot in
 //     without re-plumbing this function.
-//  6. Serve in a goroutine; on ctx.Done(), gracefully shut down with a 5 s
-//     grace window (full drain semantics finalised in 3.7).
+//  6. Serve in a goroutine; on ctx.Done(), gracefully shut down with a 3 s
+//     grace window (drain semantics: in-flight signing calls complete normally;
+//     requests queued on the vault semaphore observe ctx.Err() and cancel early).
 //
 // A clean ctx-cancel shutdown returns nil (mirrors normalizeShutdownErr for the
-// stdio transport). Any other error is returned unchanged.
+// stdio transport). Any Shutdown error (e.g. grace-period exceeded) is propagated
+// unchanged — callers can distinguish clean drain (nil) from timeout (DeadlineExceeded).
 
 import (
 	"context"
@@ -209,9 +211,28 @@ func (s *Server) RunHTTP(ctx context.Context, opts HTTPOptions) error {
 
 	// ── Step 6: Serve and graceful shutdown ────────────────────────────────
 	//
-	// Shutdown skeleton — full drain semantics (3 s grace window, in-flight
-	// signing call completion, queued-request ctx.Err() on cancel) are
-	// finalised in issue 3.7.
+	// On ctx.Done() (SIGINT/SIGTERM or test cancel), Shutdown is called with a
+	// 3 s grace context derived from context.Background() (NOT from ctx, which
+	// is already cancelled).  Shutdown:
+	//   (a) Immediately closes the listener — new connections are refused.
+	//   (b) Closes idle connections.
+	//   (c) Waits for active connections (in-flight signing calls) to finish.
+	//
+	// Drain semantics (ADR-006, issue 3.7):
+	//   - An in-flight signing call completes normally; its vault deferred
+	//     zeroing (ZeroBytes + ZeroBigInt) runs on function return.
+	//   - A request QUEUED on the vault semaphore observes ctx.Err() from its
+	//     own request context (cancelled when the connection is closed) and
+	//     returns early without starting the KDF.
+	//   - internal/server holds NO key material — only the token hash inside
+	//     signing.Secret (BearerVerifier); nothing new to zero at transport layer.
+	//
+	// Error contract:
+	//   - Shutdown returns nil if all connections drained within the grace window.
+	//   - Shutdown returns the grace context's error (context.DeadlineExceeded)
+	//     if the 3 s window expires before all connections drain — this error is
+	//     propagated unchanged (not masked) so callers can distinguish clean drain
+	//     from a timeout.
 	serveErrCh := make(chan error, 1)
 	go func() {
 		serveErr := httpSrv.Serve(ln)
@@ -228,12 +249,16 @@ func (s *Server) RunHTTP(ctx context.Context, opts HTTPOptions) error {
 		return serveErr
 	case <-ctx.Done():
 		// ctx cancelled (SIGINT/SIGTERM or test cancel) — graceful shutdown.
-		graceCtx, graceCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		// graceCtx is derived from context.Background() (NOT ctx) so the 3 s
+		// drain window is independent of the already-cancelled signal ctx.
+		graceCtx, graceCancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer graceCancel()
 		if shutdownErr := httpSrv.Shutdown(graceCtx); shutdownErr != nil {
+			// Drain exceeded the grace window or another Shutdown error.
+			// Propagate — do NOT mask — so callers see the real outcome.
 			return shutdownErr
 		}
-		<-serveErrCh // wait for Serve to finish
-		return nil   // clean ctx-cancel → nil (mirrors normalizeShutdownErr)
+		<-serveErrCh // drain the Serve goroutine (already sent nil via ErrServerClosed)
+		return nil   // clean ctx-cancel → nil (mirrors normalizeShutdownErr for stdio)
 	}
 }

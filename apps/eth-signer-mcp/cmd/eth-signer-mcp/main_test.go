@@ -221,6 +221,118 @@ func TestBinary_HTTP_StartsAndShutsDown(t *testing.T) {
 	}
 }
 
+// TestBinary_HTTP_SIGINTCleanExit verifies that SIGINT causes the HTTP binary
+// to drain in-flight requests and exit cleanly (exit code 0) within 5 s
+// (3 s grace + buffer).
+//
+// This is the SIGINT counterpart to TestBinary_HTTP_StartsAndShutsDown (SIGTERM).
+// Both signals must trigger clean shutdown via signal.NotifyContext → ctx cancel
+// → RunHTTP.Shutdown(3s grace) → exit 0.
+//
+// Use t.Cleanup(cmd.Process.Kill) so a test failure or panic never leaves an
+// orphaned HTTP listener or zombie process.
+func TestBinary_HTTP_SIGINTCleanExit(t *testing.T) {
+	bin := getTestBinary(t)
+	ks, pw := signingFixtureFiles(t)
+
+	dir := t.TempDir()
+	tokenPath := dir + "/token.txt"
+	if err := os.WriteFile(tokenPath, []byte("test-http-sigint-token\n"), 0o600); err != nil {
+		t.Fatalf("write token file: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, bin,
+		"--keystore", ks,
+		"--password-file", pw,
+		"--http",
+		"--http-auth-token-file", tokenPath,
+	)
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		t.Fatalf("StderrPipe: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("cmd.Start: %v", err)
+	}
+	// Belt-and-suspenders: kill if the test fails or panics before the signal is sent.
+	t.Cleanup(func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+	})
+
+	// Gate: read stderr until the announce line appears (server is ready and
+	// accepting).  Do not send SIGINT before the announce line — the binary
+	// might not yet have installed its signal handler.
+	announceFound := make(chan string, 1)
+	go func() {
+		buf := make([]byte, 0, 512)
+		tmp := make([]byte, 1)
+		for {
+			n, readErr := stderrPipe.Read(tmp)
+			if n > 0 {
+				buf = append(buf, tmp[:n]...)
+				for {
+					idx := strings.IndexByte(string(buf), '\n')
+					if idx < 0 {
+						break
+					}
+					line := string(buf[:idx])
+					buf = buf[idx+1:]
+					if strings.Contains(line, "listening on") {
+						announceFound <- line
+						return
+					}
+				}
+			}
+			if readErr != nil {
+				return
+			}
+		}
+	}()
+
+	var announceLine string
+	select {
+	case announceLine = <-announceFound:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for announce line in stderr")
+	}
+
+	if !strings.Contains(announceLine, "eth-signer-mcp listening on") {
+		t.Errorf("announce line = %q; want to contain %q",
+			announceLine, "eth-signer-mcp listening on")
+	}
+
+	// Send SIGINT → signal.NotifyContext cancels ctx → RunHTTP.Shutdown (3 s grace)
+	// → RunHTTP returns nil → cmd.Action returns nil → exit 0.
+	if err := cmd.Process.Signal(syscall.SIGINT); err != nil {
+		t.Fatalf("Signal(SIGINT): %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	// The acceptance criterion is "exit 0 within 5 s (3 s grace + buffer)".
+	// We use 8 s to be consistent with the SIGTERM test and to avoid flakiness
+	// under load while still being well above the 5 s target.
+	select {
+	case err := <-done:
+		if err != nil {
+			var exitErr *exec.ExitError
+			if errors.As(err, &exitErr) {
+				t.Errorf("exit code = %d; want 0 (clean SIGINT shutdown)", exitErr.ExitCode())
+			} else {
+				t.Errorf("cmd.Wait: %v", err)
+			}
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatal("binary did not exit within 8s after SIGINT")
+	}
+}
+
 // TestBinary_Stdio_SIGINTCleanExit verifies that SIGINT during an idle stdio
 // session causes clean exit (exit code 0).
 //
