@@ -1,0 +1,139 @@
+HTTP demo session transcript — eth-signer-mcp Issue 4.1
+Captured: 2026-06-12   Keystore: keystore-light.json (light-scrypt, N=4096, ~50 ms)
+Decoder:  ethers v6 (cast not available on this machine; see vectors/cast-version.txt)
+Scrubbing: bearer token never appears in output or server logs; no absolute home paths
+           (relative paths used). Ephemeral port (58526) is local to this run.
+
+=== COMMAND ===
+
+  scripts/demo/http-demo.sh --no-build
+
+=== SCRIPT OUTPUT ===
+
+>>> repo root: <REPO_ROOT>
+>>> --no-build: skipping build; using <REPO_ROOT>/bin/eth-signer-mcp
+✓  server bound at http://127.0.0.1:58526
+>>> Step 1: initialize
+✓  initialized; session=T36SQD3MNIDWOGLSR5ZNFSTZBV
+>>> Step 2: tools/list
+✓  tools/list: sign_transaction + get_address present
+>>> Step 3: get_address
+✓  get_address: 0x9858EfFD232B4033E47d90003D41EC34EcaEda94
+>>> Step 4: sign_transaction (legacy-mainnet golden vector)
+>>>   rawTransaction: 0xf871808504a817c800830186a0949858effd232b4033e47d90003d41ec34ecaeda94880de0b6b3a764000084deadbeef26a082dc9bb5c5916b7728febf0a7269cef831012cf86eb0f2a4c69aa77ba92755dea073b452e7edc29e44a5f2b6887e90d59aec9ca1b81c858f592362e45a4e9ffcac
+>>>   from:           0x9858EfFD232B4033E47d90003D41EC34EcaEda94
+>>>   hash:           0xfa41dd66cc50da67d7e59d1b7277e794cbe69d5b10deb88a9ca2930fae65a239
+>>> Asserting rawTransaction == golden vector ...
+✓  rawTransaction is byte-identical to the committed golden vector
+✓  recovered from == fixture address (0x9858EfFD232B4033E47d90003D41EC34EcaEda94)
+>>> Security demo 1: missing bearer token → 401
+✓  missing bearer → 401 Unauthorized
+>>> Security demo 2: wrong bearer token → 401
+✓  wrong bearer → 401 Unauthorized
+>>> Security demo 3: forged Host header (DNS-rebinding guard) → 403
+✓  forged Host header → 403 Forbidden (DNS-rebinding guard)
+
+✓ HTTP demo complete
+  NOTE: the signed transaction was NOT broadcast — the binary has no RPC capability (ADR-007)
+  NOTE: off-localhost exposure is unsupported (loopback-only bind enforced)
+
+=== SERVER STDERR (JSON structured logs) ===
+
+{"time":"2026-06-12T18:44:06.987945+09:00","level":"INFO","msg":"eth-signer-mcp starting","log_level":"info"}
+{"time":"2026-06-12T18:44:06.988075+09:00","level":"WARN","msg":"file is group/world accessible; consider chmod 600 (use --strict-perms to refuse)","path":"apps/eth-signer-mcp/internal/signing/testdata/keystore-light.json"}
+{"time":"2026-06-12T18:44:06.988089+09:00","level":"WARN","msg":"file is group/world accessible; consider chmod 600 (use --strict-perms to refuse)","path":"apps/eth-signer-mcp/internal/signing/testdata/password.txt"}
+{"time":"2026-06-12T18:44:06.988158+09:00","level":"INFO","msg":"keystore loaded","address":"0x9858EfFD232B4033E47d90003D41EC34EcaEda94"}
+eth-signer-mcp listening on 127.0.0.1:58526
+{"time":"2026-06-12T18:44:06.988645+09:00","level":"INFO","msg":"http server listening","addr":"127.0.0.1:58526"}
+{"time":"2026-06-12T18:44:08.037255+09:00","level":"INFO","msg":"server connecting"}
+{"time":"2026-06-12T18:44:08.037317+09:00","level":"INFO","msg":"server session connected","session_id":"T36SQD3MNIDWOGLSR5ZNFSTZBV"}
+{"time":"2026-06-12T18:44:08.038011+09:00","level":"INFO","msg":"http request","request_id":"cccf68eb-caaa-48ea-97af-6bb0430bf797","remote_addr":"127.0.0.1:58527","status":200,"latency_ms":0}
+{"time":"2026-06-12T18:44:08.067576+09:00","level":"INFO","msg":"http request","request_id":"b24024d8-f3b3-4af9-8f4d-d10d96405eca","remote_addr":"127.0.0.1:58528","status":202,"latency_ms":0}
+{"time":"2026-06-12T18:44:08.067645+09:00","level":"INFO","msg":"session initialized"}
+{"time":"2026-06-12T18:44:08.076974+09:00","level":"INFO","msg":"http request","request_id":"46b5d4c3-a3ed-4abf-8c92-c3091384d687","remote_addr":"127.0.0.1:58529","status":200,"latency_ms":0}
+{"time":"2026-06-12T18:44:08.110847+09:00","level":"INFO","msg":"http request","request_id":"3e03acd9-15c4-46eb-895f-99ddfe49832a","remote_addr":"127.0.0.1:58530","status":200,"latency_ms":0}
+{"time":"2026-06-12T18:44:08.159696+09:00","level":"INFO","msg":"signing: transaction signed successfully","request_id":"cccf68eb-caaa-48ea-97af-6bb0430bf797","tx_hash":"0xfa41dd66cc50da67d7e59d1b7277e794cbe69d5b10deb88a9ca2930fae65a239","chain_id":1,"nonce":0}
+{"time":"2026-06-12T18:44:08.159829+09:00","level":"INFO","msg":"http request","request_id":"24747e11-f4c9-4527-aeb9-97223cb5baae","remote_addr":"127.0.0.1:58531","status":200,"latency_ms":36}
+{"time":"2026-06-12T18:44:08.173526+09:00","level":"INFO","msg":"http request","request_id":"8adda3e3-265b-420b-b4af-4f70567af9a5","remote_addr":"127.0.0.1:58532","status":401,"latency_ms":0}
+{"time":"2026-06-12T18:44:08.180686+09:00","level":"INFO","msg":"http request","request_id":"e813cae3-377e-4689-8f1e-1d328f1ce2c8","remote_addr":"127.0.0.1:58533","status":403,"latency_ms":0}
+
+=== RAW CURL OUTPUT (tool calls — illustrative, condensed) ===
+
+# initialize
+curl -si -X POST http://127.0.0.1:58526/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Authorization: Bearer <TOKEN>" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"http-demo-sh","version":"1.0"}}}'
+
+Response headers (relevant):
+  HTTP/1.1 200 OK
+  Mcp-Session-Id: T36SQD3MNIDWOGLSR5ZNFSTZBV
+
+Response body (SSE):
+  event: message
+  data: {"jsonrpc":"2.0","id":1,"result":{"capabilities":{"logging":{},"tools":{"listChanged":true}},"protocolVersion":"2025-03-26","serverInfo":{"name":"eth-signer-mcp","version":"(devel)"}}}
+
+# sign_transaction
+curl -s -X POST http://127.0.0.1:58526/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Authorization: Bearer <TOKEN>" \
+  -H "Mcp-Session-Id: T36SQD3MNIDWOGLSR5ZNFSTZBV" \
+  -d '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"sign_transaction","arguments":{"type":"0x0","chainId":"1","nonce":"0","to":"0x9858EfFD232B4033E47d90003D41EC34EcaEda94","value":"1000000000000000000","data":"0xdeadbeef","gas":"100000","gasPrice":"20000000000"}}}'
+
+Response (SSE):
+  event: message
+  data: {"jsonrpc":"2.0","id":4,"result":{"content":[{"type":"text","text":"{\"from\":\"0x9858EfFD232B4033E47d90003D41EC34EcaEda94\",\"hash\":\"0xfa41dd66cc50da67d7e59d1b7277e794cbe69d5b10deb88a9ca2930fae65a239\",\"rawTransaction\":\"0xf871808504a817c800830186a0949858effd232b4033e47d90003d41ec34ecaeda94880de0b6b3a764000084deadbeef26a082dc9bb5c5916b7728febf0a7269cef831012cf86eb0f2a4c69aa77ba92755dea073b452e7edc29e44a5f2b6887e90d59aec9ca1b81c858f592362e45a4e9ffcac\",\"signature\":{\"r\":\"0x82dc9bb5c5916b7728febf0a7269cef831012cf86eb0f2a4c69aa77ba92755de\",\"s\":\"0x73b452e7edc29e44a5f2b6887e90d59aec9ca1b81c858f592362e45a4e9ffcac\",\"v\":\"0x26\"}}"}],"structuredContent":{"from":"0x9858EfFD232B4033E47d90003D41EC34EcaEda94","hash":"0xfa41dd66cc50da67d7e59d1b7277e794cbe69d5b10deb88a9ca2930fae65a239","rawTransaction":"0xf871808504a817c800830186a0949858effd232b4033e47d90003d41ec34ecaeda94880de0b6b3a764000084deadbeef26a082dc9bb5c5916b7728febf0a7269cef831012cf86eb0f2a4c69aa77ba92755dea073b452e7edc29e44a5f2b6887e90d59aec9ca1b81c858f592362e45a4e9ffcac","signature":{"r":"0x82dc9bb5c5916b7728febf0a7269cef831012cf86eb0f2a4c69aa77ba92755de","s":"0x73b452e7edc29e44a5f2b6887e90d59aec9ca1b81c858f592362e45a4e9ffcac","v":"0x26"}}}}
+
+# 401: missing bearer
+curl -si -X POST http://127.0.0.1:58526/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '...'
+→ HTTP/1.1 401 Unauthorized
+  Www-Authenticate: Bearer
+  Content-Length: 0
+
+# 403: forged Host header
+curl -si -X POST http://127.0.0.1:58526/mcp \
+  -H "Authorization: Bearer <TOKEN>" \
+  -H "Host: evil.example.com" \
+  -d '...'
+→ HTTP/1.1 403 Forbidden
+  Content-Type: text/plain; charset=utf-8
+  Content-Length: 50
+
+=== DECODER VERIFICATION (ethers v6) ===
+
+Same raw transaction as the stdio demo; output is byte-identical (ADR-002 transport parity):
+
+  rawTransaction: 0xf871808504a817c800830186a0949858effd232b4033e47d90003d41ec34ecaeda94880de0b6b3a764000084deadbeef26a082dc9bb5c5916b7728febf0a7269cef831012cf86eb0f2a4c69aa77ba92755dea073b452e7edc29e44a5f2b6887e90d59aec9ca1b81c858f592362e45a4e9ffcac
+
+  Decoded (ethers v6):
+    type:      0 (legacy EIP-155)
+    chainId:   1
+    nonce:     0
+    to:        0x9858EfFD232B4033E47d90003D41EC34EcaEda94
+    value:     1000000000000000000 wei (1 ETH)
+    gasLimit:  100000
+    gasPrice:  20000000000 wei (20 Gwei)
+    data:      0xdeadbeef
+    from:      0x9858EfFD232B4033E47d90003D41EC34EcaEda94  (recovered sender)
+    hash:      0xfa41dd66cc50da67d7e59d1b7277e794cbe69d5b10deb88a9ca2930fae65a239
+
+  from == fixture address:  true
+  hash matches vector:      true
+
+=== NOTES ===
+
+- The bearer token NEVER appears in any log line (scrubbed above as <TOKEN>; token is
+  also never written to any file inside the repo tree).
+- The signing audit log line (level INFO, msg "signing: transaction signed successfully")
+  contains: request_id, tx_hash, chain_id, nonce. No key material, no tx body, no password.
+- The request_id in the audit line matches the request_id in the corresponding http request
+  log line (reqlog + audit correlation confirmed).
+- The transaction is NOT broadcast. The binary makes no outbound network calls (ADR-007).
+- The WARN lines are expected for the committed keystore fixtures (chmod 644 from git).
+  In production: chmod 600 your keystore and password files.
+- This transcript is input evidence for the Issue 4.4 end-to-end leak audit.

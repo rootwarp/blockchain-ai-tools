@@ -15,4 +15,7 @@ toolchain go1.26.4
 //
 // Go manages the `use ( ... )` block below automatically.
 
-use ./apps/eth-signer-mcp
+use (
+	./apps/eth-signer-mcp
+	./scripts/demo
+)

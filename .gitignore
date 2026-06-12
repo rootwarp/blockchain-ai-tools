@@ -11,6 +11,11 @@ bin/
 apps/*/eth-signer-mcp
 apps/*/eth-signer-mcp.exe
 
+# Stray demo client binaries built directly in the scripts/demo/ module.
+# The canonical way to run the demo client is via `go run ./scripts/demo/cmd/...`.
+stdio-client
+stdio-client.exe
+
 # Test & coverage artifacts
 *.test
 *.out
