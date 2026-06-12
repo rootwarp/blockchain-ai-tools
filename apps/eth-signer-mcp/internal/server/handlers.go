@@ -47,12 +47,18 @@ type signerPort interface {
 // generateRequestID returns a UUID v4 string generated from crypto/rand.
 // Format: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx (RFC 4122 variant bits set).
 // This avoids a new uuid dependency — crypto/rand is stdlib.
+//
+// On Go 1.20+ (and definitely on Go 1.26 used here), crypto/rand.Read never
+// returns an error — the runtime panics at init time if the OS CSPRNG is
+// unavailable. The previous zero-UUID fallback was therefore dead code that
+// would, if ever hit, silently share one UUID across all concurrent requests
+// (destroying audit correlation). We now panic explicitly so any hypothetical
+// future failure surface is immediately visible rather than silently corrupting
+// log correlation (CR finding 4).
 func generateRequestID() string {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		// crypto/rand failure is catastrophic on any real OS; use a zero UUID
-		// as a last resort so the handler doesn't panic.
-		return "00000000-0000-4000-8000-000000000000"
+		panic(fmt.Errorf("generateRequestID: crypto/rand failed: %w", err))
 	}
 	b[6] = (b[6] & 0x0f) | 0x40 // version 4
 	b[8] = (b[8] & 0x3f) | 0x80 // RFC 4122 variant
@@ -83,12 +89,17 @@ func makeSignTransactionHandler(
 		_ *mcp.CallToolRequest,
 		args signing.TxRequest,
 	) (*mcp.CallToolResult, *signing.SignResult, error) {
-		// Reuse the request_id set by the HTTP reqlog middleware when present.
-		// On the stdio path (no middleware), none is set: generate a new one.
-		// This ensures the HTTP audit line's request_id is correlated with the
-		// HTTP reqlog line's request_id (issue 3.3 correlation requirement).
+		// Reuse the request_id set by the HTTP reqlog middleware when present and
+		// valid. On the stdio path (no middleware), none is set → generate a new one.
+		//
+		// Guard conditions for regeneration (CR finding 3):
+		//   !ok          — no id in context (stdio / in-memory transport path)
+		//   reqID == ""  — RequestIDFromContext can return ("", true) for an explicit
+		//                  empty value; an empty id is as bad as none for correlation.
+		//   len > 64     — defensive cap against accidental over-length ids from future
+		//                  callers; UUIDv4 is 36 chars; anything beyond 64 is suspicious.
 		reqID, ok := signing.RequestIDFromContext(ctx)
-		if !ok {
+		if !ok || reqID == "" || len(reqID) > 64 {
 			reqID = generateRequestID()
 			ctx = signing.WithRequestID(ctx, reqID)
 		}

@@ -38,8 +38,14 @@ import (
 // Default behavior matches net/http's own contract:
 //   - If WriteHeader is never called but Write is, the status is 200 (implicit OK).
 //   - If neither WriteHeader nor Write is called, capturedStatus returns 200.
-//   - Only the FIRST WriteHeader call is captured; subsequent calls are forwarded
-//     to the underlying ResponseWriter but do not change the captured code.
+//   - Only the FIRST WriteHeader call is captured AND forwarded; subsequent calls
+//     are silently dropped to prevent "superfluous WriteHeader" warnings from
+//     net/http (CR finding 2).
+//
+// Unwrap exposes the underlying ResponseWriter so that http.ResponseController
+// can reach http.Flusher (and http.Hijacker) by walking the Unwrap chain. Without
+// Unwrap, rc.Flush() returns http.ErrNotSupported, silently breaking the SDK's
+// SSE streaming path for GET /mcp (CR finding 1).
 //
 // This is used by the reqlog middleware to record the final response status for
 // the structured log line.
@@ -49,13 +55,20 @@ type statusCaptureWriter struct {
 	written bool // true once WriteHeader or Write has been called
 }
 
+// Unwrap exposes the underlying ResponseWriter so http.ResponseController can
+// reach http.Flusher (and http.Hijacker). Without it, rc.Flush() returns
+// http.ErrNotSupported, silently breaking SSE streaming (GET /mcp).
+func (w *statusCaptureWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
 // WriteHeader captures the first status code and forwards it to the underlying
-// ResponseWriter. Subsequent calls are forwarded but do not change the captured code.
+// ResponseWriter. Subsequent calls are silently dropped — NOT forwarded — to
+// prevent "superfluous WriteHeader" warnings from net/http (CR finding 2).
 func (w *statusCaptureWriter) WriteHeader(status int) {
-	if !w.written {
-		w.status = status
-		w.written = true
+	if w.written {
+		return // drop duplicate; net/http would log "superfluous WriteHeader"
 	}
+	w.status = status
+	w.written = true
 	w.ResponseWriter.WriteHeader(status)
 }
 
@@ -110,19 +123,23 @@ func newRequestLogMiddleware(logger *slog.Logger) func(http.Handler) http.Handle
 			sw := &statusCaptureWriter{ResponseWriter: w}
 			start := time.Now()
 
+			// Emit exactly ONE info-level log line when this function returns —
+			// deferred so the line is emitted even if the downstream handler panics.
+			// Latency is measured to handler return; for Streamable HTTP responses
+			// that may stream (via Unwrap → Flusher), this captures the time to
+			// the end of handler execution, which is acceptable for this tool's
+			// request shapes (each call-response completes within a single round-trip).
+			defer func() {
+				logger.Info("http request",
+					"request_id", id,
+					"remote_addr", r.RemoteAddr,
+					"status", sw.capturedStatus(),
+					"latency_ms", time.Since(start).Milliseconds(),
+				)
+			}()
+
 			// Call the next handler (bearer auth → SDK handler) with the enriched context.
 			next.ServeHTTP(sw, r.WithContext(ctx))
-
-			// Emit exactly ONE info-level log line after the handler returns.
-			// Latency is measured to handler return; for Streamable HTTP responses
-			// that may stream, this is the time to first flush — acceptable for
-			// this tool's request shapes.
-			logger.Info("http request",
-				"request_id", id,
-				"remote_addr", r.RemoteAddr,
-				"status", sw.capturedStatus(),
-				"latency_ms", time.Since(start).Milliseconds(),
-			)
 		})
 	}
 }

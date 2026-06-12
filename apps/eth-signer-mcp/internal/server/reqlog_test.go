@@ -85,8 +85,9 @@ func TestStatusCaptureWriter_DefaultOKWhenNeverCalled(t *testing.T) {
 }
 
 // TestStatusCaptureWriter_OnlyFirstWriteHeaderCaptured verifies that only the
-// first WriteHeader call's status code is captured (subsequent calls are passed
-// through but do not change the captured status).
+// first WriteHeader call's status code is captured; the second call must NOT be
+// forwarded to the underlying ResponseWriter (CR finding 2: drop duplicates to
+// avoid "superfluous WriteHeader" warnings from net/http).
 func TestStatusCaptureWriter_OnlyFirstWriteHeaderCaptured(t *testing.T) {
 	t.Parallel()
 
@@ -94,12 +95,111 @@ func TestStatusCaptureWriter_OnlyFirstWriteHeaderCaptured(t *testing.T) {
 	sw := &statusCaptureWriter{ResponseWriter: rec}
 
 	sw.WriteHeader(http.StatusNotFound)
-	// This second call must NOT override the captured code.
-	// (The underlying ResponseWriter may ignore it too, but we test the wrapper.)
-	sw.WriteHeader(http.StatusOK)
+	sw.WriteHeader(http.StatusOK) // second call must be dropped entirely
 
 	if sw.capturedStatus() != http.StatusNotFound {
 		t.Errorf("capturedStatus() = %d; want 404 (first call should be captured)", sw.capturedStatus())
+	}
+}
+
+// countingWriter wraps http.ResponseWriter and counts WriteHeader invocations.
+// Used to assert that duplicate WriteHeader calls are not forwarded.
+type countingWriter struct {
+	http.ResponseWriter
+	writeHeaderCalls int
+}
+
+func (c *countingWriter) WriteHeader(code int) {
+	c.writeHeaderCalls++
+	c.ResponseWriter.WriteHeader(code)
+}
+
+// TestStatusCaptureWriter_NoDuplicateWriteHeaderForwarded verifies that a second
+// WriteHeader call (after the first has already been processed) is NOT forwarded
+// to the underlying ResponseWriter. Forwarding duplicates triggers a
+// "superfluous WriteHeader" warning from net/http (CR finding 2).
+func TestStatusCaptureWriter_NoDuplicateWriteHeaderForwarded(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	counter := &countingWriter{ResponseWriter: rec}
+	sw := &statusCaptureWriter{ResponseWriter: counter}
+
+	sw.WriteHeader(http.StatusUnauthorized)
+	sw.WriteHeader(http.StatusOK) // duplicate — must NOT be forwarded
+
+	if counter.writeHeaderCalls != 1 {
+		t.Errorf("underlying WriteHeader called %d times; want exactly 1 (duplicates must be dropped)",
+			counter.writeHeaderCalls)
+	}
+}
+
+// TestStatusCaptureWriter_ForwardsFlusher verifies that statusCaptureWriter
+// exposes the underlying ResponseWriter via Unwrap() so that
+// http.NewResponseController can reach the http.Flusher interface.
+//
+// Without Unwrap(), rc.Flush() returns http.ErrNotSupported, which silently
+// breaks the SDK's SSE streaming path (GET /mcp with standalone SSE enabled).
+// httptest.ResponseRecorder implements http.Flusher, so this proves the chain
+// is intact end-to-end (CR finding 1).
+func TestStatusCaptureWriter_ForwardsFlusher(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	sw := &statusCaptureWriter{ResponseWriter: rec}
+
+	rc := http.NewResponseController(sw)
+	if err := rc.Flush(); err != nil {
+		t.Errorf("ResponseController.Flush() = %v; want nil (Flusher must be reachable via Unwrap)",
+			err)
+	}
+}
+
+// TestReqLogMiddleware_EmitsDeferredOnPanic verifies that even when the
+// downstream handler panics, the reqlog middleware still emits the structured
+// log line (because the emission is deferred). This ensures operational
+// visibility is not silently lost on panic paths (CR finding 5).
+func TestReqLogMiddleware_EmitsDeferredOnPanic(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := newCaptureLogger(&buf)
+	mw := newRequestLogMiddleware(logger)
+
+	// Inner handler panics; reqlog must still emit a log line.
+	inner := http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		panic("intentional panic for test: reqlog defer")
+	})
+	handler := mw(inner)
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	rec := httptest.NewRecorder()
+
+	// Run with panic recovery so the test itself does not fail.
+	panicCaught := false
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				panicCaught = true
+			}
+		}()
+		handler.ServeHTTP(rec, req)
+	}()
+
+	if !panicCaught {
+		t.Error("expected panic to propagate; it did not")
+	}
+
+	// Despite the panic, the deferred reqlog line must have been emitted.
+	lines := reqlogLines(parseLogLines(&buf))
+	if len(lines) != 1 {
+		t.Errorf("expected 1 reqlog line even after downstream panic, got %d", len(lines))
+	}
+	if len(lines) == 1 {
+		reqID, _ := lines[0]["request_id"].(string)
+		if reqID == "" {
+			t.Error("reqlog line emitted after panic has empty request_id")
+		}
 	}
 }
 
@@ -536,6 +636,62 @@ func TestSignTransactionHandler_ReuseContextRequestID(t *testing.T) {
 	}
 }
 
+// TestSignTransactionHandler_EmptyContextRequestIDIsReplaced verifies that when
+// the context carries an explicit empty string as request_id (defensive guard,
+// CR finding 3: RequestIDFromContext can return ("", true)), the handler
+// generates a fresh non-empty UUIDv4 rather than propagating the empty id to
+// the audit line — an empty request_id is as bad as no id for correlation.
+func TestSignTransactionHandler_EmptyContextRequestIDIsReplaced(t *testing.T) {
+	t.Parallel()
+
+	tdPath := signingTestdataPath(t)
+	vault, err := signing.NewFileKeyVault(signing.VaultOptions{
+		KeystorePath: filepath.Join(tdPath, "keystore-weak.json"),
+		PasswordPath: filepath.Join(tdPath, "password.txt"),
+	})
+	if err != nil {
+		t.Fatalf("NewFileKeyVault: %v", err)
+	}
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	signer := signing.NewSigner(vault, signing.SignerOptions{Logger: logger})
+
+	srv := New(signer, Options{Name: "test", Version: "v0.0.0-test", Logger: logger})
+
+	// Set an explicit empty request_id in context — the guard must replace it.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	ctx = signing.WithRequestID(ctx, "") // explicitly empty
+	cs, cleanup := inMemorySession(t, srv, ctx)
+	defer cleanup()
+
+	result, callErr := callSignTx(t, cs, minimalLegacyArgs())
+	if callErr != nil {
+		t.Fatalf("CallTool: %v", callErr)
+	}
+	if result == nil || result.IsError {
+		t.Fatalf("CallTool returned error result")
+	}
+
+	lines := parseLogLines(&logBuf)
+	var found bool
+	for _, m := range lines {
+		msg, _ := m["msg"].(string)
+		if strings.Contains(msg, "signed successfully") {
+			auditID, _ := m["request_id"].(string)
+			if auditID == "" {
+				t.Error("audit line request_id is empty even after empty-id guard; handler must regenerate")
+			}
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("audit line not found in captured log output")
+	}
+}
+
 // TestSignTransactionHandler_GeneratesRequestIDWhenAbsent verifies that when
 // the context carries NO request_id (stdio path), the handler generates one
 // and the audit line carries it.
@@ -600,9 +756,11 @@ func TestSignTransactionHandler_GeneratesRequestIDWhenAbsent(t *testing.T) {
 // acceptance criterion (b)). It:
 //  1. Starts RunHTTP with a real signer (keystore-weak.json).
 //  2. Issues a sign_transaction request over Streamable HTTP with bearer auth.
-//  3. Asserts EXACTLY ONE reqlog line (msg="http request").
+//  3. Asserts AT LEAST ONE reqlog line (msg="http request") — the initialize
+//     round-trip also produces a reqlog line, so the count is ≥ 1.
 //  4. Asserts EXACTLY ONE audit line (msg contains "signed successfully").
-//  5. Asserts the two lines share the SAME request_id.
+//  5. Finds the reqlog line whose request_id matches the audit line's request_id
+//     and asserts the two share the SAME request_id (correlation).
 func TestHTTPRequestIDCorrelation(t *testing.T) {
 	t.Parallel()
 
