@@ -289,27 +289,27 @@ the token file is security-load-bearing.
 
 **Acceptance Criteria:**
 
-- [ ] `NewBearerVerifierFromFile`: valid file → verifier holding only
+- [x] `NewBearerVerifierFromFile`: valid file → verifier holding only
       the SHA-256 of the token inside `signing.Secret`; raw token bytes
       zeroed before return; empty/missing/unreadable file → error.
-- [ ] Correct `Authorization: Bearer <token>` → request reaches `next`.
-- [ ] Missing header, `Bearer` with empty token, non-Bearer scheme,
+- [x] Correct `Authorization: Bearer <token>` → request reaches `next`.
+- [x] Missing header, `Bearer` with empty token, non-Bearer scheme,
       lowercase `bearer `, and wrong tokens of assorted lengths (1, 16,
       32, 64, 128 bytes) → 401, empty body, `WWW-Authenticate: Bearer`
       set, and `next` **never invoked** (recording stub fails the test
       if hit) — i.e. 401 fires before any signing logic.
-- [ ] The compare path is `sha256(supplied)` vs stored
+- [x] The compare path is `sha256(supplied)` vs stored
       `sha256(expected)` via `subtle.ConstantTimeCompare` — no raw-byte
       or `==` compare anywhere (code-review item, named here so the
       reviewer checks it).
-- [ ] Leak scan: with the leak-scan sentinel used as the token, no
+- [x] Leak scan: with the leak-scan sentinel used as the token, no
       captured log line at any level contains the token or its encoded
       forms (Sentinel from task 1.5, encoded forms registered).
-- [ ] `cmd`: world-/group-readable token file + `--http` → warning by
+- [x] `cmd`: world-/group-readable token file + `--http` → warning by
       default; with `--strict-perms` → refusal, exit 2 — identical
       semantics and shared code path with the keystore/password checks;
       both paths covered in `main_test.go` via temp files + chmod.
-- [ ] `go test -race ./internal/server/... ./cmd/...` green.
+- [x] `go test -race ./internal/server/... ./cmd/...` green.
 
 **Testing Notes:**
 
