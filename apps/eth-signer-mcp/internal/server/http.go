@@ -14,12 +14,12 @@ package server
 //  3. Print the resolved bound address to stderr; log it; signal ReadyCh.
 //  4. Construct the SDK StreamableHTTPHandler with DNS-rebinding protection on
 //     (DisableLocalhostProtection stays false, the default).
-//  5. Assemble the http.Server pipeline (current order, innermost → outermost):
-//       SDK handler → bearer auth (3.2) → [reqlog 3.3] → [MaxBytes 3.4]
-//     Each layer is a func(http.Handler) http.Handler; future layers slot in
+//  5. Assemble the http.Server pipeline (outermost → innermost):
+//       MaxBytesHandler (3.4) → reqlog (3.3) → bearer auth (3.2) → SDK handler
+//     Each layer is a func(http.Handler) http.Handler — future layers slot in
 //     without re-plumbing this function.
-//  6. Serve in a goroutine; on ctx.Done(), gracefully shut down (skeleton here;
-//     full drain semantics and the 3 s grace window are finalised in 3.7).
+//  6. Serve in a goroutine; on ctx.Done(), gracefully shut down with a 5 s
+//     grace window (full drain semantics finalised in 3.7).
 //
 // A clean ctx-cancel shutdown returns nil (mirrors normalizeShutdownErr for the
 // stdio transport). Any other error is returned unchanged.
@@ -158,24 +158,35 @@ func (s *Server) RunHTTP(ctx context.Context, opts HTTPOptions) error {
 
 	// ── Step 5: Assemble the http.Server pipeline ──────────────────────────
 	//
-	// Assembly order, outermost → innermost (each line wraps what came before):
+	// Final assembly order, outermost → innermost (each line wraps what came before):
 	//
 	//   [3.4] http.MaxBytesHandler → [3.3] reqlog → [3.2] bearer auth → [SDK handler]
 	//
-	// Layers assembled here:
-	//   [3.2] bearer auth — verifier.Middleware wraps the SDK handler; 401 fires
-	//         BEFORE the SDK ever sees the body (no MCP session state for bad requests).
+	// Layer semantics (outermost first):
+	//
+	//   [3.4] MaxBytesHandler — 1 MiB body cap; wraps the ENTIRE pipeline so an
+	//         oversized body is rejected BEFORE reqlog, auth, or the SDK ever see the
+	//         body content. Uses http.MaxBytesReader internally; the body read fails
+	//         with *http.MaxBytesError when the limit is exceeded, causing the SDK's
+	//         json.Decoder to return an error.  The SDK returns HTTP 400 for this
+	//         decode failure (SDK v1.6.1 observed behavior; see bounds_test.go for
+	//         the pinned assertion).
+	//
 	//   [3.3] reqlog — newRequestLogMiddleware wraps auth; sits OUTSIDE auth so even
 	//         401/403 responses are request-logged (issue 3.3 pipeline-order contract).
 	//
-	// Layer pending:
-	//   [3.4] pipeline = http.MaxBytesHandler(pipeline, 1<<20) // 1 MiB body cap (outermost)
+	//   [3.2] bearer auth — verifier.Middleware wraps the SDK handler; 401 fires
+	//         BEFORE the SDK ever sees the body (no MCP session state for bad requests).
 	//
-	// Each layer is a func(http.Handler) http.Handler — future layers slot in
-	// without re-plumbing this function.
+	//   [SDK] StreamableHTTPHandler — DNS-rebinding 403 fires at the top of ServeHTTP;
+	//         tool dispatch and JSON-RPC response handling run here.
+	//
+	// This is the SINGLE pipeline-assembly path (3.9 polish requirement).  All tests
+	// use RunHTTP, not custom-assembled pipelines, to stay aligned with production.
 	var pipeline http.Handler = sdkHandler
 	pipeline = verifier.Middleware(pipeline)               // [3.2] 401 before SDK sees body
 	pipeline = newRequestLogMiddleware(s.logger)(pipeline) // [3.3] reqlog outside auth — even 401s are logged
+	pipeline = http.MaxBytesHandler(pipeline, 1<<20)       // [3.4] 1 MiB body cap — outermost layer (ADR-006)
 
 	httpSrv := &http.Server{
 		Handler: pipeline,
