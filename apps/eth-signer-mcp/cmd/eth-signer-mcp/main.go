@@ -276,6 +276,14 @@ func run(ctx context.Context, cmd *cli.Command) error {
 	// Step 8: wire signal.NotifyContext for SIGINT/SIGTERM graceful shutdown.
 	// When the OS delivers SIGINT or SIGTERM, ctx is cancelled, which propagates
 	// to the active transport (RunHTTP or RunStdio), which returns nil.
+	//
+	// stop() is called via defer; it restores the default signal handlers after
+	// RunHTTP/RunStdio returns.  A second SIGINT/SIGTERM delivered during the
+	// 3 s HTTP grace window is intentionally absorbed by the OS signal queue and
+	// does NOT abort the drain — signal.NotifyContext delivers at most one signal
+	// to the channel and ignores subsequent ones until stop() is called.  This
+	// prevents a double-Ctrl-C from bypassing the in-flight request drain without
+	// needing any additional signal-handling code.
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 

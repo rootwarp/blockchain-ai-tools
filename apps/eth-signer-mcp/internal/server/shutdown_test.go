@@ -158,7 +158,7 @@ func TestShutdown_InFlightCallDrainsOnCancel(t *testing.T) {
 	select {
 	case aErr := <-aErrCh:
 		if aErr != nil {
-			t.Errorf("A returned error after holdFn released: %v", aErr)
+			t.Fatalf("A returned error after holdFn released: %v", aErr)
 		}
 	case <-time.After(30 * time.Second):
 		t.Fatal("A did not complete within 30s after holdFn released")
@@ -304,7 +304,10 @@ func TestShutdown_SemaphoreWaiterCancelledAtShutdown(t *testing.T) {
 	// ── Request B: will be queued on the semaphore (A holds it) ──────────────
 	//
 	// bCtx is cancellable so we can simulate client disconnect during shutdown.
+	// defer bCancel() ensures bCtx is always cleaned up even if t.Fatal fires
+	// before the explicit bCancel() call below (double-cancel is a no-op).
 	bCtx, bCancel := context.WithCancel(testCtx)
+	defer bCancel()
 
 	csB := sdkClient(t, bCtx, endpoint, token)
 

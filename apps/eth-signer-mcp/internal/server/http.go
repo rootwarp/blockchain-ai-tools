@@ -255,7 +255,11 @@ func (s *Server) RunHTTP(ctx context.Context, opts HTTPOptions) error {
 		defer graceCancel()
 		if shutdownErr := httpSrv.Shutdown(graceCtx); shutdownErr != nil {
 			// Drain exceeded the grace window or another Shutdown error.
-			// Propagate — do NOT mask — so callers see the real outcome.
+			// Drain serveErrCh before returning so the Serve goroutine has fully
+			// exited and the caller has a happens-before guarantee on the goroutine.
+			// (serveErrCh is buffered cap-1 so this never blocks indefinitely — Serve
+			// always sends exactly one value before RunHTTP returns.)
+			<-serveErrCh
 			return shutdownErr
 		}
 		<-serveErrCh // drain the Serve goroutine (already sent nil via ErrServerClosed)
