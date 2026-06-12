@@ -757,19 +757,19 @@ token hash inside `signing.Secret`). stdio exits 0 on clean EOF.
 
 **Acceptance Criteria:**
 
-- [ ] SIGTERM and SIGINT each cause the real HTTP binary to stop
+- [x] SIGTERM and SIGINT each cause the real HTTP binary to stop
       accepting, drain, and exit 0 within 5 s (subprocess test, both
       signals).
-- [ ] In-process: cancellation with one in-flight signing call → the
+- [x] In-process: cancellation with one in-flight signing call → the
       call completes and responds, new requests are refused, `RunHTTP`
       returns within the 3 s grace, and the vault's deferred zeroing
       ran for the in-flight call.
-- [ ] A request queued on the decrypt semaphore at cancel returns
+- [x] A request queued on the decrypt semaphore at cancel returns
       `ctx.Err()` before scrypt starts.
-- [ ] stdio: clean EOF on stdin → process exits 0 (subprocess test).
-- [ ] No goroutine leaks across the shutdown tests (`-race` runs
+- [x] stdio: clean EOF on stdin → process exits 0 (subprocess test).
+- [x] No goroutine leaks across the shutdown tests (`-race` runs
       clean; goleak only if already a dependency — do not add one).
-- [ ] Review note recorded in the PR: `internal/server` holds no key
+- [x] Review note recorded in the PR: `internal/server` holds no key
       material at shutdown; the only secret-adjacent state is the
       token hash inside `signing.Secret`.
 
