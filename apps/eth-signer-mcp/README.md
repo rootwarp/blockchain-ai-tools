@@ -121,14 +121,15 @@ Demo script, 401/403 curl one-liners, live captures: [`docs/demo.md`](docs/demo.
 | `--http` | bool | `false` | Streamable HTTP transport; requires `--http-auth-token-file` |
 | `--http-addr` | string | `127.0.0.1:0` | Loopback bind address; ephemeral port when `:0`; non-loopback rejected (ADR-006) |
 | `--http-auth-token-file` | string | — | Bearer auth token file (required with `--http`); chmod 600 recommended |
-| `--chain-id` | uint64 | unset (no guard) | Optional chain-id guard; signs refused on mismatch; `0` rejected (replay-unprotected). urfave/cli shows `(default: 0)` — omitting the flag disables the guard entirely |
+| `--chain-id` | uint | unset (no guard) | Optional chain-id guard; signs refused on mismatch; `0` rejected (replay-unprotected). urfave/cli renders the underlying `Uint64Flag` as `uint` in `--help`; omitting the flag disables the guard entirely |
 | `--strict-perms` | bool | `false` | Refuse startup (exit 2) if any secret file is group/world-readable; default warns only |
 | `--log-level` | string | `info` | `debug` \| `info` \| `warn` \| `error` (case-insensitive) |
 | `--help` / `-h` | — | — | Show help (urfave/cli v3 built-in) |
 | `--version` / `-v` | — | — | Print version / commit / date / Go version |
 
 All 10 flags above are present in `./bin/eth-signer-mcp --help` with matching
-descriptions and defaults; no divergence.
+descriptions and defaults.  (urfave/cli v3 renders `Uint64Flag` as `uint` in
+the help output; the underlying Go type is `uint64`.)
 
 ---
 
@@ -176,8 +177,12 @@ of 1 (ADR-006): at most one live key scalar at a time.
 
 **No secrets in logs.** Raw key bytes, password bytes, and their hex / base64 /
 decimal encodings are never emitted.  Sentinel-based leak scans cover the happy
-path, all six error-code paths, and the `--strict-perms` refusal path (issue
-3.5 hardening matrix; issue 4.4 end-to-end leak audit — both CI-gated).
+path and five of six error-code paths (`invalid_input`, `unsupported_type`,
+`chain_id_mismatch`, `keystore_error`, `password_error`) across both stdio and
+HTTP transports (issues 2.11, 3.5, 3.8 — CI-gated).  `internal_error` is not
+force-able through the unmodified binary; it is covered at the wire-contract
+level in `internal/server/handlers_test.go`.  Full six-code + `--strict-perms`
+refusal-path sentinel matrix is completed in issue 4.4.
 
 **File permission checks.** At startup the binary checks mode bits of every
 secret file.  Group- or world-readable files trigger a warning (default) or
@@ -213,7 +218,7 @@ value is compact JSON with exactly two fields: `{"code":"…","message":"…"}`.
 
 Wire shape example:
 ```json
-{"isError":true,"content":[{"type":"text","text":"{\"code\":\"password_error\",\"message\":\"keystore decryption failed: could not decrypt key with given password\"}"}]}
+{"isError":true,"content":[{"type":"text","text":"{\"code\":\"password_error\",\"message\":\"keystore decryption failed; check the password\"}"}]}
 ```
 
 ---
@@ -268,7 +273,7 @@ See [`scripts/regen-vectors.sh`](../../scripts/regen-vectors.sh).
 **Permission warning at startup (or exit 2 with `--strict-perms`)**
 
 ```
-{"level":"WARN","msg":"file is group/world accessible; consider chmod 600 ...","path":"/path/to/keystore.json"}
+{"level":"WARN","msg":"file is group/world accessible; consider chmod 600 (use --strict-perms to refuse)","path":"/path/to/keystore.json"}
 ```
 
 Fix: `chmod 600 <keystore> <password-file>` (and `<token-file>` for `--http`).
