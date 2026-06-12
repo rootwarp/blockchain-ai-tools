@@ -92,17 +92,17 @@ func newCommand() *cli.Command {
 			},
 			&cli.BoolFlag{
 				Name:  "http",
-				Usage: "select Streamable HTTP transport (Phase 3); default is stdio",
+				Usage: "serve MCP over Streamable HTTP instead of stdio; requires --http-auth-token-file",
 				Value: false,
 			},
 			&cli.StringFlag{
 				Name:  "http-addr",
-				Usage: "bind address for Streamable HTTP transport; ephemeral port by default",
+				Usage: "loopback bind address for Streamable HTTP (e.g. 127.0.0.1:0 or [::1]:0); must be loopback — non-loopback addresses are rejected (ADR-006 security invariant)",
 				Value: "127.0.0.1:0",
 			},
 			&cli.StringFlag{
 				Name:  "http-auth-token-file",
-				Usage: "path to bearer token file; required when --http is set",
+				Usage: "path to bearer auth token file (required with --http); file must be chmod 600; use --strict-perms to enforce the permission check at startup",
 			},
 			&cli.Uint64Flag{
 				// --chain-id has no default: nil when unset means "no guard".

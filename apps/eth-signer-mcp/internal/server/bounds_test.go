@@ -36,7 +36,6 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -218,17 +217,6 @@ func (c *countingVaultWrapper) WithSigningKey(ctx context.Context, fn func(signi
 }
 
 // ── test helpers ─────────────────────────────────────────────────────────────
-
-// signingTestdataPathBounds returns the path to the signing testdata directory.
-func signingTestdataPathBounds(t *testing.T) string {
-	t.Helper()
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller(0) failed")
-	}
-	serverDir := filepath.Dir(thisFile)
-	return filepath.Join(serverDir, "..", "signing", "testdata")
-}
 
 // startHTTPWithToken starts RunHTTP with a fresh random token and returns the
 // bound address and the raw token string. Cleanup is registered via t.Cleanup.
@@ -461,7 +449,7 @@ func TestMaxBytesHandler_OversizedBodyRejected(t *testing.T) {
 func TestMaxBytesHandler_ValidBodyPasses(t *testing.T) {
 	t.Parallel()
 
-	tdPath := signingTestdataPathBounds(t)
+	tdPath := signingTestdataPath(t)
 	vault, err := signing.NewFileKeyVault(signing.VaultOptions{
 		KeystorePath: filepath.Join(tdPath, "keystore-light.json"),
 		PasswordPath: filepath.Join(tdPath, "password.txt"),
@@ -512,7 +500,7 @@ func TestMaxBytesHandler_ValidBodyPasses(t *testing.T) {
 func TestCapComposition_DataAtExactCap_Passes(t *testing.T) {
 	t.Parallel()
 
-	tdPath := signingTestdataPathBounds(t)
+	tdPath := signingTestdataPath(t)
 	vault, err := signing.NewFileKeyVault(signing.VaultOptions{
 		KeystorePath: filepath.Join(tdPath, "keystore-light.json"),
 		PasswordPath: filepath.Join(tdPath, "password.txt"),
@@ -575,7 +563,7 @@ func TestCapComposition_DataAtExactCap_Passes(t *testing.T) {
 func TestCapComposition_DataOneByteOverCap_InvalidInput(t *testing.T) {
 	t.Parallel()
 
-	tdPath := signingTestdataPathBounds(t)
+	tdPath := signingTestdataPath(t)
 	innerVault, err := signing.NewFileKeyVault(signing.VaultOptions{
 		KeystorePath: filepath.Join(tdPath, "keystore-light.json"),
 		PasswordPath: filepath.Join(tdPath, "password.txt"),
@@ -684,7 +672,7 @@ func TestSemaphorePlumbing_CtxCancelledWhileQueued(t *testing.T) {
 	// Not parallel: uses light fixture KDF (~50 ms) and coordination channels.
 	// Running concurrently with other KDF-heavy tests can cause flaky timeouts.
 
-	tdPath := signingTestdataPathBounds(t)
+	tdPath := signingTestdataPath(t)
 	innerVault, err := signing.NewFileKeyVault(signing.VaultOptions{
 		KeystorePath: filepath.Join(tdPath, "keystore-light.json"),
 		PasswordPath: filepath.Join(tdPath, "password.txt"),

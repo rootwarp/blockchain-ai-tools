@@ -74,7 +74,7 @@ import (
 func TestShutdown_InFlightCallDrainsOnCancel(t *testing.T) {
 	// Not parallel — light fixture KDF and coordination channels.
 
-	tdPath := signingTestdataPathBounds(t)
+	tdPath := signingTestdataPath(t)
 	innerVault, err := signing.NewFileKeyVault(signing.VaultOptions{
 		KeystorePath: filepath.Join(tdPath, "keystore-light.json"),
 		PasswordPath: filepath.Join(tdPath, "password.txt"),
@@ -239,7 +239,7 @@ func TestShutdown_InFlightCallDrainsOnCancel(t *testing.T) {
 func TestShutdown_SemaphoreWaiterCancelledAtShutdown(t *testing.T) {
 	// Not parallel — light fixture KDF and coordination channels.
 
-	tdPath := signingTestdataPathBounds(t)
+	tdPath := signingTestdataPath(t)
 	innerVault, err := signing.NewFileKeyVault(signing.VaultOptions{
 		KeystorePath: filepath.Join(tdPath, "keystore-light.json"),
 		PasswordPath: filepath.Join(tdPath, "password.txt"),
