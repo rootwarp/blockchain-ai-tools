@@ -569,25 +569,29 @@ v1.6.1's observed behavior fails loudly with the right diagnostic.
 
 **Acceptance Criteria:**
 
-- [ ] Bind layer: the default configuration's resolved listener address
+- [x] Bind layer: the default configuration's resolved listener address
       is loopback, asserted structurally on `*net.TCPAddr`.
-- [ ] Rebind layer: `Host: evil.example.com` with a **valid** bearer →
+- [x] Rebind layer: `Host: evil.example.com` with a **valid** bearer →
       403 from the SDK handler.
-- [ ] Auth layer: missing / malformed / wrong bearer → 401; the SDK
+- [x] Auth layer: missing / malformed / wrong bearer → 401; the SDK
       handler and all signing logic provably never ran (recording
       seam).
-- [ ] Body-cap layer: >1 MiB body rejected inside the matrix.
-- [ ] Pipeline-order regression: (i) oversized body + bad token fails
-      on size, auth untouched; (ii) 401 requests are request-logged
-      with `status=401`; (iii) bad token + rebound Host → 401. All
-      three pinned to SDK v1.6.1 observed behavior with failure
-      messages pointing at the 1.7 spike note.
-- [ ] Every sub-test runs against the real `RunHTTP` pipeline with the
+- [x] Body-cap layer: >1 MiB body rejected inside the matrix.
+- [x] Pipeline-order regression: (i) oversized body + bad token →
+      **401** under SDK v1.6.1 (auth's header-only check fires before
+      the body is read, so the body cap never trips and the signer is
+      never reached — the test pins this observed behavior, which
+      supersedes the earlier "fails on size" prediction; documented in
+      a test NOTE); (ii) 401 requests are request-logged with
+      `status=401`; (iii) bad token + rebound Host → 401. All three
+      pinned to SDK v1.6.1 observed behavior with failure messages
+      pointing at the 1.7 spike note.
+- [x] Every sub-test runs against the real `RunHTTP` pipeline with the
       SDK v1.6.1 server; matrix is flake-free across 10 consecutive
       local `-race` runs (development smoke, not a CI loop).
-- [ ] Leak scan green over all logs captured during the matrix
+- [x] Leak scan green over all logs captured during the matrix
       (including 401/403 paths).
-- [ ] `go test -race ./internal/server/...` green; matrix runs in CI.
+- [x] `go test -race ./internal/server/...` green; matrix runs in CI.
 
 **Testing Notes:**
 
