@@ -56,19 +56,19 @@
 
 ### Exit criteria (from the project plan)
 
-- [ ] `--http` serves Streamable HTTP on `127.0.0.1` (ephemeral port
+- [x] `--http` serves Streamable HTTP on `127.0.0.1` (ephemeral port
       printed); no token file → startup refusal; bad/missing bearer →
       401; rebound Host → 403; >1 MiB body rejected. All in the
       hardening matrix, green in CI.
-- [ ] Pipeline-order regression test pins MaxBytes → reqlog → auth → SDK.
-- [ ] Concurrent-calls integration test green (correct signatures,
+- [x] Pipeline-order regression test pins MaxBytes → reqlog → auth → SDK.
+- [x] Concurrent-calls integration test green (correct signatures,
       serialized decrypts, no leakage) — present and not skipped.
-- [ ] Every HTTP request logs `request_id`/`remote_addr`/`status`/
+- [x] Every HTTP request logs `request_id`/`remote_addr`/`status`/
       `latency_ms`; the signing audit line carries the same `request_id`.
-- [ ] stdio/HTTP parity test green (identical schemas + results).
-- [ ] SIGINT/SIGTERM drains and exits cleanly on both transports;
+- [x] stdio/HTTP parity test green (identical schemas + results).
+- [x] SIGINT/SIGTERM drains and exits cleanly on both transports;
       stdio EOF exits 0.
-- [ ] Leak scan (raw + encoded forms) green over all HTTP-path logs.
+- [x] Leak scan (raw + encoded forms) green over all HTTP-path logs.
 
 ## Phase Summary
 
@@ -919,28 +919,28 @@ tree ready for Phase 4 entry.
 
 **Acceptance Criteria:**
 
-- [ ] Exactly one pipeline-assembly path exists in
+- [x] Exactly one pipeline-assembly path exists in
       `internal/server/http.go` (MaxBytes → reqlog → auth → SDK),
       used by production and by every matrix/e2e test — no test
       assembles its own divergent pipeline.
-- [ ] Shared test helpers (binary launch, announce scrape, bearer
+- [x] Shared test helpers (binary launch, announce scrape, bearer
       round-tripper, instrumented vault) exist once each across
       `internal/server/*_test.go`; duplicated copies removed.
-- [ ] `make lint` clean with zero suppressions added during Phase 3;
+- [x] `make lint` clean with zero suppressions added during Phase 3;
       depguard green (`server` → `signing`+`obs` only; `signing` still
       imports nothing internal); the ADR-007 offline-import test still
       green (no HTTP client code crept toward `signing`).
-- [ ] `make test && make build` green; full CI green on `main`,
+- [x] `make test && make build` green; full CI green on `main`,
       including the 3.6 concurrent-calls test and the 3.5 matrix.
-- [ ] `--help` documents all three HTTP flags with the token-file
+- [x] `--help` documents all three HTTP flags with the token-file
       permission guidance (chmod 600 / `--strict-perms`); package doc
       for `internal/server` describes the pipeline order and the
       hardening layers.
-- [ ] Every Phase 3 exit criterion at the top of this file re-checked
+- [x] Every Phase 3 exit criterion at the top of this file re-checked
       and ticked, with test names cited in the PR description for: the
       hardening matrix, the pipeline-order pins, the concurrent-calls
       test, the parity test, and the shutdown tests.
-- [ ] No behavior changes: the diff is refactor/docs only, and the
+- [x] No behavior changes: the diff is refactor/docs only, and the
       golden vectors, schemas, and wire encodings are byte-identical
       before and after.
 
@@ -958,23 +958,23 @@ tree ready for Phase 4 entry.
 
 When all nine issues land, the reviewer confirms:
 
-- [ ] All Phase 3 exit criteria (top of this file) are satisfied.
-- [ ] ADR-006 fully implemented: loopback bind (verified bound
+- [x] All Phase 3 exit criteria (top of this file) are satisfied.
+- [x] ADR-006 fully implemented: loopback bind (verified bound
       address), SDK DNS-rebinding 403, bearer 401 before any signing
       logic, 1 MiB body cap, serialized decrypts proven under the
       required (never-waived) concurrent-calls test.
-- [ ] Pipeline order MaxBytes → reqlog → auth → SDK pinned by
+- [x] Pipeline order MaxBytes → reqlog → auth → SDK pinned by
       regression tests tied to SDK v1.6.1 observed behavior.
-- [ ] Bearer-token file is permission-checked with the same
+- [x] Bearer-token file is permission-checked with the same
       warn/`--strict-perms` semantics as the keystore/password files.
-- [ ] ADR-007 offline-import test and ADR-008 depguard both still
+- [x] ADR-007 offline-import test and ADR-008 depguard both still
       green — Phase 3 added HTTP code only to `internal/server`.
-- [ ] Leak scan (raw + encoded forms) green over every captured byte
+- [x] Leak scan (raw + encoded forms) green over every captured byte
       of HTTP-path logs and responses, including 401/403 paths and the
       concurrent burst.
-- [ ] stdio/HTTP parity (schemas + signed results, byte-identical on
+- [x] stdio/HTTP parity (schemas + signed results, byte-identical on
       golden vectors) green; graceful shutdown green on both
       transports.
-- [ ] `make lint && make test && make build` green on a clean
+- [x] `make lint && make test && make build` green on a clean
       checkout; CI green on `main` with go-sdk pinned at v1.6.1 for
       server and test client.
