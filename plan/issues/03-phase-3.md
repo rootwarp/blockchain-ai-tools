@@ -846,27 +846,27 @@ the HTTP side.
 
 **Acceptance Criteria:**
 
-- [ ] HTTP e2e green against the real binary over Streamable HTTP with
+- [x] HTTP e2e green against the real binary over Streamable HTTP with
       SDK v1.6.1 client + bearer round-tripper: `initialize`,
       `tools/list` (exactly `sign_transaction` + `get_address`, strict
       schemas), `get_address` (EIP-55 fixture address),
       `sign_transaction` happy path.
-- [ ] One error path per stable code (`invalid_input`,
+- [x] One error path per stable code (`invalid_input`,
       `unsupported_type`, `chain_id_mismatch`, `keystore_error` or
       `password_error` as reachable, `internal_error` via seam if
       practical) asserted over HTTP by JSON-parsing `Content[0]`.
-- [ ] Parity: for at least one legacy and one EIP-1559 golden vector,
+- [x] Parity: for at least one legacy and one EIP-1559 golden vector,
       the stdio and HTTP `SignResult`s are byte-identical to each other
       and to the committed golden (`rawTransaction`, `r`, `s`, `v`,
       `hash`, `from`).
-- [ ] Parity: `tools/list` schema documents are deep-equal across
+- [x] Parity: `tools/list` schema documents are deep-equal across
       stdio and HTTP.
-- [ ] HTTP-side stderr shows a reqlog line and an audit line sharing
+- [x] HTTP-side stderr shows a reqlog line and an audit line sharing
       one `request_id` per signing; all captured output (both
       transports) passes the leak scan, raw + encoded forms.
-- [ ] Harness leaves no zombie processes on pass or fail
+- [x] Harness leaves no zombie processes on pass or fail
       (`t.Cleanup` kill); teardown exits are clean (exit 0).
-- [ ] Green in CI under `-race`; no external network access; no
+- [x] Green in CI under `-race`; no external network access; no
       Foundry/Node invocation.
 
 **Testing Notes:**
