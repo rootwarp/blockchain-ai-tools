@@ -14,11 +14,12 @@ package server
 //      vault never invoked.
 //
 //  (c) Ctx + semaphore plumbing: a recordingKeyVault wrapper (test-only) delegates
-//      to a real FileKeyVault (light fixture) while recording WithSigningKey entry/exit
-//      via atomic gauge + max tracker. Request A holds the semaphore (slow fn);
-//      request B is cancelled client-side while queued → B returns without the KDF
-//      starting (instrumented assertion, not wall-clock). A completes normally.
-//      Max concurrent gauge == 1.
+//      to a real FileKeyVault (light fixture) and records WithSigningKey entry (before
+//      semaphore) and fn entry (after semaphore + KDF) as separate counters. Request A
+//      holds the semaphore (slow fn via holdFnCh). B's cancel is gated on B entering
+//      the vault (withSigningKeyCallsTotal ≥ 2) so the cancel is provably at the
+//      semaphore layer. Assertions: withSigningKeyCallsTotal == 2 (B reached vault) AND
+//      fnCallsTotal == 1 (B never ran KDF). maxActiveFn == 1. A completes normally.
 //
 // All tests run under -race. No time.Sleep calls anywhere.
 //
@@ -49,41 +50,57 @@ import (
 
 // ── recordingKeyVault ────────────────────────────────────────────────────────
 //
-// recordingKeyVault wraps a signing.KeyVault to instrument WithSigningKey entry/exit.
-// Lives in _test.go only — no production test hooks.
+// recordingKeyVault wraps a signing.KeyVault to instrument WithSigningKey at two
+// points: ENTRY (before delegating to inner, before the semaphore) and INSIDE fn
+// (after the semaphore + ctx re-check + KDF). Lives in _test.go only.
 //
-// Fields:
-//   - fnStarted: closed when the first fn invocation starts (A signals "semaphore held").
-//   - holdFnCh:  if non-nil, fn blocks until this channel is closed (or ctx cancels).
-//   - activeFn:  atomic count of goroutines currently inside fn (concurrent KDF executions).
-//   - maxActiveFn: high-water mark of activeFn — must stay ≤ 1 to prove serialization.
-//   - fnCallsTotal: total fn invocations; B cancelled before fn means this stays at 1.
+// Two-level counters (the distinction is the key correctness property):
+//
+//	withSigningKeyCallsTotal — incremented at WithSigningKey ENTRY, before any
+//	    inner call, semaphore acquire, ctx check, or KDF. Records "B reached the
+//	    vault" even if B is cancelled at the semaphore and never calls fn.
+//
+//	fnCallsTotal — incremented INSIDE the wrapped fn, which runs only AFTER the
+//	    inner vault acquires the semaphore, re-checks ctx, and runs the KDF.
+//	    "B never ran the KDF" is proven by fnCallsTotal staying at 1 while
+//	    withSigningKeyCallsTotal == 2.
+//
+// withSigningKeySecondCh is closed the first time withSigningKeyCallsTotal reaches
+// 2 — it is a one-shot notification that B has entered the vault path. The test
+// gates bCancel() on this channel so it can be certain B is in the semaphore-wait
+// select (or close to it) when cancelled, not still at the HTTP/auth/SDK layer.
 type recordingKeyVault struct {
 	inner signing.KeyVault
 
-	// Test-control channels; nil = feature not used.
-	fnStarted <-chan struct{} // test waits on this; recording vault closes it on first fn entry
-	fnStartCh chan struct{}   // the writeable end; closed by WithSigningKey
-	holdFnCh  <-chan struct{} // fn blocks until closed (or ctx cancels)
+	// Notification channels (written by WithSigningKey, read by the test).
+	fnStarted              <-chan struct{} // closed when first fn starts
+	fnStartCh              chan struct{}   // the writeable end
+	withSigningKeySecondCh chan struct{}   // closed when withSigningKeyCallsTotal first reaches 2
 
-	// Instrumentation (safe for concurrent use).
-	activeFn     atomic.Int32
-	maxActiveFn  atomic.Int32
-	fnCallsTotal atomic.Int32
+	// Test-control channel.
+	holdFnCh <-chan struct{} // fn blocks until closed (or ctx cancels)
+
+	// Instrumentation atomics (safe for concurrent use).
+	withSigningKeyCallsTotal atomic.Int32 // vault-entry count (before semaphore)
+	activeFn                 atomic.Int32 // goroutines currently inside fn
+	maxActiveFn              atomic.Int32 // high-water mark of activeFn
+	fnCallsTotal             atomic.Int32 // fn invocations (KDF ran + fn entered)
 }
 
 // Ensure *recordingKeyVault satisfies signing.KeyVault at compile time.
 var _ signing.KeyVault = (*recordingKeyVault)(nil)
 
 // newRecordingVault wraps inner with instrumentation.
-// holdFnCh controls whether fn blocks; pass nil to let fn proceed immediately.
+// holdFnCh controls whether fn blocks after KDF; pass nil to let fn proceed immediately.
 func newRecordingVault(inner signing.KeyVault, holdFnCh <-chan struct{}) *recordingKeyVault {
-	started := make(chan struct{})
+	fnStarted := make(chan struct{})
+	secondCh := make(chan struct{})
 	return &recordingKeyVault{
-		inner:     inner,
-		fnStarted: started,
-		fnStartCh: started,
-		holdFnCh:  holdFnCh,
+		inner:                  inner,
+		fnStarted:              fnStarted,
+		fnStartCh:              fnStarted,
+		withSigningKeySecondCh: secondCh,
+		holdFnCh:               holdFnCh,
 	}
 }
 
@@ -92,16 +109,37 @@ func (v *recordingKeyVault) Address() common.Address {
 	return v.inner.Address()
 }
 
-// WithSigningKey records fn entry/exit and optionally holds fn until holdFnCh is closed.
+// WithSigningKey records entry/exit and optionally holds fn until holdFnCh is closed.
 func (v *recordingKeyVault) WithSigningKey(ctx context.Context, fn func(signing.SigningKey) error) error {
+	// ── ENTRY point — before semaphore, ctx-check, or KDF ──────────────────
+	//
+	// withSigningKeyCallsTotal is incremented here so the test can gate on "B has
+	// entered the vault path" without waiting for the semaphore (which A holds).
+	n := v.withSigningKeyCallsTotal.Add(1)
+
+	// Close the second-caller channel the first time n reaches 2 (one-shot).
+	if n == 2 {
+		select {
+		case <-v.withSigningKeySecondCh: // already closed
+		default:
+			close(v.withSigningKeySecondCh)
+		}
+	}
+
+	// Delegate to the inner vault. If ctx is already cancelled (or gets cancelled
+	// while waiting on the semaphore), inner.WithSigningKey returns ctx.Err() WITHOUT
+	// ever calling the wrapped fn — fnCallsTotal stays unchanged.
 	return v.inner.WithSigningKey(ctx, func(key signing.SigningKey) error {
-		// fn was called — KDF has run.
+		// ── Inside fn — semaphore acquired, ctx re-checked, KDF ran ────────
+		//
+		// fnCallsTotal counts KDF executions. If B was cancelled at the semaphore,
+		// this closure is never reached for B (fnCallsTotal stays at 1 while A runs).
 		v.fnCallsTotal.Add(1)
 
 		cur := v.activeFn.Add(1)
 		defer v.activeFn.Add(-1)
 
-		// Update max (CAS loop; safe for concurrent callers).
+		// Update max-concurrency high-water mark (CAS loop; safe for concurrent callers).
 		for {
 			old := v.maxActiveFn.Load()
 			if cur <= old {
@@ -112,14 +150,14 @@ func (v *recordingKeyVault) WithSigningKey(ctx context.Context, fn func(signing.
 			}
 		}
 
-		// Signal that fn has started (close once; subsequent closures are no-ops via select).
+		// Signal that the first fn has started (close once; no-op for subsequent).
 		select {
 		case <-v.fnStartCh: // already closed
 		default:
 			close(v.fnStartCh)
 		}
 
-		// Optional hold: block until test releases or ctx cancels.
+		// Optional hold: block until the test releases holdFnCh or ctx cancels.
 		if v.holdFnCh != nil {
 			select {
 			case <-v.holdFnCh:
@@ -236,6 +274,39 @@ func validSign1559Args() map[string]any {
 	}
 }
 
+// serverHealthCheck sends a tiny unauthenticated POST to addr and asserts the server
+// is still live (returns a response — any status is OK; connection refused means crash).
+//
+// It is called after a transport-level rejection in the oversized-body tests to ensure
+// the early-return path cannot silently mask a server crash.  An unauthenticated request
+// is expected to return 401 (bearer auth fires before any body reading).
+func serverHealthCheck(t *testing.T, addr net.Addr, token string) {
+	t.Helper()
+	req, err := http.NewRequestWithContext(context.Background(),
+		http.MethodPost, fmt.Sprintf("http://%s", addr.String()),
+		strings.NewReader("{}"))
+	if err != nil {
+		t.Errorf("serverHealthCheck: NewRequest: %v", err)
+		return
+	}
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	// Intentionally no Authorization header — bearer auth returns 401 before reading body.
+	resp, healthErr := http.DefaultClient.Do(req)
+	if healthErr != nil {
+		t.Errorf("serverHealthCheck: server appears to have crashed (connection refused or "+
+			"similar): %v — a crash would cause the oversized-body transport-error path "+
+			"to pass without actually verifying the body cap", healthErr)
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	// 401 is expected (auth fires before SDK) — anything non-nil proves server is live.
+	if resp.StatusCode == 0 {
+		t.Errorf("serverHealthCheck: unexpected zero status")
+	}
+	_ = token // token provided for potential future authenticated health-checks
+}
+
 // ── (a) Oversized-body rejection ─────────────────────────────────────────────
 
 // TestMaxBytesHandler_OversizedBodyRejected verifies that a request body > 1 MiB
@@ -300,9 +371,11 @@ func TestMaxBytesHandler_OversizedBodyRejected(t *testing.T) {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		// A transport-level error (connection reset) also means the server rejected
-		// the body — acceptable as a "rejection" for our purposes.
+		// A transport-level error (connection reset / early close) also signals body
+		// rejection — but only if the server is still alive.  Verify with a health-check
+		// request so this early-return path cannot mask a server crash.
 		t.Logf("HTTP client error (body rejected at transport level): %v", err)
+		serverHealthCheck(t, addr, token)
 		if n := toolCallCount.Load(); n != 0 {
 			t.Errorf("tool handler called %d times; want 0 for oversized body", n)
 		}
@@ -316,13 +389,14 @@ func TestMaxBytesHandler_OversizedBodyRejected(t *testing.T) {
 		t.Errorf("oversized body: got status %d; want >= 400 (body cap rejection)", resp.StatusCode)
 	}
 
-	// SDK v1.6.1 PINNED status: 400 Bad Request.
+	// SDK v1.6.1 PINNED status: 400 Bad Request (ASSERTED, not just logged).
 	// MaxBytesReader causes the SDK's json.Decode to fail; the SDK returns 400
-	// (not 413). If a future SDK version changes this, update pinnedStatus + comment.
+	// (not 413). If a future SDK version changes this, update pinnedStatus + comment,
+	// citing the new SDK version and the new observed status.
 	// See docs/mcp-sdk-spike.md §Question 3 for pipeline order.
 	const pinnedStatus = 400
 	if resp.StatusCode != pinnedStatus {
-		t.Logf("NOTICE: oversized body status = %d; SDK v1.6.1 pinned expected %d. "+
+		t.Errorf("oversized body status = %d; want %d (SDK v1.6.1 pinned). "+
 			"If SDK was upgraded, update pinnedStatus and this comment. "+
 			"See docs/mcp-sdk-spike.md §Question 3.",
 			resp.StatusCode, pinnedStatus)
@@ -540,17 +614,28 @@ func TestCapComposition_DataOneByteOverCap_InvalidInput(t *testing.T) {
 
 // TestSemaphorePlumbing_CtxCancelledWhileQueued verifies that:
 //  1. The HTTP request context reaches vault.WithSigningKey unmodified (ctx
-//     cancellation propagates from the HTTP layer through to the vault semaphore).
+//     cancellation propagates from the HTTP layer all the way to the vault semaphore).
 //  2. A client-cancelled queued request (B) returns with ctx.Err() BEFORE the KDF
-//     starts: fnCallsTotal == 1 after B is cancelled (only A called fn, not B).
+//     starts.  This is proven by TWO instrumentation assertions (see below):
+//     - withSigningKeyCallsTotal == 2: B provably ENTERED the vault path (reached the
+//     semaphore), so the cancellation happened at the semaphore select, not earlier.
+//     - fnCallsTotal == 1: B provably DID NOT run the KDF; only A did.
 //  3. Exactly ONE concurrent fn invocation ever occurs: maxActiveFn == 1.
 //  4. A completes normally with a valid sign result.
+//
+// The gate on bCancel() is the key correctness property:
+//   - We do NOT call bCancel() until rv.withSigningKeySecondCh is closed, which
+//     happens the moment B increments withSigningKeyCallsTotal to 2 (i.e. B has
+//     entered rv.WithSigningKey, which means B has reached or is about to reach the
+//     semaphore-wait select inside fileKeyVault.WithSigningKey).
+//   - This closes the race window where B could be cancelled at the HTTP/auth/SDK
+//     layer before reaching the vault at all.
 //
 // Synchronization is entirely instrumentation-based (channels + atomics).
 // No time.Sleep calls anywhere.
 func TestSemaphorePlumbing_CtxCancelledWhileQueued(t *testing.T) {
 	// Not parallel: uses light fixture KDF (~50 ms) and coordination channels.
-	// Running concurrently with other KDF tests can cause flaky timeouts.
+	// Running concurrently with other KDF-heavy tests can cause flaky timeouts.
 
 	tdPath := signingTestdataPathBounds(t)
 	innerVault, err := signing.NewFileKeyVault(signing.VaultOptions{
@@ -579,10 +664,10 @@ func TestSemaphorePlumbing_CtxCancelledWhileQueued(t *testing.T) {
 	testCtx, testCancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer testCancel()
 
-	// ── Request A: holds the semaphore via slow fn ────────────────────────────
+	// ── Request A: acquires the semaphore and holds it via slow fn ────────────
 	//
-	// A uses its own SDK client session. The recording vault's fn blocks on
-	// holdFn until we close it, effectively holding the vault semaphore.
+	// The recording vault's fn blocks on holdFn (after KDF), effectively holding
+	// the inner vault's semaphore until the test closes holdFn.
 	aCtx, aCancel := context.WithCancel(testCtx)
 	defer aCancel()
 
@@ -601,24 +686,25 @@ func TestSemaphorePlumbing_CtxCancelledWhileQueued(t *testing.T) {
 		aErrCh <- err
 	}()
 
-	// Wait (instrumentation-based) until A's fn has started — A now holds the semaphore.
+	// Wait (instrumentation-based) until A's fn has started.
+	// At this point: A holds the inner vault's semaphore; holdFn is the only release.
 	select {
 	case <-rv.fnStarted:
-		// A is inside fn and blocking on holdFn.
 	case <-time.After(30 * time.Second):
 		t.Fatal("A never entered fn within 30s; light fixture KDF timed out")
 	}
 
-	// ── Request B: arrives while A holds the semaphore, then B is cancelled ──
+	// ── Request B: enters the vault path, blocks on semaphore, then cancelled ──
 	//
-	// B uses its own SDK client session. We cancel B's context after starting
-	// the goroutine. Since A holds the vault semaphore, B blocks inside
-	// fileKeyVault.WithSigningKey's select. When bCancel() fires, ctx.Done()
-	// triggers in that select, returning ctx.Err() WITHOUT calling fn.
+	// B is started with its own cancellable context.  We do NOT cancel bCtx until
+	// rv.withSigningKeySecondCh fires — that channel closes the moment B's
+	// WithSigningKey ENTRY increments withSigningKeyCallsTotal to 2.  At that point
+	// B is inside rv.WithSigningKey and is about to (or already is) waiting on the
+	// inner vault's semaphore select.
 	//
-	// Even if B is cancelled before reaching fileKeyVault.WithSigningKey, the
-	// outcome is identical: ctx.Done() fires at the earliest select opportunity,
-	// fn is never called.
+	// Cancelling bCtx after this gate guarantees the cancellation propagates to
+	// fileKeyVault.WithSigningKey's `select { case v.sem <- ...: case <-ctx.Done(): }`
+	// rather than being swallowed at the HTTP transport or auth layer.
 	bCtx, bCancel := context.WithCancel(testCtx)
 
 	csB := sdkClient(t, bCtx, endpoint, token)
@@ -634,36 +720,52 @@ func TestSemaphorePlumbing_CtxCancelledWhileQueued(t *testing.T) {
 		bErrCh <- err
 	}()
 
-	// Cancel B's context. B is either already waiting on the semaphore or will
-	// observe the cancellation at the next select opportunity. Either way, fn is
-	// never called for B.
+	// GATE: wait until B has entered rv.WithSigningKey (withSigningKeyCallsTotal == 2).
+	// Only then cancel B's context, ensuring the cancellation reaches the semaphore.
+	select {
+	case <-rv.withSigningKeySecondCh:
+		// B has entered rv.WithSigningKey → is at or approaching the semaphore select.
+	case <-time.After(30 * time.Second):
+		t.Fatal("B never entered vault (withSigningKeySecondCh not closed within 30s)")
+	}
+
+	// Cancel B now that it is confirmed to be in the vault path.
 	bCancel()
 
-	// Wait for B to return (with error or nil — either is OK as long as fn not called).
+	// Wait for B to return.
 	select {
 	case <-bErrCh:
-		// B returned (cancelled or error). Check instrumentation below.
+		// B returned. Instrumentation check below.
 	case <-time.After(15 * time.Second):
-		t.Fatal("B did not return within 15s after context cancel")
+		t.Fatal("B did not return within 15s after context cancel at semaphore")
 	}
 
 	// ── Instrumentation assertions (A still blocking in fn) ───────────────────
 	//
-	// fnCallsTotal == 1: only A has called fn; B was cancelled before fn.
-	// This is the key assertion: B's ctx.Err() fired before the KDF started.
-	if n := rv.fnCallsTotal.Load(); n != 1 {
-		t.Errorf("fnCallsTotal = %d after B cancelled (A still in fn); want 1 (only A, not B)",
-			n)
+	// Assertion 1: withSigningKeyCallsTotal == 2
+	//   Both A and B entered rv.WithSigningKey. Combined with fnCallsTotal == 1, this
+	//   proves B entered the vault path but was cancelled before the KDF ran —
+	//   i.e. ctx.Err() fired at the semaphore select, NOT at the HTTP/auth/SDK layer.
+	if n := rv.withSigningKeyCallsTotal.Load(); n != 2 {
+		t.Errorf("withSigningKeyCallsTotal = %d after B cancelled; want 2 "+
+			"(A + B both entered vault, so cancellation was at the semaphore layer)", n)
 	}
 
-	// maxActiveFn == 1: never more than one concurrent fn invocation.
-	// This proves the Phase 2 vault semaphore is the ONLY concurrency gate.
+	// Assertion 2: fnCallsTotal == 1
+	//   Only A reached fn (past semaphore + ctx re-check + KDF). B was cancelled
+	//   before fn was ever called — B's ctx.Err() fired BEFORE the KDF started.
+	if n := rv.fnCallsTotal.Load(); n != 1 {
+		t.Errorf("fnCallsTotal = %d after B cancelled (A still in fn); want 1 "+
+			"(B cancelled before KDF; only A ran the KDF)", n)
+	}
+
+	// Assertion 3: maxActiveFn == 1 — only one concurrency gate exists (the vault semaphore).
 	if m := rv.maxActiveFn.Load(); m != 1 {
-		t.Errorf("maxActiveFn = %d; want 1 (exactly one concurrent fn at all times)", m)
+		t.Errorf("maxActiveFn = %d; want 1 (exactly one concurrent fn invocation at all times)", m)
 	}
 
 	// ── Release A ─────────────────────────────────────────────────────────────
-	close(holdFn) // A's fn unblocks and proceeds to sign
+	close(holdFn) // A's fn unblocks and signs the transaction
 
 	// Wait for A to complete normally.
 	select {
@@ -687,7 +789,10 @@ func TestSemaphorePlumbing_CtxCancelledWhileQueued(t *testing.T) {
 			aResult.GetError(), content)
 	}
 
-	// Final instrumentation: after A completes, fnCallsTotal must still be 1.
+	// Final checks: counters unchanged after A completes.
+	if n := rv.withSigningKeyCallsTotal.Load(); n != 2 {
+		t.Errorf("withSigningKeyCallsTotal after A completes = %d; want 2", n)
+	}
 	if n := rv.fnCallsTotal.Load(); n != 1 {
 		t.Errorf("fnCallsTotal after A completes = %d; want 1", n)
 	}
@@ -742,7 +847,10 @@ func TestPipelineOrder_MaxBytesOutermostBeforeAuth(t *testing.T) {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		// Transport-level rejection also means size rejection — but only if the server
+		// is still alive.  Health-check so a crash cannot make this path a false pass.
 		t.Logf("transport-level error (body rejected at transport layer): %v", err)
+		serverHealthCheck(t, addr, token)
 		if n := toolCallCount.Load(); n != 0 {
 			t.Errorf("tool handler called %d times; want 0", n)
 		}
@@ -756,11 +864,20 @@ func TestPipelineOrder_MaxBytesOutermostBeforeAuth(t *testing.T) {
 	if resp.StatusCode == http.StatusUnauthorized {
 		t.Errorf("got 401; this means auth ran BEFORE MaxBytes — pipeline order is WRONG. " +
 			"Expected: MaxBytes → reqlog → auth → SDK. " +
-			"See docs/mcp-sdk-spike.md §Question 3.",
-		)
+			"See docs/mcp-sdk-spike.md §Question 3.")
 	}
 	if resp.StatusCode < 400 {
 		t.Errorf("oversized body with valid token: got %d; want >= 400 (size rejection)", resp.StatusCode)
+	}
+
+	// SDK v1.6.1 PINNED status for oversized body: 400 (ASSERTED).
+	// Consistent with TestMaxBytesHandler_OversizedBodyRejected.
+	const pinnedStatus = 400
+	if resp.StatusCode != pinnedStatus {
+		t.Errorf("oversized body + valid token status = %d; want %d (SDK v1.6.1 pinned). "+
+			"If SDK was upgraded, update pinnedStatus and this comment. "+
+			"See docs/mcp-sdk-spike.md §Question 3.",
+			resp.StatusCode, pinnedStatus)
 	}
 
 	// Tool handler must not have been called.

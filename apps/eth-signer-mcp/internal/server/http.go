@@ -194,6 +194,12 @@ func (s *Server) RunHTTP(ctx context.Context, opts HTTPOptions) error {
 		// even on loopback.  5 s is generous for any well-behaved MCP client
 		// (ADR-006; confirmed during 1.7 spike as the only non-default knob).
 		ReadHeaderTimeout: 5 * time.Second,
+		// ReadTimeout and WriteTimeout are deliberately omitted:
+		//   - Streamable HTTP GET /mcp responses are long-lived SSE streams; a
+		//     WriteTimeout would close the connection mid-stream (breaking streaming).
+		//   - The 1 MiB body cap (MaxBytesHandler above) is the upload bound.
+		//   - A configurable per-request deadline (cancel on client disconnect) is
+		//     tracked via the request context; hard timeouts land in 3.7/3.9 if needed.
 	}
 
 	// Expose http.Server to tests via the capture channel (test-only seam).
