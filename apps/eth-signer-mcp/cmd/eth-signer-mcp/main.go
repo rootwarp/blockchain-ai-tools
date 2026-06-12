@@ -76,8 +76,10 @@ func main() {
 // output is: "eth-signer-mcp version <Version> (commit <Commit>, built <Date>, <GoVersion>)".
 func newCommand() *cli.Command {
 	return &cli.Command{
-		Name:    "eth-signer-mcp",
-		Usage:   "offline Ethereum signer MCP server (stdio by default; Streamable HTTP via --http in Phase 3)",
+		Name: "eth-signer-mcp",
+		Usage: "offline Ethereum signer MCP server (stdio default; --http for Streamable HTTP); " +
+			"signing latency: ~50 ms light-scrypt (N=4096) / ~0.5–1 s standard-scrypt (N=262144), " +
+			"paid on every signing call — no warm path; see README §Latency",
 		Version: obs.Build().String(), // Issue 1.4: all four fields on --version
 		Flags: []cli.Flag{
 			&cli.StringFlag{
