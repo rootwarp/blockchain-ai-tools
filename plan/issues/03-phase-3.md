@@ -474,23 +474,23 @@ intact) with a two-request test.
 
 **Acceptance Criteria:**
 
-- [ ] A >1 MiB request body is rejected without the SDK handler
+- [x] A >1 MiB request body is rejected without the SDK handler
       receiving a complete request; the rejection status/behavior
       observed under SDK v1.6.1 is asserted and documented in the test.
-- [ ] A valid request with `data` at the 256 KiB-bytes cap passes the
+- [x] A valid request with `data` at the 256 KiB-bytes cap passes the
       body cap and signs; `data` over the cap but body under 1 MiB →
       `invalid_input` (schema/validation layer), vault never invoked.
-- [ ] The HTTP request context reaches `vault.WithSigningKey`
+- [x] The HTTP request context reaches `vault.WithSigningKey`
       unmodified: a client-cancelled queued request returns with
       `ctx.Err()` **before scrypt starts** (instrumented vault
       assertion, not wall-clock).
-- [ ] Exactly one concurrency gate exists on the signing path: the
+- [x] Exactly one concurrency gate exists on the signing path: the
       Phase 2 vault semaphore — asserted by code inspection note in the
       PR plus the instrumented two-request test (A in-flight, B queued,
       never concurrent).
-- [ ] Pipeline assembly in `http.go` reads, outermost first:
+- [x] Pipeline assembly in `http.go` reads, outermost first:
       `MaxBytesHandler` → reqlog → bearer auth → SDK handler.
-- [ ] `go test -race ./internal/server/...` green.
+- [x] `go test -race ./internal/server/...` green.
 
 **Testing Notes:**
 
