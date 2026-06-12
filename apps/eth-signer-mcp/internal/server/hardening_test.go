@@ -137,11 +137,29 @@ func TestHardeningMatrix_Rebind_ValidBearer_Returns403(t *testing.T) {
 	t.Parallel()
 
 	const token = "rebind-valid-bearer-403-hardening"
-	// testServer uses noopStub.  The request body is an initialize method (not
-	// tools/call), so SignTransaction cannot be reached regardless of the 403.
-	// The 403 status code is the authoritative DNS-rebinding assertion; the absence
-	// of a panic is incidental (the initialize method never dispatches a tool).
-	srv := testServer(t)
+	// Use a t.Errorf-based stub (not panic) so that any accidental seam invocation
+	// fails the test reliably even when net/http recovers handler-goroutine panics.
+	// The request body is an initialize method (not tools/call), so SignTransaction
+	// cannot be reached regardless of the 403; the stub is here for consistency.
+	// The 403 status code is the authoritative DNS-rebinding assertion.
+	var rebindSignCalled atomic.Int32
+	srv := newServer(&stubSigner{
+		address: common.Address{},
+		signFn: func(_ context.Context, _ signing.TxRequest) (*signing.SignResult, error) {
+			n := rebindSignCalled.Add(1)
+			t.Errorf("hardening rebind: SignTransaction called (n=%d) — must not be reached "+
+				"on the 403 path; DNS-rebinding protection fires before tool dispatch. "+
+				"See %s §Question 2.", n, spikeNoteRef)
+			return nil, &signing.ToolError{
+				Code:    signing.CodeInternalError,
+				Message: "rebind: stub must not be called",
+			}
+		},
+	}, Options{
+		Name:    "hardening-rebind-test",
+		Version: "v0.0.0-test",
+		Logger:  obs.NewLogger("error"),
+	})
 	tokenFile := writeTokenFile(t, token+"\n")
 	readyCh := make(chan net.Addr, 1)
 
@@ -377,19 +395,15 @@ func TestHardeningMatrix_BodyCap_OversizedRejected(t *testing.T) {
 
 	addr, token := startHTTPWithToken(t, srv)
 
-	// Build a >1 MiB syntactically valid JSON-RPC frame.
-	// 1_100_000 bytes of padding pushes the body to ≈1.1 MiB, well over the 1 MiB cap.
-	// The _pad field is valid JSON so the rejection is from the byte cap, not syntax.
-	pad := strings.Repeat("Z", 1_100_000)
-	body := fmt.Sprintf(
-		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"sign_transaction","arguments":{"type":"0x0","chainId":"1","nonce":"0","to":"0x9858EfFD232B4033E47d90003D41EC34EcaEda94","value":"0","data":"0x","gas":"21000","gasPrice":"20000000000","_pad":%q}}}`,
-		pad,
-	)
-
+	// Build a schema-valid oversized body via oversizedSignTxBody (defined in
+	// bounds_test.go, same package).  The data field carries ≈1.14 MiB of valid
+	// hex; no extra fields — additionalProperties:false is satisfied.
+	// Seam is LIVE: if the body cap were bypassed, schema validation would PASS
+	// and toolCalled would increment (real assertion, not vacuous).
 	req, err := http.NewRequestWithContext(context.Background(),
 		http.MethodPost,
 		fmt.Sprintf("http://%s/mcp", addr.String()),
-		strings.NewReader(body),
+		strings.NewReader(oversizedSignTxBody()),
 	)
 	if err != nil {
 		t.Fatalf("hardening body-cap: NewRequest: %v", err)
@@ -484,17 +498,12 @@ func TestHardeningMatrix_PipelineOrder_OversizedBadToken(t *testing.T) {
 
 	addr := waitReady(t, readyCh, 5*time.Second)
 
-	// Oversized body (same construction as (d) body-cap test).
-	pad := strings.Repeat("W", 1_100_000)
-	body := fmt.Sprintf(
-		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"sign_transaction","arguments":{"type":"0x0","chainId":"1","nonce":"0","to":"0x9858EfFD232B4033E47d90003D41EC34EcaEda94","value":"0","data":"0x","gas":"21000","gasPrice":"20000000000","_pad":%q}}}`,
-		pad,
-	)
-
+	// Oversized body: same schema-valid construction as (d) body-cap test.
+	// oversizedSignTxBody uses the data field for bulk (≈1.14 MiB), no _pad field.
 	req, err := http.NewRequestWithContext(context.Background(),
 		http.MethodPost,
 		fmt.Sprintf("http://%s/mcp", addr.String()),
-		strings.NewReader(body),
+		strings.NewReader(oversizedSignTxBody()),
 	)
 	if err != nil {
 		t.Fatalf("pipeline-reg-i: NewRequest: %v", err)
@@ -755,6 +764,10 @@ func TestHardeningMatrix_LeakScan(t *testing.T) {
 
 	// Build a 32-byte random sentinel token (hex-encoded for safe HTTP header use).
 	sentinelRaw := randTokenBytes(32)
+	// NewSentinel makes a defensive copy of the raw bytes before returning, so
+	// zeroing sentinelRaw after construction is safe and consistent with auth.go's
+	// best-effort zeroing hygiene (ADR-009).
+	defer signing.ZeroBytes(sentinelRaw)
 	sentinelToken := hexEncodeBytes(sentinelRaw)
 
 	sentinel := signing.NewSentinel("hardening-bearer-sentinel", sentinelRaw)

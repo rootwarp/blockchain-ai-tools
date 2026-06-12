@@ -283,7 +283,7 @@ func validSign1559Args() map[string]any {
 func serverHealthCheck(t *testing.T, addr net.Addr, token string) {
 	t.Helper()
 	req, err := http.NewRequestWithContext(context.Background(),
-		http.MethodPost, fmt.Sprintf("http://%s/mcp", addr.String()),
+		http.MethodPost, fmt.Sprintf("http://%s", addr.String()),
 		strings.NewReader("{}"))
 	if err != nil {
 		t.Errorf("serverHealthCheck: NewRequest: %v", err)
@@ -305,6 +305,29 @@ func serverHealthCheck(t *testing.T, addr net.Addr, token string) {
 		t.Errorf("serverHealthCheck: unexpected zero status")
 	}
 	_ = token // token provided for potential future authenticated health-checks
+}
+
+// oversizedSignTxBody returns a schema-valid JSON-RPC tools/call body for
+// sign_transaction that exceeds the 1 MiB body cap.  The large payload is carried in
+// the data field ("0x" + 600_000 × "aa" ≈ 1.2 MiB total body), which is a valid
+// TxRequest field with a known JSON key.  No extra fields are present, so the
+// inferred schema's additionalProperties:false constraint is satisfied.
+//
+// The seam is LIVE: if the body cap were bypassed, the SDK's schema validation would
+// PASS (all required TxRequest fields present, no unknown fields) and the stub
+// handler would be called — making toolCalled > 0 a real assertion.
+//
+// Using an unknown _pad field was VACUOUS: additionalProperties:false causes schema
+// validation to fail before handler dispatch, keeping toolCalled=0 regardless of
+// whether the body cap fires — the seam would prove nothing about the cap.
+func oversizedSignTxBody() string {
+	// "0x" + 600_000 × "aa" = 1_200_002 hex chars ≈ 1.14 MiB JSON string value.
+	// Total frame with surrounding JSON ≈ 1.14 MiB, well above the 1 MiB cap.
+	dataHex := "0x" + strings.Repeat("aa", 600_000)
+	return fmt.Sprintf(
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"sign_transaction","arguments":{"type":"0x0","chainId":"1","nonce":"0x0","to":"0x9858EfFD232B4033E47d90003D41EC34EcaEda94","value":"0x0","data":"%s","gas":"0x5208","gasPrice":"0x4a817c800"}}}`,
+		dataHex,
+	)
 }
 
 // ── (a) Oversized-body rejection ─────────────────────────────────────────────
@@ -347,15 +370,12 @@ func TestMaxBytesHandler_OversizedBodyRejected(t *testing.T) {
 
 	addr, token := startHTTPWithToken(t, srv)
 
-	// Build a JSON-RPC frame with a _pad field that pushes the body > 1 MiB.
-	// The JSON is syntactically valid (will be if read in full); the byte cap fires
-	// when the SDK's json.Decoder reads past 1 MiB of the body.
-	// Use 1100000 'A' characters → body ≈ 1.1 MiB > 1 MiB cap.
-	pad := strings.Repeat("A", 1_100_000)
-	body := fmt.Sprintf(
-		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"sign_transaction","arguments":{"type":"legacy","chainId":"1","nonce":"0","to":"0x9858EfFD232B4033E47d90003D41EC34EcaEda94","value":"0","data":"0x","gas":"21000","gasPrice":"20000000000","_pad":%q}}}`,
-		pad,
-	)
+	// Build a schema-valid JSON-RPC frame whose body exceeds 1 MiB.
+	// oversizedSignTxBody uses the data field for bulk (≈1.14 MiB), keeping all
+	// arguments within the TxRequest schema (no unknown fields, no _pad).
+	// This makes the seam LIVE: schema-validation passes if the cap is bypassed,
+	// so toolCallCount would actually increment if the handler were reached.
+	body := oversizedSignTxBody()
 
 	req, err := http.NewRequestWithContext(context.Background(),
 		http.MethodPost, fmt.Sprintf("http://%s", addr.String()), strings.NewReader(body))
@@ -830,11 +850,7 @@ func TestPipelineOrder_MaxBytesOutermostBeforeAuth(t *testing.T) {
 
 	addr, token := startHTTPWithToken(t, srv)
 
-	pad := strings.Repeat("B", 1_100_000)
-	body := fmt.Sprintf(
-		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"sign_transaction","arguments":{"type":"legacy","chainId":"1","nonce":"0","to":"0x9858EfFD232B4033E47d90003D41EC34EcaEda94","value":"0","data":"0x","gas":"21000","gasPrice":"20000000000","_pad":%q}}}`,
-		pad,
-	)
+	body := oversizedSignTxBody()
 
 	req, err := http.NewRequestWithContext(context.Background(),
 		http.MethodPost, fmt.Sprintf("http://%s", addr.String()), strings.NewReader(body))
