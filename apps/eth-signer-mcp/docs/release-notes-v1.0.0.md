@@ -73,14 +73,18 @@ call — **there is no warm path**. The decrypted key is never cached
 | Standard (geth default) | 262,144 | ~0.5–1 s |
 | Light (`geth --lightkdf`) | 4,096 | ~50 ms |
 
-### Measured benchmark numbers (issue 4.3, `internal/signing/bench_test.go`)
+### Measured benchmark numbers (issue 4.3 + fix/bench-ci-noise, `internal/signing/bench_test.go`)
 
 Machine: macOS, Apple M-series, 10 logical CPUs.
 
-| Fixture | Median total | Median KDF | Non-KDF delta | Limit |
-|---------|-------------|------------|---------------|-------|
-| light-scrypt (N=4096) | ~35.5 ms | ~35.0 ms | ~470 µs | < 10 ms ✅ |
-| standard-scrypt (N=262144) | ~416 ms | ~411 ms | ~4.9 ms | < 10 ms ✅ |
+The non-KDF delta is asserted as `min(total) − min(KDF)` (min-based estimator — see
+`docs/verification-4.3.md` §4.1 for the rationale). Median values are logged for
+human context but are not the asserted quantity.
+
+| Fixture | Median total | Median KDF | Non-KDF delta (min-based) | Limit |
+|---------|-------------|------------|---------------------------|-------|
+| light-scrypt (N=4096) | ~46 ms | ~45 ms | ~500–750 µs | < 10 ms ✅ |
+| standard-scrypt (N=262144) | ~410–600 ms | ~410–520 ms | ~100–850 µs | < 10 ms ✅ |
 
 Cold start (vault construction + signer allocation — no KDF):
 

@@ -1,9 +1,11 @@
 // Benchmark and overhead-assertion tests — Issue 2.6 (ADR-010); extended in Issue 4.3.
+// CI-noise fix in fix/bench-ci-noise: switched overhead estimator from median-based to
+// min-based (see WHY-MIN comment blocks inside the overhead tests for the full rationale).
 //
 // Design: we measure (a) total SignTransaction time and (b) KDF-only time
 // (timing keystore.DecryptKey directly on the same fixture). The non-KDF overhead
-// is (a − b). Per ADR-010, median(a − b) < 10 ms on BOTH standard- and
-// light-scrypt fixtures.
+// is (a − b). Per ADR-010, this delta must be < 10 ms on BOTH standard- and
+// light-scrypt fixtures. The assertion uses min(total) − min(KDF) — see WHY-MIN.
 //
 // Issue 4.3 adds cold-start tests: construct vault + signer from fixture paths and
 // assert median construction time < 200 ms. Construction is a file-read + JSON parse
@@ -12,7 +14,7 @@
 // to spare.
 //
 // The standard-scrypt fixture (N=262144) is skipped under -short because its
-// KDF alone takes ~0.5–1 s per call, making the full median measurement very slow.
+// KDF alone takes ~0.5–1 s per call, making the full measurement very slow.
 // Standard cold-start is also guarded by testing.Short() for structural consistency with
 // the rest of the standard-scrypt tests, even though construction itself has no KDF cost.
 package signing
@@ -28,10 +30,14 @@ import (
 	gokeystore "github.com/ethereum/go-ethereum/accounts/keystore"
 )
 
-// overheadIterations is the number of iterations used for the median calculation
-// in the TestSigner_NonKDFOverhead_* tests. Enough to be statistically robust
-// without being prohibitively slow even on CI runners (each light-scrypt ~50 ms).
-const overheadIterations = 7
+// lightOverheadIterations is the number of iterations for the light-scrypt overhead
+// test (each op ~50 ms). 15 gives a well-sampled minimum without being slow.
+const lightOverheadIterations = 15
+
+// standardOverheadIterations is the number of iterations for the standard-scrypt
+// overhead test. Each op takes ~0.6–1 s; 10 iterations keeps the total test runtime
+// under ~12 s while giving a well-sampled minimum.
+const standardOverheadIterations = 10
 
 // coldStartIterations is the number of iterations for the cold-start median.
 // Construction is fast (I/O + JSON parse only, no KDF), so 5 iterations is enough.
@@ -46,6 +52,20 @@ func medianDuration(ds []time.Duration) time.Duration {
 	copy(sorted, ds)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
 	return sorted[len(sorted)/2]
+}
+
+// minDuration returns the minimum of a slice of durations.
+func minDuration(ds []time.Duration) time.Duration {
+	if len(ds) == 0 {
+		return 0
+	}
+	m := ds[0]
+	for _, d := range ds[1:] {
+		if d < m {
+			m = d
+		}
+	}
+	return m
 }
 
 // readFileForBench reads a file for use in benchmarks/test helpers.
@@ -136,10 +156,11 @@ func measureSignTime(t testing.TB, s *Signer) time.Duration {
 
 // TestSigner_NonKDFOverhead_Light asserts that the non-KDF overhead of a complete
 // SignTransaction call is < 10 ms when measured against the light-scrypt fixture.
-// Uses medians over overheadIterations iterations to be robust against machine noise.
 //
 // ADR-010: the bound is on the DELTA (total − KDF), not on absolute total time.
 // This makes the test pass even when the KDF itself is slow (e.g. on a slow CI runner).
+//
+// Estimator: min(total) − min(KDF). See WHY-MIN comment below.
 //
 // Measurement design: in each iteration, total SignTransaction time is measured
 // FIRST, then bare KDF time is measured on the same pre-loaded keystoreJSON. This
@@ -170,8 +191,8 @@ func TestSigner_NonKDFOverhead_Light(t *testing.T) {
 	s := newBenchSigner(t, keystorePath, passwordPath)
 
 	// Guard against a phantom pass if the iteration constant is accidentally zero.
-	if overheadIterations == 0 {
-		t.Fatal("overheadIterations is 0: timing loop would be a phantom pass")
+	if lightOverheadIterations == 0 {
+		t.Fatal("lightOverheadIterations is 0: timing loop would be a phantom pass")
 	}
 
 	// Force a GC collection before the timing loop to reduce GC-pause variance
@@ -179,29 +200,47 @@ func TestSigner_NonKDFOverhead_Light(t *testing.T) {
 	runtime.GC()
 
 	var totalTimes, kdfTimes []time.Duration
-	for i := 0; i < overheadIterations; i++ {
+	for i := 0; i < lightOverheadIterations; i++ {
 		// Measure total FIRST so the KDF measurement runs on a comparably warm CPU.
 		totalTimes = append(totalTimes, measureSignTime(t, s))
 		kdfTimes = append(kdfTimes, measureKDFTime(t, keystoreJSON, password))
 	}
 
-	medTotal := medianDuration(totalTimes)
-	medKDF := medianDuration(kdfTimes)
-	delta := medTotal - medKDF
+	// WHY-MIN: We assert on min(total) − min(KDF) rather than median − median.
+	//
+	// The non-KDF work (RLP encode + ECDSA sign + sender recovery) is constant and
+	// sub-millisecond. scrypt's own run-to-run variance — caused by OS scheduler
+	// preemption, cache evictions, and power-management jitter on shared CI runners —
+	// can be several milliseconds even for the light fixture (~50 ms/op, ≈2–5% noise).
+	// When total and KDF are measured in SEPARATE loops, their medians can drift apart
+	// by more than the 10 ms budget purely from scrypt variance; the median−median
+	// estimator is fragile on noisy machines.
+	//
+	// The minimum sample is the least-preempted run, closest to the bare compute floor:
+	//   min(total) ≈ scrypt_floor + non_KDF_overhead
+	//   min(KDF)   ≈ scrypt_floor
+	//   min(total) − min(KDF) ≈ non_KDF_overhead   (scrypt variance cancels)
+	//
+	// This correctly catches a real regression: if someone adds 50 ms of non-KDF work,
+	// min(total) − min(KDF) ≈ 50 ms > 10 ms, and the test fails. A small negative
+	// delta means the non-KDF overhead is below the noise floor, which is a pass.
+	minTotal := minDuration(totalTimes)
+	minKDF := minDuration(kdfTimes)
+	delta := minTotal - minKDF
 
-	t.Logf("light-scrypt: median total=%v  median KDF=%v  non-KDF delta=%v  (limit: 10ms)",
-		medTotal, medKDF, delta)
+	// Log medians too for human-readable context alongside the asserting delta.
+	t.Logf("light-scrypt: median total=%v  median KDF=%v  min total=%v  min KDF=%v  non-KDF delta (min-based)=%v  (limit: 10ms)",
+		medianDuration(totalTimes), medianDuration(kdfTimes), minTotal, minKDF, delta)
 
 	if delta < 0 {
-		// Negative delta is measurement noise (KDF measurement landed slightly
-		// slower than total). Not a failure — median over 7 iterations smooths
-		// this out in practice. Log it plainly without alarming wording.
-		t.Logf("measurement noise: negative delta (%v) — KDF median exceeded total median; not a failure", delta)
+		// Negative delta: non-KDF overhead is below the measurement noise floor.
+		// With the min-based estimator this is expected occasionally and is not a failure.
+		t.Logf("measurement noise: negative delta (%v) — min(KDF) landed slightly below min(total); not a failure", delta)
 	}
 
 	const limit = 10 * time.Millisecond
 	if delta > limit {
-		t.Errorf("non-KDF overhead (median total − median KDF) = %v; ADR-010 requires < %v", delta, limit)
+		t.Errorf("non-KDF overhead (min total − min KDF) = %v; ADR-010 requires < %v", delta, limit)
 	}
 }
 
@@ -209,21 +248,18 @@ func TestSigner_NonKDFOverhead_Light(t *testing.T) {
 // standard-scrypt fixture (N=262144, ~0.5–1 s KDF). Skipped under -short.
 // In CI's full run this test is the Phase 4 ADR-010 acceptance benchmark.
 //
+// Estimator: min(total) − min(KDF). See WHY-MIN comment below. The min-based
+// estimator was introduced to fix a CI flake (ubuntu-latest, GOMAXPROCS=2):
+// standard scrypt's ~620 ms/op has ≈2% run-to-run variance (~12 ms), which is
+// larger than the 10 ms budget; median−median therefore wobbled past 10 ms even
+// though the true non-KDF work is sub-millisecond. The min-based estimator
+// cancels scrypt's central tendency AND its variance, making the test robust
+// without weakening the contract (a real 50 ms regression still fails the test).
+//
 // NOTE: This test is NOT t.Parallel(). The standard-scrypt KDF is CPU-bound at
 // ~0.5–1 s; running it in parallel with other tests creates goroutine scheduling
-// contention that inflates the non-KDF delta beyond the 10 ms limit.
-//
-// To reduce timing noise the loop runs under runtime.LockOSThread(), which prevents
-// the Go scheduler from moving the measurement goroutine to a different OS thread;
-// combined with reusing a pre-built signer (eliminating per-call vault construction
-// I/O) and a pre-loop runtime.GC(), this makes the test reliable in CI
-// (ubuntu-latest, GOMAXPROCS=2, lightly loaded).
-//
-// Load sensitivity note: on developer machines with many CPU cores (e.g. GOMAXPROCS≥8)
-// running a full 'go test ./...' with all packages concurrently, OS-level thread
-// preemption from competing test-binary threads can still inflate the delta beyond
-// 10 ms. Run 'go test ./internal/signing/ -run TestSigner_NonKDFOverhead_Standard'
-// in isolation for a noise-free local measurement. The CI result is authoritative.
+// contention. LockOSThread further reduces preemption noise in the narrow non-KDF
+// window — this complements but does not replace the min-based estimator.
 //
 // The KDF (golang.org/x/crypto/scrypt) is pure Go and does not use CGo, so
 // LockOSThread has no adverse effect on it.
@@ -252,8 +288,8 @@ func TestSigner_NonKDFOverhead_Standard(t *testing.T) {
 	runtime.GC()
 
 	// Guard against a phantom pass if the iteration constant is accidentally zero.
-	if overheadIterations == 0 {
-		t.Fatal("overheadIterations is 0: timing loop would be a phantom pass")
+	if standardOverheadIterations == 0 {
+		t.Fatal("standardOverheadIterations is 0: timing loop would be a phantom pass")
 	}
 
 	// Pin the goroutine to one OS thread for the duration of the timing loop.
@@ -262,30 +298,49 @@ func TestSigner_NonKDFOverhead_Standard(t *testing.T) {
 	// which is the narrow non-KDF window where preemption inflates the delta.
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread() // ensures unlock on all paths, including t.Fatalf inside the loop
+
 	var totalTimes, kdfTimes []time.Duration
-	for i := 0; i < overheadIterations; i++ {
+	for i := 0; i < standardOverheadIterations; i++ {
 		// Measure total FIRST, then KDF, to avoid ordering bias (see Light test comment).
 		totalTimes = append(totalTimes, measureSignTime(t, s))
 		kdfTimes = append(kdfTimes, measureKDFTime(t, keystoreJSON, password))
 	}
 
-	medTotal := medianDuration(totalTimes)
-	medKDF := medianDuration(kdfTimes)
-	delta := medTotal - medKDF
+	// WHY-MIN: We assert on min(total) − min(KDF) rather than median − median.
+	//
+	// Standard scrypt (N=262144) takes ~620 ms/op in CI. Run-to-run variance on a
+	// shared 2-core runner (ubuntu-latest, GOMAXPROCS=2) is ≈2% ≈ 12 ms. Because
+	// the total and KDF are measured in SEPARATE loops, their medians can drift
+	// independently by that 12 ms, causing median(total) − median(KDF) to exceed
+	// the 10 ms budget even when the true non-KDF work (RLP encode + ECDSA sign +
+	// sender recovery) is sub-millisecond.
+	//
+	// The minimum sample is the least-preempted run, closest to the bare compute floor:
+	//   min(total) ≈ scrypt_floor + non_KDF_overhead
+	//   min(KDF)   ≈ scrypt_floor
+	//   min(total) − min(KDF) ≈ non_KDF_overhead   (scrypt variance cancels)
+	//
+	// This correctly catches a real regression: if someone adds 50 ms of non-KDF work,
+	// min(total) − min(KDF) ≈ 50 ms > 10 ms, and the test fails. A small negative
+	// delta means the non-KDF overhead is below the noise floor, which is a pass.
+	// This is the standard microbenchmark technique for noisy machines.
+	minTotal := minDuration(totalTimes)
+	minKDF := minDuration(kdfTimes)
+	delta := minTotal - minKDF
 
-	t.Logf("standard-scrypt: median total=%v  median KDF=%v  non-KDF delta=%v  (limit: 10ms)",
-		medTotal, medKDF, delta)
+	// Log medians too for human-readable context alongside the asserting delta.
+	t.Logf("standard-scrypt: median total=%v  median KDF=%v  min total=%v  min KDF=%v  non-KDF delta (min-based)=%v  (limit: 10ms)",
+		medianDuration(totalTimes), medianDuration(kdfTimes), minTotal, minKDF, delta)
 
 	if delta < 0 {
-		// Negative delta is measurement noise (KDF measurement landed slightly
-		// slower than total). Not a failure — median over 7 iterations smooths
-		// this out in practice. Log it plainly without alarming wording.
-		t.Logf("measurement noise: negative delta (%v) — KDF median exceeded total median; not a failure", delta)
+		// Negative delta: non-KDF overhead is below the measurement noise floor.
+		// With the min-based estimator this is expected occasionally and is not a failure.
+		t.Logf("measurement noise: negative delta (%v) — min(KDF) landed slightly below min(total); not a failure", delta)
 	}
 
 	const limit = 10 * time.Millisecond
 	if delta > limit {
-		t.Errorf("non-KDF overhead (median total − median KDF) = %v; ADR-010 requires < %v", delta, limit)
+		t.Errorf("non-KDF overhead (min total − min KDF) = %v; ADR-010 requires < %v", delta, limit)
 	}
 }
 

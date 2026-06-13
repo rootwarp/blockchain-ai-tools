@@ -172,20 +172,60 @@ Findings:
 Tests run with `go test ./internal/signing/ -run 'Overhead|ColdStart' -v -count=1` (package isolation).  
 Machine: macOS, 10 logical CPUs, Apple M-series.
 
-### 4.1 Non-KDF overhead (ADR-010, Issue 4.3)
+### 4.1 Non-KDF overhead (ADR-010, Issue 4.3 + fix/bench-ci-noise)
 
-| Fixture | Median total | Median KDF | Delta (non-KDF overhead) | Limit | Pass? |
-|---|---|---|---|---|---|
-| light-scrypt (N=4096) | 35.5 ms | 35.0 ms | ~470 µs | < 10 ms | ✅ |
-| standard-scrypt (N=262144) | 416 ms | 411 ms | ~4.9 ms | < 10 ms | ✅ |
+**Estimator (updated in fix/bench-ci-noise):** `min(total) − min(KDF)` — not `median − median`.
 
-Raw `t.Logf` output (representative run):
+The original median-based estimator was falsified by a CI failure at `main@c1c4ec1`
+(ubuntu-latest, GOMAXPROCS=2):
+
 ```
-bench_test.go:187: light-scrypt:    median total=35.499792ms  median KDF=35.028042ms  non-KDF delta=471.75µs   (limit: 10ms)
-bench_test.go:263: standard-scrypt: median total=416.058208ms median KDF=411.207042ms non-KDF delta=4.851166ms  (limit: 10ms)
+--- FAIL: TestSigner_NonKDFOverhead_Standard (9.32s)
+    bench_test.go:276: standard-scrypt: median total=631.782954ms  median KDF=616.419812ms  non-KDF delta=15.363142ms  (limit: 10ms)
 ```
 
-**Load sensitivity note:** When run via `make test` on high-core-count machines (GOMAXPROCS≥8) with concurrent test packages, OS-level thread preemption from other test binary threads can inflate the standard-scrypt delta beyond 10 ms. The test is reliable in CI (ubuntu-latest, GOMAXPROCS=2). Run `go test ./internal/signing/ -run TestSigner_NonKDFOverhead_Standard` in isolation for a noise-free local measurement. Robustness improvements applied in this issue: `runtime.LockOSThread()` during the timing loop, `runtime.GC()` before the loop, and signer reuse across iterations (production pattern).
+Standard scrypt (N=262144) takes ~620 ms/op on a 2-core CI runner. Run-to-run variance
+(≈2%, ≈12 ms) is larger than the 10 ms budget, so `median(total) − median(KDF)` wobbled
+past 10 ms even though the true non-KDF work (RLP encode + ECDSA sign + sender recovery)
+is sub-millisecond. The estimator was fragile; the product is fine.
+
+**Fix:** `min(total) − min(KDF)`. The minimum sample is the least-preempted run, closest
+to the bare compute floor: `min(total) ≈ scrypt_floor + overhead`, `min(KDF) ≈ scrypt_floor`,
+so their difference cancels scrypt's central tendency **and** its variance. A real 50 ms
+regression still fails the test — the contract is not weakened, only noise is removed.
+
+Iteration counts increased so the minimum is well-sampled: light N=15 (was 7), standard N=10 (was 7).
+
+Representative runs on macOS, Apple M-series, 10 logical CPUs (bench_test.go line numbers
+reflect the updated file):
+
+```
+bench_test.go: light-scrypt:    median total=46.529ms  median KDF=45.485ms  min total=38.236ms  min KDF=37.484ms  non-KDF delta (min-based)=751µs   (limit: 10ms)
+bench_test.go: standard-scrypt: median total=600.251ms median KDF=520.161ms min total=440.334ms min KDF=439.829ms non-KDF delta (min-based)=504µs   (limit: 10ms)
+```
+
+CI-robustness evidence (GOMAXPROCS=2, count=5 — all passed):
+
+| Run | Standard min-based delta | Pass? |
+|-----|--------------------------|-------|
+| 1 | 324 µs | ✅ |
+| 2 | 124 µs | ✅ |
+| 3 | -486 µs (noise, negative → pass) | ✅ |
+| 4 | 90 µs | ✅ |
+| 5 | -650 µs (noise, negative → pass) | ✅ |
+
+Under-load evidence (background `yes` CPU workers, count=3 — all passed):
+
+| Run | Standard min-based delta | Pass? |
+|-----|--------------------------|-------|
+| 1 | -2.897 ms (noise, negative → pass) | ✅ |
+| 2 | 520 µs | ✅ |
+| 3 | 850 µs | ✅ |
+
+**Previous claim retracted:** The prior text stated "The test is reliable in CI
+(ubuntu-latest, GOMAXPROCS=2)" with the median-based estimator. That claim was
+falsified by the CI failure above. The min-based estimator is reliable in CI;
+the evidence above supports this.
 
 ### 4.2 Cold start (Issue 4.3 addition)
 
@@ -230,5 +270,5 @@ New constants and helpers added: `coldStartIterations = 5`, `measureColdStartTim
 | No shipped doc/comment carries a manual advisory claim | ✅ |
 | Cold start < 200 ms on both fixture sets | ✅ |
 | Non-KDF overhead < 10 ms on both fixture sets (isolation run) | ✅ |
-| Test uses median-of-N (N≥5) | ✅ (N=7 overhead, N=5 cold-start) |
+| Test uses min-of-N for overhead (N≥10), median-of-N for cold-start (N=5) | ✅ (N=15 light / N=10 standard overhead, N=5 cold-start) |
 | Benchmark numbers recorded for release notes | ✅ (§4 above) |
