@@ -10,8 +10,8 @@ package server
 // Coverage matrix:
 //   - Transport:  in-memory (stdio-equivalent) + real Streamable HTTP subprocess.
 //   - Path class: happy path (get_address + sign_transaction audit line included),
-//     all six error codes (invalid_input, unsupported_type, chain_id_mismatch,
-//     keystore_error, password_error, internal_error).
+//     all seven error codes (invalid_input, unsupported_type, chain_id_mismatch,
+//     keystore_error, password_error, internal_error, address_unknown).
 //   - Encoded forms scanned: raw, hex-lower, hex-upper, base64-std, base64-raw,
 //     base64-url, base64-rawurl, decimal (via signing.FixtureKeySentinel).
 //   - Positive control: each captured stream must contain a known non-secret marker
@@ -55,6 +55,15 @@ type panicKeyVault struct {
 }
 
 func (p *panicKeyVault) Address() common.Address { return p.addr }
+
+// AddressPointer returns a non-nil pointer when addr is non-zero, matching the
+// semantics of fileKeyVault: nil = not yet discovered, non-nil = known.
+func (p *panicKeyVault) AddressPointer() *common.Address {
+	if p.addr == (common.Address{}) {
+		return nil
+	}
+	return &p.addr
+}
 
 func (p *panicKeyVault) WithSigningKey(_ context.Context, _ func(signing.SigningKey) error) error {
 	panic("panicKeyVault: test-induced panic for internal_error leak-audit path")
@@ -429,6 +438,34 @@ func TestLeakAudit_FullE2E(t *testing.T) {
 		assertToolErrorCode(t, r, rErr, signing.CodeInternalError, "internal_error (panic recovery)")
 		collectTextContent(r, &allResponseBodies)
 		leakAuditScan(t, "error path: internal_error log", errBuf.Bytes())
+	}
+
+	// 2g: address_unknown — real vault on keystore-no-address fixture, pre-sign get_address.
+	{
+		var errBuf bytes.Buffer
+		errLogger := slog.New(slog.NewJSONHandler(&errBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		noAddrKsPath := filepath.Join(tdPath, "keystore-no-address.json")
+		noAddrVault, noAddrVaultErr := signing.NewFileKeyVault(signing.VaultOptions{
+			KeystorePath: noAddrKsPath,
+			PasswordPath: pwPath,
+		})
+		if noAddrVaultErr != nil {
+			t.Fatalf("address_unknown: NewFileKeyVault: %v", noAddrVaultErr)
+		}
+		noAddrSigner := signing.NewSigner(noAddrVault, signing.SignerOptions{Logger: errLogger})
+		noAddrSrv := New(noAddrSigner, Options{Name: "audit-address-unknown", Version: "v0.0.0-test", Logger: errLogger})
+		noAddrCS, noAddrCleanup := inMemorySession(t, noAddrSrv, testCtx)
+		defer noAddrCleanup()
+
+		callCtx, callCancel := context.WithTimeout(testCtx, 10*time.Second)
+		r, rErr := noAddrCS.CallTool(callCtx, &mcp.CallToolParams{
+			Name:      "get_address",
+			Arguments: map[string]any{},
+		})
+		callCancel()
+		assertToolErrorCode(t, r, rErr, signing.CodeAddressUnknown, "address_unknown")
+		collectTextContent(r, &allResponseBodies)
+		leakAuditScan(t, "error path: address_unknown log", errBuf.Bytes())
 	}
 
 	// ── Scan in-memory happy path output ──────────────────────────────────────

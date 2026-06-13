@@ -137,7 +137,7 @@ the help output; the underlying Go type is `uint64`.)
 
 | Event | Behaviour |
 |-------|-----------|
-| **Binary starts** | Keystore JSON read (boot-time snapshot, fail fast on I/O or parse error). Top-level `"address"` is optional per spec; if absent get_address returns the zero address until first successful `sign_transaction` (which discovers it). Missing/malformed keystore → `keystore_error`, non-zero exit. |
+| **Binary starts** | Keystore JSON read (boot-time snapshot, fail fast on I/O or parse error). Top-level `"address"` is optional per spec; if absent `get_address` returns `IsError: true` with `code: address_unknown` until the first successful `sign_transaction` discovers it. A malformed `"address"` field (wrong length, non-hex, bad EIP-55 mixed-case) → `keystore_error` at boot. Missing/malformed keystore → `keystore_error`, non-zero exit. |
 | **`sign_transaction` call** | **Password file re-read on every call.** Password rotation takes effect immediately; no restart needed. |
 | **Keystore file replaced on disk** | Address snapshot unchanged — **restart required** to pick up the new key. |
 | **Wrong password / unreadable file** | `password_error` returned; server stays running. Fix the file and retry. |
@@ -177,12 +177,11 @@ of 1 (ADR-006): at most one live key scalar at a time.
 
 **No secrets in logs.** Raw key bytes, password bytes, and their hex / base64 /
 decimal encodings are never emitted.  Sentinel-based leak scans cover the happy
-path and five of six error-code paths (`invalid_input`, `unsupported_type`,
-`chain_id_mismatch`, `keystore_error`, `password_error`) across both stdio and
-HTTP transports (issues 2.11, 3.5, 3.8 — CI-gated).  `internal_error` is not
-force-able through the unmodified binary; it is covered at the wire-contract
-level in `internal/server/handlers_test.go`.  Full six-code + `--strict-perms`
-refusal-path sentinel matrix is completed in issue 4.4.
+path and all seven error codes (`invalid_input`, `unsupported_type`,
+`chain_id_mismatch`, `keystore_error`, `password_error`, `internal_error`,
+`address_unknown`) across both stdio and HTTP transports (CI-gated).
+`internal_error` is not force-able through the unmodified binary; it is covered
+at the wire-contract level in `internal/server/handlers_test.go`.
 
 **File permission checks.** At startup the binary checks mode bits of every
 secret file.  Group- or world-readable files trigger a warning (default) or
@@ -212,7 +211,8 @@ value is compact JSON with exactly two fields: `{"code":"…","message":"…"}`.
 | `invalid_input` | Missing / malformed field; bad EIP-55 checksum; `chainId = 0` |
 | `unsupported_type` | Transaction type is not `0x0` or `0x2` |
 | `chain_id_mismatch` | Request `chainId` ≠ `--chain-id` guard value |
-| `keystore_error` | Keystore missing or malformed (top-level `"address"` is optional per Web3 Secret Storage spec; when omitted, `get_address` returns `0x0000…0000` until first successful sign) |
+| `keystore_error` | Keystore missing or malformed (top-level `"address"` is optional per Web3 Secret Storage spec; a malformed address field — wrong length, non-hex, bad EIP-55 mixed-case — is rejected at boot) |
+| `address_unknown` | `get_address` called before the optional-address keystore has discovered its real account (via first successful `sign_transaction`); call `sign_transaction` first or use a keystore with a declared address |
 | `password_error` | Password file unreadable or wrong password (keystore MAC failure) |
 | `internal_error` | Recovered panic, sender mismatch, or non-ErrDecrypt decrypt failure; `Cause` logged server-side, never sent to caller |
 

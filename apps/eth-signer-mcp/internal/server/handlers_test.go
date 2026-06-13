@@ -54,6 +54,12 @@ func signingTestdataPath(t *testing.T) string {
 
 // newTestServerStub creates a server backed by a stubSigner with a given sign
 // function and address, plus a logger writing to logBuf.
+//
+// When addr is non-zero, addressPtr is automatically set to &addr so that
+// existing happy-path get_address tests (which pass a known address) continue to
+// work after the AddressPointer() pre-discovery contract was added. Tests that
+// need the pre-discovery (address_unknown) path should create the stubSigner
+// directly with addressPtr == nil.
 func newTestServerStub(
 	t *testing.T,
 	signFn func(context.Context, signing.TxRequest) (*signing.SignResult, error),
@@ -63,6 +69,12 @@ func newTestServerStub(
 	t.Helper()
 	logger := slog.New(slog.NewJSONHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	stub := &stubSigner{signFn: signFn, address: addr}
+	// Auto-populate addressPtr for non-zero addresses so existing tests that
+	// call get_address and expect a successful result continue to pass.
+	if addr != (common.Address{}) {
+		addrCopy := addr
+		stub.addressPtr = &addrCopy
+	}
 	return newServer(stub, Options{
 		Name:    "test",
 		Version: "v0.0.0-test",
@@ -785,6 +797,215 @@ func TestGetAddress_RequestIDNotRequired(t *testing.T) {
 	}
 	if result != nil && result.IsError {
 		t.Errorf("get_address returned IsError=true")
+	}
+}
+
+// TestGetAddress_PreDiscoveryReturnsAddressUnknown verifies that get_address
+// returns IsError:true with code "address_unknown" when AddressPointer() is nil.
+func TestGetAddress_PreDiscoveryReturnsAddressUnknown(t *testing.T) {
+	t.Parallel()
+
+	// A stubSigner with addressPtr == nil simulates pre-discovery state.
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	stub := &stubSigner{address: common.Address{}, addressPtr: nil}
+	srv := newServer(stub, Options{
+		Name:    "test",
+		Version: "v0.0.0-test",
+		Logger:  logger,
+	})
+
+	cs, cleanup := newTestSession(t, srv)
+	defer cleanup()
+
+	result, err := callGetAddress(t, cs)
+	if err != nil {
+		t.Fatalf("callGetAddress: protocol error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("result is nil")
+	}
+	if !result.IsError {
+		t.Fatalf("get_address (pre-discovery): IsError=false; want true")
+	}
+	if len(result.Content) == 0 {
+		t.Fatal("result.Content is empty")
+	}
+	tc, ok := result.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("Content[0] is %T; want *mcp.TextContent", result.Content[0])
+	}
+	var decoded map[string]json.RawMessage
+	if jsonErr := json.Unmarshal([]byte(tc.Text), &decoded); jsonErr != nil {
+		t.Fatalf("Content[0].Text is not valid JSON: %v\ntext: %s", jsonErr, tc.Text)
+	}
+	var gotCode string
+	if jsonErr := json.Unmarshal(decoded["code"], &gotCode); jsonErr != nil {
+		t.Fatalf("unmarshal code: %v", jsonErr)
+	}
+	if gotCode != signing.CodeAddressUnknown {
+		t.Errorf("code = %q; want %q", gotCode, signing.CodeAddressUnknown)
+	}
+	var gotMsg string
+	if jsonErr := json.Unmarshal(decoded["message"], &gotMsg); jsonErr != nil {
+		t.Fatalf("unmarshal message: %v", jsonErr)
+	}
+	if gotMsg == "" {
+		t.Error("message is empty; want non-empty")
+	}
+}
+
+// TestGetAddress_PostDiscoveryReturnsRealAddress verifies that get_address returns
+// IsError:false and the EIP-55 checksummed address when AddressPointer() is non-nil.
+func TestGetAddress_PostDiscoveryReturnsRealAddress(t *testing.T) {
+	t.Parallel()
+
+	addr := common.HexToAddress(signing.FixtureTestAddress)
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	stub := &stubSigner{address: addr, addressPtr: &addr}
+	srv := newServer(stub, Options{
+		Name:    "test",
+		Version: "v0.0.0-test",
+		Logger:  logger,
+	})
+
+	cs, cleanup := newTestSession(t, srv)
+	defer cleanup()
+
+	result, err := callGetAddress(t, cs)
+	if err != nil {
+		t.Fatalf("callGetAddress: protocol error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("result is nil")
+	}
+	if result.IsError {
+		t.Fatalf("get_address (post-discovery): IsError=true; want false. Content: %v", result.Content)
+	}
+
+	if len(result.Content) == 0 {
+		t.Fatal("result.Content is empty")
+	}
+	tc, ok := result.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("Content[0] is %T; want *mcp.TextContent", result.Content[0])
+	}
+	var got signing.AddressResult
+	if err := json.Unmarshal([]byte(tc.Text), &got); err != nil {
+		t.Fatalf("unmarshal Content[0]: %v", err)
+	}
+	if got.Address != signing.FixtureTestAddress {
+		t.Errorf("Address = %q; want %q (EIP-55)", got.Address, signing.FixtureTestAddress)
+	}
+}
+
+// TestGetAddress_NoAddressFixture_InMemoryTransport_PreThenPost tests the full
+// pre-discovery → sign → post-discovery lifecycle using a real signing.NewFileKeyVault
+// backed by keystore-no-address.json over the in-memory transport.
+//
+// NOT t.Parallel() — the vault state transitions from unknown → known during the test.
+func TestGetAddress_NoAddressFixture_InMemoryTransport_PreThenPost(t *testing.T) {
+	tdPath := signingTestdataPath(t)
+	ksPath := filepath.Join(tdPath, "keystore-no-address.json")
+	pwPath := filepath.Join(tdPath, "password.txt")
+
+	vault, err := signing.NewFileKeyVault(signing.VaultOptions{
+		KeystorePath: ksPath,
+		PasswordPath: pwPath,
+	})
+	if err != nil {
+		t.Fatalf("NewFileKeyVault(no-address): %v", err)
+	}
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	signer := signing.NewSigner(vault, signing.SignerOptions{Logger: logger})
+
+	srv := New(signer, Options{Name: "test-no-addr", Version: "v0.0.0-test", Logger: logger})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	cs, cleanup := inMemorySession(t, srv, ctx)
+	defer cleanup()
+
+	// Step 1: get_address before any signing — must return address_unknown.
+	{
+		result, callErr := callGetAddress(t, cs)
+		if callErr != nil {
+			t.Fatalf("pre-sign get_address: protocol error: %v", callErr)
+		}
+		if result == nil {
+			t.Fatal("pre-sign get_address: result is nil")
+		}
+		if !result.IsError {
+			t.Fatalf("pre-sign get_address: IsError=false; want true (address_unknown)")
+		}
+		if len(result.Content) == 0 {
+			t.Fatal("pre-sign get_address: Content is empty")
+		}
+		tc, ok := result.Content[0].(*mcp.TextContent)
+		if !ok {
+			t.Fatalf("pre-sign get_address: Content[0] is %T; want *mcp.TextContent", result.Content[0])
+		}
+		var decoded map[string]json.RawMessage
+		if jsonErr := json.Unmarshal([]byte(tc.Text), &decoded); jsonErr != nil {
+			t.Fatalf("pre-sign get_address: Content not valid JSON: %v\ntext: %s", jsonErr, tc.Text)
+		}
+		var gotCode string
+		if jsonErr := json.Unmarshal(decoded["code"], &gotCode); jsonErr != nil {
+			t.Fatalf("pre-sign get_address: unmarshal code: %v", jsonErr)
+		}
+		if gotCode != signing.CodeAddressUnknown {
+			t.Errorf("pre-sign get_address: code = %q; want %q", gotCode, signing.CodeAddressUnknown)
+		}
+	}
+
+	// Step 2: sign_transaction — triggers first decrypt; discovers address.
+	{
+		signCtx, signCancel := context.WithTimeout(ctx, 30*time.Second)
+		signResult, signErr := cs.CallTool(signCtx, &mcp.CallToolParams{
+			Name:      "sign_transaction",
+			Arguments: minimalLegacyArgs(),
+		})
+		signCancel()
+		if signErr != nil {
+			t.Fatalf("sign_transaction: protocol error: %v", signErr)
+		}
+		if signResult == nil || signResult.IsError {
+			t.Fatalf("sign_transaction: expected success, got IsError=%v; content=%v",
+				signResult.GetError(), signResult.Content)
+		}
+	}
+
+	// Step 3: get_address after signing — must return the real address.
+	{
+		result, callErr := callGetAddress(t, cs)
+		if callErr != nil {
+			t.Fatalf("post-sign get_address: protocol error: %v", callErr)
+		}
+		if result == nil {
+			t.Fatal("post-sign get_address: result is nil")
+		}
+		if result.IsError {
+			t.Fatalf("post-sign get_address: IsError=true; want false. Content: %v", result.Content)
+		}
+		if len(result.Content) == 0 {
+			t.Fatal("post-sign get_address: Content is empty")
+		}
+		tc, ok := result.Content[0].(*mcp.TextContent)
+		if !ok {
+			t.Fatalf("post-sign get_address: Content[0] is %T; want *mcp.TextContent", result.Content[0])
+		}
+		var got signing.AddressResult
+		if err := json.Unmarshal([]byte(tc.Text), &got); err != nil {
+			t.Fatalf("post-sign get_address: unmarshal: %v\ntext: %s", err, tc.Text)
+		}
+		if got.Address != signing.FixtureTestAddress {
+			t.Errorf("post-sign get_address: Address = %q; want %q (EIP-55)",
+				got.Address, signing.FixtureTestAddress)
+		}
 	}
 }
 

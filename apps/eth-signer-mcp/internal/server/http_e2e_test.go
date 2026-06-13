@@ -860,3 +860,129 @@ func TestE2E_HTTP_FullSession(t *testing.T) {
 		t.Errorf("step 7: fixture private key material leaked in HTTP stderr: forms=%v", keyLeaks)
 	}
 }
+
+// TestGetAddress_NoAddressFixture_HTTPTransport_PreThenPost verifies the
+// pre-discovery → sign → post-discovery lifecycle over the real Streamable HTTP
+// transport using the eth-signer-mcp binary with keystore-no-address.json.
+//
+// Sequence:
+//  1. get_address before any signing → IsError:true, code == "address_unknown"
+//  2. sign_transaction (minimal legacy) → success
+//  3. get_address after signing → IsError:false, address == EIP-55 of FixtureTestAddress
+//
+// Skipped under -short (requires light-scrypt decrypt + subprocess launch).
+func TestGetAddress_NoAddressFixture_HTTPTransport_PreThenPost(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping HTTP no-address e2e test under -short (requires subprocess launch)")
+	}
+	// Not t.Parallel() — uses the light-fixture KDF and subprocess launch.
+
+	bin := getE2EBinary(t)
+	tdPath := signingTestdataPath(t)
+	ksNoAddr := filepath.Join(tdPath, "keystore-no-address.json")
+	pw := filepath.Join(tdPath, "password.txt")
+
+	rawToken := randTokenBytes(32)
+	tokenStr := hexEncodeBytes(rawToken)
+	defer signing.ZeroBytes(rawToken)
+	tokenFile := writeTokenFile(t, tokenStr+"\n")
+
+	testCtx, testCancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer testCancel()
+
+	// launchHTTPBinary registers t.Cleanup (Kill + goroutine drain).
+	// MUST be called BEFORE sdkClient so LIFO ordering closes the session before Kill.
+	proc := launchHTTPBinary(t, bin, ksNoAddr, pw, tokenFile)
+
+	httpEndpoint := fmt.Sprintf("http://%s", proc.addr.String())
+	cs := sdkClient(t, testCtx, httpEndpoint, tokenStr)
+
+	// Step 1: get_address before signing — must return address_unknown.
+	{
+		callCtx, callCancel := context.WithTimeout(testCtx, 10*time.Second)
+		result, callErr := cs.CallTool(callCtx, &mcp.CallToolParams{
+			Name:      "get_address",
+			Arguments: map[string]any{},
+		})
+		callCancel()
+		assertHTTPToolError(t, result, callErr, signing.CodeAddressUnknown)
+	}
+
+	// Step 2: sign_transaction — triggers first decrypt; discovers address.
+	{
+		callCtx, callCancel := context.WithTimeout(testCtx, 30*time.Second)
+		signResult, signErr := cs.CallTool(callCtx, &mcp.CallToolParams{
+			Name: "sign_transaction",
+			Arguments: map[string]any{
+				"type":     "legacy",
+				"chainId":  "1",
+				"nonce":    "0",
+				"gas":      "21000",
+				"gasPrice": "20000000000",
+				"value":    "0",
+				"data":     "0x",
+				"to":       "0x9858EfFD232B4033E47d90003D41EC34EcaEda94",
+			},
+		})
+		callCancel()
+		if signErr != nil {
+			t.Fatalf("step 2: sign_transaction: protocol error: %v", signErr)
+		}
+		if signResult == nil || signResult.IsError {
+			t.Fatalf("step 2: sign_transaction: expected success; got IsError=%v",
+				signResult.GetError())
+		}
+	}
+
+	// Step 3: get_address after signing — must return the real EIP-55 address.
+	{
+		callCtx, callCancel := context.WithTimeout(testCtx, 10*time.Second)
+		result, callErr := cs.CallTool(callCtx, &mcp.CallToolParams{
+			Name:      "get_address",
+			Arguments: map[string]any{},
+		})
+		callCancel()
+		if callErr != nil {
+			t.Fatalf("step 3: post-sign get_address: protocol error: %v", callErr)
+		}
+		if result == nil {
+			t.Fatal("step 3: post-sign get_address: result is nil")
+		}
+		if result.IsError {
+			t.Fatalf("step 3: post-sign get_address: IsError=true; want false. Content: %v", result.Content)
+		}
+		if len(result.Content) == 0 {
+			t.Fatal("step 3: post-sign get_address: Content is empty")
+		}
+		addrTC, ok := result.Content[0].(*mcp.TextContent)
+		if !ok {
+			t.Fatalf("step 3: Content[0] is %T; want *mcp.TextContent", result.Content[0])
+		}
+		var ar signing.AddressResult
+		if jsonErr := json.Unmarshal([]byte(addrTC.Text), &ar); jsonErr != nil {
+			t.Fatalf("step 3: unmarshal AddressResult: %v\ntext: %s", jsonErr, addrTC.Text)
+		}
+		if ar.Address != signing.FixtureTestAddress {
+			t.Errorf("step 3: post-sign get_address = %q; want %q (EIP-55)",
+				ar.Address, signing.FixtureTestAddress)
+		}
+	}
+
+	// Teardown: close session, SIGTERM, wait for process exit.
+	if closeErr := cs.Close(); closeErr != nil {
+		t.Logf("teardown: cs.Close: %v (benign)", closeErr)
+	}
+	if sigErr := proc.cmd.Process.Signal(syscall.SIGTERM); sigErr != nil {
+		t.Logf("teardown: SIGTERM: %v (may already have exited)", sigErr)
+	}
+	select {
+	case <-proc.waitCh:
+	case <-time.After(8 * time.Second):
+		t.Fatal("teardown: binary did not exit within 8s after SIGTERM")
+	}
+	select {
+	case <-proc.doneCh:
+	case <-time.After(2 * time.Second):
+		t.Log("teardown: stderr scanner did not finish within 2s (proceeding)")
+	}
+}

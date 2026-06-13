@@ -38,8 +38,9 @@ import (
 // stubSigner is a minimal signerPort for smoke tests that only need the server
 // to boot and respond to initialize/tools/list without actual signing.
 type stubSigner struct {
-	signFn  func(ctx context.Context, req signing.TxRequest) (*signing.SignResult, error)
-	address common.Address
+	signFn     func(ctx context.Context, req signing.TxRequest) (*signing.SignResult, error)
+	address    common.Address
+	addressPtr *common.Address // nil = address unknown (pre-discovery)
 }
 
 func (s *stubSigner) SignTransaction(ctx context.Context, req signing.TxRequest) (*signing.SignResult, error) {
@@ -51,6 +52,13 @@ func (s *stubSigner) SignTransaction(ctx context.Context, req signing.TxRequest)
 
 func (s *stubSigner) Address() common.Address {
 	return s.address
+}
+
+// AddressPointer returns the addressPtr field, which is nil until explicitly set.
+// Tests that need the pre-discovery (address_unknown) behaviour leave addressPtr nil.
+// Tests that need the post-discovery behaviour set addressPtr to a non-nil pointer.
+func (s *stubSigner) AddressPointer() *common.Address {
+	return s.addressPtr
 }
 
 // noopStub returns a stubSigner whose SignTransaction panics if called.

@@ -42,6 +42,11 @@ type signerPort interface {
 	// Address returns the EIP-55 checksummed account address from the
 	// boot-time keystore snapshot. Safe to call without a password.
 	Address() common.Address
+
+	// AddressPointer returns a pointer to the account address if it is known,
+	// or nil if the address has not yet been discovered (optional-address
+	// keystore before the first successful sign_transaction call).
+	AddressPointer() *common.Address
 }
 
 // generateRequestID returns a UUID v4 string generated from crypto/rand.
@@ -140,9 +145,15 @@ func makeSignTransactionHandler(
 }
 
 // makeGetAddressHandler returns a ToolHandlerFor for the get_address tool.
-// get_address is served from the boot-time signer.Address() snapshot — no
-// password file is read, no KDF runs. This makes it safe to call even if the
-// password file has been rotated or made unreadable since startup.
+// get_address is served from the vault's address pointer — no password file is
+// read, no KDF runs. This makes it safe to call even if the password file has
+// been rotated or made unreadable since startup.
+//
+// Pre-discovery contract: if the vault's AddressPointer() returns nil (i.e. the
+// keystore has no declared address and sign_transaction has not yet been called
+// successfully), get_address returns IsError:true with code "address_unknown".
+// Once the address is discovered (after the first successful sign_transaction),
+// subsequent calls return the EIP-55 checksummed address.
 func makeGetAddressHandler(
 	sp signerPort,
 ) func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, *signing.AddressResult, error) {
@@ -151,10 +162,15 @@ func makeGetAddressHandler(
 		_ *mcp.CallToolRequest,
 		_ struct{},
 	) (*mcp.CallToolResult, *signing.AddressResult, error) {
-		addr := sp.Address()
-		result := &signing.AddressResult{
-			Address: addr.Hex(), // EIP-55 checksummed via common.Address.Hex()
+		ptr := sp.AddressPointer()
+		if ptr == nil {
+			err := &signing.ToolError{
+				Code:    signing.CodeAddressUnknown,
+				Message: "address not yet discovered; call sign_transaction once or configure a keystore with a declared address",
+			}
+			toolRes, _ := toolResult(err)
+			return toolRes, nil, nil
 		}
-		return nil, result, nil
+		return nil, &signing.AddressResult{Address: ptr.Hex()}, nil
 	}
 }

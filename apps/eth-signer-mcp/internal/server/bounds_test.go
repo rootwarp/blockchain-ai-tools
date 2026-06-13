@@ -117,6 +117,11 @@ func (v *recordingKeyVault) Address() common.Address {
 	return v.inner.Address()
 }
 
+// AddressPointer delegates to the inner vault.
+func (v *recordingKeyVault) AddressPointer() *common.Address {
+	return v.inner.AddressPointer()
+}
+
 // WithSigningKey records entry/exit and optionally holds fn until holdFnCh is closed.
 func (v *recordingKeyVault) WithSigningKey(ctx context.Context, fn func(signing.SigningKey) error) error {
 	// ── ENTRY point — before semaphore, ctx-check, or KDF ──────────────────
@@ -209,6 +214,10 @@ var _ signing.KeyVault = (*countingVaultWrapper)(nil)
 
 func (c *countingVaultWrapper) Address() common.Address {
 	return c.inner.Address()
+}
+
+func (c *countingVaultWrapper) AddressPointer() *common.Address {
+	return c.inner.AddressPointer()
 }
 
 func (c *countingVaultWrapper) WithSigningKey(ctx context.Context, fn func(signing.SigningKey) error) error {

@@ -86,6 +86,9 @@ func newServer(sp signerPort, opts Options) *Server {
 	// Input:  struct{} (no arguments) — empty object schema.
 	// Output: *signing.AddressResult — EIP-55 checksummed address.
 	// Served from the boot-time keystore snapshot; no password file read.
+	// Pre-discovery contract: if the keystore has no declared top-level "address"
+	// field and sign_transaction has not yet been called successfully, get_address
+	// returns IsError:true with code "address_unknown".
 	mcp.AddTool(mcpSrv,
 		&mcp.Tool{
 			Name: "get_address",
@@ -93,7 +96,10 @@ func newServer(sp signerPort, opts Options) *Server {
 				"keystore account. " +
 				"This is a read-only operation served from the boot-time keystore snapshot; " +
 				"the password file is NOT read and no KDF runs on this path. " +
-				"Safe to call even if the password file has been rotated or made unreadable.",
+				"Safe to call even if the password file has been rotated or made unreadable. " +
+				"For keystores without a declared top-level address field, returns " +
+				"IsError:true with code \"address_unknown\" until sign_transaction has been " +
+				"called at least once (which discovers the address from the decrypted key).",
 		},
 		makeGetAddressHandler(sp),
 	)
