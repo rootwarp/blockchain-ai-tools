@@ -115,8 +115,8 @@ python3 eth_rpc.py broadcast --network <mainnet|hoodi> --raw-tx 0x02... \
 ```json
 { "network": "hoodi", "chainId": "560048", "txHash": "0xd613...9e85",
   "status": "mined", "receiptStatus": "0x1",
-  "blockNumber": "3008098", "gasUsed": "21000",
-  "effectiveGasPrice": "1120154996" }
+  "blockNumber": "3009122", "gasUsed": "21000",
+  "effectiveGasPrice": "1120268660" }
 ```
 
 - **Exit codes:** submit failure (RPC rejects: bad nonce, underpriced, malformed)
