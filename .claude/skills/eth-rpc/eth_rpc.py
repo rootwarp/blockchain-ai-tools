@@ -116,20 +116,52 @@ def do_balance(network, address, rpc=rpc_call):
     }
 
 
-def do_broadcast(network, raw_tx, rpc=rpc_call):
-    """Submit a signed raw transaction; return the submission result dict.
+def _receipt_summary(receipt):
+    """Map a non-null receipt dict to status + block/gas fields."""
+    receipt_status = receipt.get("status")
+    status = "mined" if receipt_status == "0x1" else "failed"
+    out = {"status": status, "receiptStatus": receipt_status}
+    if receipt.get("blockNumber") is not None:
+        out["blockNumber"] = str(parse_hex_int(receipt["blockNumber"]))
+    if receipt.get("gasUsed") is not None:
+        out["gasUsed"] = str(parse_hex_int(receipt["gasUsed"]))
+    if receipt.get("effectiveGasPrice") is not None:
+        out["effectiveGasPrice"] = str(parse_hex_int(receipt["effectiveGasPrice"]))
+    return out
 
-    `rpc` is injected for testing. Polling for the receipt is added in Task 6.
+
+def do_broadcast(network, raw_tx, wait=False, wait_timeout=DEFAULT_WAIT_TIMEOUT,
+                 poll_interval=DEFAULT_POLL_INTERVAL, rpc=rpc_call,
+                 sleep=time.sleep, now=time.monotonic):
+    """Submit a signed raw transaction; optionally poll for the receipt.
+
+    `rpc`, `sleep`, and `now` are injected for testing. Submission always exits
+    via the returned dict; a non-mined timeout yields status "pending" (still a
+    successful broadcast). RPC failures raise RPCError to the caller.
     """
     chain_id, url = network_config(network)
     raw_tx = validate_raw_tx(raw_tx)
     tx_hash = rpc(url, "eth_sendRawTransaction", [raw_tx])
-    return {
+
+    result = {
         "network": network,
         "chainId": str(chain_id),
         "txHash": tx_hash,
         "status": "submitted",
     }
+    if not wait:
+        return result
+
+    deadline = now() + wait_timeout
+    while True:
+        receipt = rpc(url, "eth_getTransactionReceipt", [tx_hash])
+        if receipt is not None:
+            result.update(_receipt_summary(receipt))
+            return result
+        if now() >= deadline:
+            result["status"] = "pending"
+            return result
+        sleep(poll_interval)
 
 
 def wei_to_eth_str(wei):

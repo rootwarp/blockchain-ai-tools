@@ -193,6 +193,90 @@ class TestDoBalance(unittest.TestCase):
             r.do_balance("hoodi", "0xnope", rpc=make_fake_rpc({"eth_getBalance": "0x0"}))
 
 
+class TestDoBroadcastWait(unittest.TestCase):
+    RAW = "0x02f8ab83088bb0"
+    HASH = "0xd6133a2b2713dd86f4abe32421aed32f9945aed046dbc80751f5a03871799e85"
+
+    def _seq_rpc(self, receipts):
+        """rpc that returns HASH for send, then pops receipts for each getReceipt."""
+        queue = list(receipts)
+
+        def rpc(url, method, params):
+            if method == "eth_sendRawTransaction":
+                return self.HASH
+            if method == "eth_getTransactionReceipt":
+                return queue.pop(0)
+            raise AssertionError("unexpected method %s" % method)
+
+        return rpc
+
+    def test_mined_after_pending(self):
+        receipts = [
+            None,
+            {
+                "status": "0x1",
+                "blockNumber": "0x2dea62",
+                "gasUsed": "0x5208",
+                "effectiveGasPrice": "0x42c5f174",
+            },
+        ]
+        slept = []
+        out = r.do_broadcast(
+            "hoodi", self.RAW, wait=True, wait_timeout=120, poll_interval=4,
+            rpc=self._seq_rpc(receipts), sleep=lambda s: slept.append(s), now=lambda: 0.0,
+        )
+        self.assertEqual(out["txHash"], self.HASH)
+        self.assertEqual(out["status"], "mined")
+        self.assertEqual(out["receiptStatus"], "0x1")
+        self.assertEqual(out["blockNumber"], "3009122")
+        self.assertEqual(out["gasUsed"], "21000")
+        self.assertEqual(out["effectiveGasPrice"], "1120268660")
+        self.assertEqual(slept, [4])  # slept once between the two polls
+
+    def test_reverted_is_failed(self):
+        receipts = [{"status": "0x0", "blockNumber": "0x10", "gasUsed": "0x5208"}]
+        out = r.do_broadcast(
+            "hoodi", self.RAW, wait=True, wait_timeout=120, poll_interval=4,
+            rpc=self._seq_rpc(receipts), sleep=lambda s: None, now=lambda: 0.0,
+        )
+        self.assertEqual(out["status"], "failed")
+        self.assertEqual(out["receiptStatus"], "0x0")
+        self.assertEqual(out["blockNumber"], "16")
+        self.assertNotIn("effectiveGasPrice", out)  # absent field omitted
+
+    def test_timeout_is_pending(self):
+        clock = [0.0]
+
+        def now():
+            return clock[0]
+
+        def sleep(s):
+            clock[0] += s
+
+        def rpc(url, method, params):
+            if method == "eth_sendRawTransaction":
+                return self.HASH
+            return None  # receipt never appears
+
+        out = r.do_broadcast(
+            "hoodi", self.RAW, wait=True, wait_timeout=10, poll_interval=4,
+            rpc=rpc, sleep=sleep, now=now,
+        )
+        self.assertEqual(out["status"], "pending")
+        self.assertEqual(out["txHash"], self.HASH)
+        self.assertNotIn("blockNumber", out)
+
+    def test_no_wait_skips_receipt(self):
+        # wait=False must not call eth_getTransactionReceipt
+        def rpc(url, method, params):
+            if method == "eth_sendRawTransaction":
+                return self.HASH
+            raise AssertionError("should not poll when wait=False")
+
+        out = r.do_broadcast("hoodi", self.RAW, wait=False, rpc=rpc)
+        self.assertEqual(out["status"], "submitted")
+
+
 class TestDoBroadcastSubmit(unittest.TestCase):
     RAW = "0x02f8ab83088bb0"
     HASH = "0xd6133a2b2713dd86f4abe32421aed32f9945aed046dbc80751f5a03871799e85"
