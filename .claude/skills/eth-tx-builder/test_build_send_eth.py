@@ -210,5 +210,52 @@ class TestBuildTxRequest(unittest.TestCase):
             b.build_tx_request("mainnet", "0xnope", 1, self.SENDER, rpc=self._rpc())
 
 
+class TestMain(unittest.TestCase):
+    TO = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+    SENDER = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+
+    def _patched_build(self):
+        # main() calls build_tx_request with the real rpc_call; patch it out.
+        return mock.patch(
+            "build_send_eth.build_tx_request",
+            return_value={"type": "eip1559", "chainId": "1", "to": self.TO},
+        )
+
+    def test_success_prints_json_and_returns_zero(self):
+        out = io.StringIO()
+        with self._patched_build(), mock.patch("sys.stdout", out):
+            rc = b.main(
+                ["--network", "mainnet", "--to", self.TO,
+                 "--amount-gwei", "1000", "--sender", self.SENDER]
+            )
+        self.assertEqual(rc, 0)
+        parsed = json.loads(out.getvalue())
+        self.assertEqual(parsed["type"], "eip1559")
+
+    def test_build_error_prints_stderr_and_returns_one(self):
+        err = io.StringIO()
+        with mock.patch(
+            "build_send_eth.build_tx_request", side_effect=b.RPCError("rpc down")
+        ), mock.patch("sys.stderr", err):
+            rc = b.main(
+                ["--network", "mainnet", "--to", self.TO,
+                 "--amount-gwei", "1000", "--sender", self.SENDER]
+            )
+        self.assertEqual(rc, 1)
+        self.assertIn("rpc down", err.getvalue())
+
+    def test_value_error_returns_one(self):
+        err = io.StringIO()
+        with mock.patch(
+            "build_send_eth.build_tx_request", side_effect=ValueError("bad address")
+        ), mock.patch("sys.stderr", err):
+            rc = b.main(
+                ["--network", "mainnet", "--to", "0xbad",
+                 "--amount-gwei", "1", "--sender", self.SENDER]
+            )
+        self.assertEqual(rc, 1)
+        self.assertIn("bad address", err.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

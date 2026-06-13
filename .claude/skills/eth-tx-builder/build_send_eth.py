@@ -6,8 +6,10 @@ gwei amount to wei, and prints the sign_transaction request JSON to stdout.
 This script never signs.
 """
 
+import argparse
 import json
 import re
+import sys
 import urllib.request
 
 # network -> (chainId, rpc_url)
@@ -138,3 +140,27 @@ def build_tx_request(network, to, amount_gwei, sender, rpc=rpc_call):
         "maxFeePerGas": str(max_fee),
         "maxPriorityFeePerGas": str(tip),
     }
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Build a ready-to-sign EIP-1559 send-ETH TxRequest JSON for eth-signer-mcp."
+    )
+    parser.add_argument("--network", required=True, choices=sorted(NETWORKS))
+    parser.add_argument("--to", required=True, help="recipient EOA (0x + 40 hex)")
+    parser.add_argument("--amount-gwei", required=True, type=int, help="amount to send, in gwei")
+    parser.add_argument("--sender", required=True, help="signing account (0x + 40 hex)")
+    args = parser.parse_args(argv)
+
+    try:
+        tx = build_tx_request(args.network, args.to, args.amount_gwei, args.sender)
+    except (ValueError, RPCError) as e:
+        print("error: %s" % e, file=sys.stderr)
+        return 1
+
+    print(json.dumps(tx, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
