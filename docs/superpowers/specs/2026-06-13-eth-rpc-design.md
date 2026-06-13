@@ -70,7 +70,7 @@ python3 eth_rpc.py balance --network <mainnet|hoodi> --address 0x<40hex>
 
 - Validates network and address (`0x` + 40 hex; EIP-55 not required — read path).
 - Calls `eth_getBalance(address, "latest")`.
-- Converts wei → ETH exactly with `decimal.Decimal` (no float).
+- Converts wei → ETH exactly with integer arithmetic (`divmod`; no float).
 - Prints:
 
 ```json
