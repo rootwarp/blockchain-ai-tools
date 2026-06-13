@@ -2,6 +2,7 @@ package signing
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"sync/atomic"
 
@@ -79,19 +80,75 @@ func newFileKeyVault(opts VaultOptions) (*fileKeyVault, error) {
 
 	// Top-level "address" is optional per the Web3 Secret Storage spec (ethereum.org
 	// notes it is "unnecessary and compromises privacy"; official vectors omit it).
-	// If present and non-empty, store it as the declared address (the pointer becomes
-	// non-nil and immutable — discover-only writes in decrypt.go will no-op via CAS).
-	// If absent or "", leave the pointer nil; discovery happens on first successful
-	// WithSigningKey (see decrypt.go).
+	// If present and non-empty, validate it strictly and store it as the declared address
+	// (the pointer becomes non-nil and immutable — discover-only writes in decrypt.go
+	// will no-op via CAS). If absent or "", leave the pointer nil; discovery happens on
+	// first successful WithSigningKey (see decrypt.go).
 	if ks.Address != "" {
-		// common.HexToAddress accepts both checksummed and lowercase hex; it handles
-		// the optional "0x" prefix. The vault exposes the canonical checksummed form
-		// via Address().Hex() so all callers work with EIP-55 addresses.
-		addr := common.HexToAddress(ks.Address)
-		v.address.Store(&addr)
+		parsed, valErr := validateKeystoreAddressField(ks.Address)
+		if valErr != nil {
+			return nil, &ToolError{
+				Code:    CodeKeystoreError,
+				Message: "keystore top-level \"address\" field is malformed",
+				Cause:   valErr,
+			}
+		}
+		v.address.Store(&parsed)
 	}
 
 	return v, nil
+}
+
+// validateKeystoreAddressField validates the top-level "address" field of a Web3
+// Secret Storage keystore JSON document and returns the parsed address.
+//
+// Accepted forms (per Web3 Secret Storage spec and geth tooling):
+//   - Web3 standard: 40 lowercase hex chars WITHOUT prefix: "9858effd..."
+//     (this is the format produced by geth and most wallet tooling)
+//   - 0x-prefixed all-lowercase hex: "0xabcdef..."
+//   - 0x-prefixed all-uppercase hex: "0xABCDEF..."
+//   - 0x-prefixed EIP-55 mixed-case (must pass checksum): "0x9858EfFD..."
+//
+// Rejected forms:
+//   - Short or long strings that fail common.IsHexAddress
+//   - Non-hex characters
+//   - 0x-prefixed mixed-case that fails the EIP-55 checksum
+//   - Strings that are neither a valid 40-char bare hex nor a valid 42-char
+//     0x-prefixed hex (e.g. "0x" + 39 chars, garbage prefixes, etc.)
+//
+// Returns (addr, nil) on success; (common.Address{}, error) on failure.
+// Error messages are static and never echo the input value.
+func validateKeystoreAddressField(s string) (common.Address, error) {
+	// common.IsHexAddress accepts both "0x"-prefixed 42-char and bare 40-char hex.
+	// We require exactly one of the two canonical lengths:
+	//   - 40 chars: Web3 standard bare hex (no prefix) — all-lowercase or all-uppercase
+	//   - 42 chars: 0x-prefixed hex
+	if !common.IsHexAddress(s) {
+		return common.Address{}, fmt.Errorf("address field contains invalid hex characters or wrong length")
+	}
+
+	// Determine the hex portion (without any prefix) for mixed-case checking.
+	var hexPart string
+	if len(s) == 42 {
+		hexPart = s[2:] // "0x" + 40 hex
+	} else {
+		hexPart = s // bare 40-char hex (Web3 standard)
+	}
+
+	// EIP-55 rule: apply only when the address contains both upper- and lower-case
+	// hex letters. All-lowercase and all-uppercase are accepted checksum-agnostic.
+	// The EIP-55 checksum is defined over the 40 hex chars regardless of prefix.
+	if hasMixedCase(hexPart) {
+		// common.HexToAddress(s).Hex() always returns "0x" + EIP-55 checksummed 40 hex.
+		canonical := common.HexToAddress(s).Hex()
+		// Normalize both to "0x" + hexPart for comparison.
+		normalized := "0x" + hexPart
+		if canonical != normalized {
+			return common.Address{}, fmt.Errorf("mixed-case address field does not pass EIP-55 checksum")
+		}
+	}
+
+	return common.HexToAddress(s), nil
 }
 
 // Address returns the discovered or declared address, or the zero address if
@@ -102,4 +159,12 @@ func (v *fileKeyVault) Address() common.Address {
 		return *p
 	}
 	return common.Address{}
+}
+
+// AddressPointer returns a pointer to the discovered or declared address, or
+// nil if discovery has not yet occurred. Non-nil means the address is known;
+// nil means the optional-address keystore has not yet completed a first
+// successful WithSigningKey call. Reads are race-clean (atomic.Pointer).
+func (v *fileKeyVault) AddressPointer() *common.Address {
+	return v.address.Load()
 }

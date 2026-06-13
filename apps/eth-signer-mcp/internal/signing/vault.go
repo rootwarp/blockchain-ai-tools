@@ -13,12 +13,15 @@ import (
 //   - The keystore JSON is a boot-time snapshot — read eagerly at vault
 //     construction. Any I/O or JSON-parse error causes immediate failure (fail fast).
 //     The top-level "address" field is optional (per Web3 Secret Storage spec);
-//     if absent/empty the initial Address() is the zero address (or a present-but-wrong
-//     value) and is overwritten from the decrypted key on first successful WithSigningKey.
+//     if absent/empty the vault's address is unknown until the first successful
+//     WithSigningKey call discovers it from the decrypted key.
 //   - The password file is re-read on every WithSigningKey call, so password
 //     rotation works without restarting the process.
 //   - Rotating the keystore file itself requires a restart; the snapshot read at
 //     construction is authoritative until then.
+//   - AddressPointer() is the authoritative nil-vs-non-nil indicator for address
+//     discovery. Callers that need to distinguish "address unknown" from "address
+//     known" must use AddressPointer(), not Address().
 type KeyVault interface {
 	// Address returns the account address from the boot-time keystore snapshot
 	// (zero if the optional top-level "address" field was absent/empty at construction).
@@ -26,6 +29,14 @@ type KeyVault interface {
 	// WithSigningKey (best-effort visibility to concurrent readers). Safe to log;
 	// does NOT read the password file.
 	Address() common.Address
+
+	// AddressPointer returns a pointer to the discovered or declared address, or
+	// nil if the address is not yet known (optional-address keystore before first
+	// successful WithSigningKey). A non-nil return is the discovered address.
+	//
+	// Nil means "not yet discovered"; non-nil means "known". Phase-1 immutable-once-
+	// known semantics: one-way transition nil → non-nil (never goes back to nil once set).
+	AddressPointer() *common.Address
 
 	// WithSigningKey re-reads the password file, decrypts the keystore snapshot
 	// (serialised by an internal semaphore of 1; ctx is checked both before and

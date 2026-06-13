@@ -31,6 +31,13 @@ const (
 	// failure). The Cause field holds the underlying error for logs; it is never
 	// serialised to the wire.
 	CodeInternalError = "internal_error"
+
+	// CodeAddressUnknown is returned when get_address is called before the
+	// optional-address keystore has discovered its real address via first successful
+	// decrypt (i.e. WithSigningKey has not yet completed successfully).
+	// This is a transient condition: once sign_transaction succeeds, the address is
+	// known and subsequent get_address calls return the discovered address.
+	CodeAddressUnknown = "address_unknown"
 )
 
 // ToolError is the single structured error type returned by signing operations.

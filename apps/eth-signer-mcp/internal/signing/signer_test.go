@@ -257,6 +257,12 @@ type panicKeyVault struct {
 }
 
 func (p *panicKeyVault) Address() common.Address { return p.addr }
+func (p *panicKeyVault) AddressPointer() *common.Address {
+	if p.addr == (common.Address{}) {
+		return nil
+	}
+	return &p.addr
+}
 func (p *panicKeyVault) WithSigningKey(_ context.Context, _ func(SigningKey) error) error {
 	panic("panicKeyVault.WithSigningKey called — validation must prevent this")
 }
@@ -408,6 +414,12 @@ type mismatchedAddressVault struct {
 }
 
 func (w *mismatchedAddressVault) Address() common.Address { return w.claimedAddr }
+func (w *mismatchedAddressVault) AddressPointer() *common.Address {
+	if w.claimedAddr == (common.Address{}) {
+		return nil
+	}
+	return &w.claimedAddr
+}
 func (w *mismatchedAddressVault) WithSigningKey(ctx context.Context, fn func(SigningKey) error) error {
 	return w.inner.WithSigningKey(ctx, fn)
 }
@@ -468,7 +480,8 @@ type panicInFnVault struct {
 	panicVal  any
 }
 
-func (p *panicInFnVault) Address() common.Address { return p.inner.Address() }
+func (p *panicInFnVault) Address() common.Address         { return p.inner.Address() }
+func (p *panicInFnVault) AddressPointer() *common.Address { return p.inner.AddressPointer() }
 func (p *panicInFnVault) WithSigningKey(ctx context.Context, fn func(SigningKey) error) error {
 	if p.panicOnce {
 		p.panicOnce = false

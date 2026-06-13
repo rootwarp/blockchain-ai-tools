@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/ethereum/go-ethereum/common"
 )
 
 // testdataDir returns the absolute path to the signing testdata directory.
@@ -162,6 +164,104 @@ func TestNewFileKeyVault_MissingFile(t *testing.T) {
 	}
 	if te.Code != CodeKeystoreError {
 		t.Errorf("NewFileKeyVault(missing): Code = %q, want %q", te.Code, CodeKeystoreError)
+	}
+}
+
+// TestAddressPointer_NoAddressKeystore verifies that AddressPointer() returns nil
+// for a keystore with no top-level "address" field (pre-discovery state).
+func TestAddressPointer_NoAddressKeystore(t *testing.T) {
+	t.Parallel()
+
+	vault, err := NewFileKeyVault(VaultOptions{
+		KeystorePath: testdataFile(t, "keystore-no-address.json"),
+		PasswordPath: testdataFile(t, "password.txt"),
+	})
+	if err != nil {
+		t.Fatalf("NewFileKeyVault(no-address): unexpected error: %v", err)
+	}
+	if ptr := vault.AddressPointer(); ptr != nil {
+		t.Errorf("AddressPointer() = %v; want nil for no-address keystore", ptr)
+	}
+	if got := vault.Address(); got != (common.Address{}) {
+		t.Errorf("Address() = %q; want zero address for no-address keystore", got.Hex())
+	}
+}
+
+// TestAddressPointer_LightKeystore verifies that AddressPointer() returns a non-nil
+// pointer for a keystore with a declared top-level "address" field, and that the
+// pointed-to value equals Address().
+func TestAddressPointer_LightKeystore(t *testing.T) {
+	t.Parallel()
+
+	vault, err := NewFileKeyVault(VaultOptions{
+		KeystorePath: testdataFile(t, "keystore-light.json"),
+		PasswordPath: "/nonexistent/password-file-should-not-be-read",
+	})
+	if err != nil {
+		t.Fatalf("NewFileKeyVault(light): unexpected error: %v", err)
+	}
+	ptr := vault.AddressPointer()
+	if ptr == nil {
+		t.Fatal("AddressPointer() = nil; want non-nil for keystore with declared address")
+	}
+	if *ptr != vault.Address() {
+		t.Errorf("*AddressPointer() = %q; want %q (= Address())", ptr.Hex(), vault.Address().Hex())
+	}
+}
+
+// TestValidateKeystoreAddressField_Matrix is a table-driven test for boot-time
+// address validation. It covers accept cases (keystores that should load) and
+// reject cases (keystores that should fail with CodeKeystoreError).
+func TestValidateKeystoreAddressField_Matrix(t *testing.T) {
+	t.Parallel()
+
+	type testCase struct {
+		name    string
+		fixture string
+		wantErr bool
+	}
+
+	cases := []testCase{
+		// ── Accept cases ──────────────────────────────────────────────────
+		{name: "eip55-mixed-case (light)", fixture: "keystore-light.json", wantErr: false},
+		{name: "eip55-mixed-case (weak)", fixture: "keystore-weak.json", wantErr: false},
+		{name: "all-uppercase", fixture: "keystore-uppercase-address.json", wantErr: false},
+		{name: "empty-address", fixture: "keystore-empty-address.json", wantErr: false},
+		{name: "no-address", fixture: "keystore-no-address.json", wantErr: false},
+		// ── Reject cases ──────────────────────────────────────────────────
+		{name: "short-address", fixture: "keystore-malformed-address-short.json", wantErr: true},
+		{name: "nonhex-address", fixture: "keystore-malformed-address-nonhex.json", wantErr: true},
+		{name: "wrong-prefix-address", fixture: "keystore-malformed-address-no-prefix.json", wantErr: true},
+		{name: "wrong-checksum-mixed-case", fixture: "keystore-malformed-address-checksum.json", wantErr: true},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := NewFileKeyVault(VaultOptions{
+				KeystorePath: testdataFile(t, tc.fixture),
+				PasswordPath: "/nonexistent/password-file-should-not-be-read",
+			})
+
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("NewFileKeyVault(%q): expected error, got nil", tc.fixture)
+				}
+				te, ok := err.(*ToolError)
+				if !ok {
+					t.Fatalf("NewFileKeyVault(%q): error type = %T, want *ToolError", tc.fixture, err)
+				}
+				if te.Code != CodeKeystoreError {
+					t.Errorf("NewFileKeyVault(%q): Code = %q, want %q", tc.fixture, te.Code, CodeKeystoreError)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("NewFileKeyVault(%q): unexpected error: %v", tc.fixture, err)
+				}
+			}
+		})
 	}
 }
 

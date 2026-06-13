@@ -76,6 +76,13 @@ func (s *Signer) Address() common.Address {
 	return s.vault.Address()
 }
 
+// AddressPointer returns a pointer to the vault's discovered address, or nil
+// if the address is not yet known (optional-address keystore before first
+// successful sign_transaction). Delegates directly to the vault.
+func (s *Signer) AddressPointer() *common.Address {
+	return s.vault.AddressPointer()
+}
+
 // SignTransaction validates req, builds the unsigned transaction, and delegates
 // signing to the vault. On success it returns a fully populated SignResult and
 // emits exactly one info-level audit log line.

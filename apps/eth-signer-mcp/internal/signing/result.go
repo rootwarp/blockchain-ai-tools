@@ -50,7 +50,16 @@ type SignResult struct {
 // AddressResult is the typed wire-contract output for the get_address MCP tool.
 // It returns the EIP-55 checksummed account address from the boot-time keystore
 // snapshot without reading the password file.
+//
+// IMPORTANT: for optional-address keystores before the first successful
+// sign_transaction call, the get_address tool returns IsError:true with code
+// "address_unknown" instead of returning an AddressResult. Callers MUST inspect
+// IsError before treating this type as the result.
 type AddressResult struct {
-	// Address is the EIP-55 checksummed Ethereum address of the loaded keystore account.
+	// Address is the EIP-55 checksummed Ethereum address of the loaded keystore
+	// account once known. For optional-address keystores before the first successful
+	// sign_transaction, the get_address tool returns IsError:true with code
+	// "address_unknown" instead of returning an AddressResult; callers MUST inspect
+	// IsError before treating this field as truth.
 	Address string `json:"address"`
 }
