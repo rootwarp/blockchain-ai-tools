@@ -6,7 +6,9 @@ gwei amount to wei, and prints the sign_transaction request JSON to stdout.
 This script never signs.
 """
 
+import json
 import re
+import urllib.request
 
 # network -> (chainId, rpc_url)
 NETWORKS = {
@@ -57,3 +59,30 @@ def parse_hex_int(s):
 def compute_max_fee(base_fee, tip):
     """maxFeePerGas heuristic: baseFee*2 + tip (absorbs ~6 full blocks of base-fee rise)."""
     return base_fee * 2 + tip
+
+
+class RPCError(Exception):
+    """A JSON-RPC transport failure or error response."""
+
+
+def rpc_call(url, method, params, timeout=15):
+    """POST a JSON-RPC request and return its `result`. Raise RPCError on any failure."""
+    payload = json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:  # transport / decode failure
+        raise RPCError("RPC transport error calling %s: %s" % (method, e))
+    if body.get("error") is not None:
+        raise RPCError("RPC error for %s: %s" % (method, body["error"]))
+    if "result" not in body:
+        raise RPCError("RPC response missing result for %s" % method)
+    return body["result"]

@@ -1,4 +1,7 @@
+import io
+import json
 import unittest
+from unittest import mock
 
 import build_send_eth as b
 
@@ -87,6 +90,46 @@ class TestComputeMaxFee(unittest.TestCase):
 
     def test_zero_base(self):
         self.assertEqual(b.compute_max_fee(0, 1_000_000_000), 1_000_000_000)
+
+
+class TestRpcCall(unittest.TestCase):
+    def _fake_response(self, payload):
+        body = json.dumps(payload).encode("utf-8")
+        resp = mock.MagicMock()
+        resp.read.return_value = body
+        # support `with urllib.request.urlopen(...) as resp:`
+        resp.__enter__.return_value = resp
+        resp.__exit__.return_value = False
+        return resp
+
+    def test_returns_result(self):
+        with mock.patch(
+            "build_send_eth.urllib.request.urlopen",
+            return_value=self._fake_response(
+                {"jsonrpc": "2.0", "id": 1, "result": "0x5"}
+            ),
+        ):
+            self.assertEqual(
+                b.rpc_call("https://x", "eth_getTransactionCount", ["0xabc", "pending"]),
+                "0x5",
+            )
+
+    def test_jsonrpc_error_raises(self):
+        with mock.patch(
+            "build_send_eth.urllib.request.urlopen",
+            return_value=self._fake_response(
+                {"jsonrpc": "2.0", "id": 1, "error": {"code": -32000, "message": "boom"}}
+            ),
+        ):
+            with self.assertRaises(b.RPCError):
+                b.rpc_call("https://x", "eth_chainId", [])
+
+    def test_transport_error_raises(self):
+        with mock.patch(
+            "build_send_eth.urllib.request.urlopen", side_effect=OSError("connection refused")
+        ):
+            with self.assertRaises(b.RPCError):
+                b.rpc_call("https://x", "eth_chainId", [])
 
 
 if __name__ == "__main__":
