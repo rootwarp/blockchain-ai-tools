@@ -266,6 +266,66 @@ func TestValidateKeystoreAddressField_Matrix(t *testing.T) {
 	}
 }
 
+// TestNewFileKeyVault_StructuralValidation is a table-driven test for the boot-time
+// crypto.* structural validator added by Issue 3.1 (P2-VALIDATE-2). Each row uses a
+// hand-broken fixture whose top-level "address" is the canonical EIP-55 address (so
+// the Phase-2 address-field validator passes) and whose crypto.* block has exactly
+// one structural defect (the rejector under test). Check order mirrors the locked
+// order inside validateKeystoreCryptoShape.
+func TestNewFileKeyVault_StructuralValidation(t *testing.T) {
+	t.Parallel()
+
+	type testCase struct {
+		name    string
+		fixture string
+		wantErr bool // true = expect *ToolError{Code: CodeKeystoreError}
+	}
+
+	cases := []testCase{
+		// ── Reject cases (one per structural failure mode, locked order) ──────
+		{name: "version-missing", fixture: "keystore-version-missing.json", wantErr: true},
+		{name: "version-not-three", fixture: "keystore-version-not-three.json", wantErr: true},
+		{name: "missing-cipher", fixture: "keystore-missing-cipher.json", wantErr: true},
+		{name: "unknown-cipher", fixture: "keystore-unknown-cipher.json", wantErr: true},
+		{name: "missing-kdf", fixture: "keystore-missing-kdf.json", wantErr: true},
+		{name: "unknown-kdf", fixture: "keystore-unknown-kdf.json", wantErr: true},
+		{name: "missing-kdfparams", fixture: "keystore-missing-kdfparams.json", wantErr: true},
+		{name: "missing-mac", fixture: "keystore-missing-mac.json", wantErr: true},
+		{name: "missing-ciphertext", fixture: "keystore-missing-ciphertext.json", wantErr: true},
+		// ── Accept case — well-formed optional-address keystore must still pass ──
+		{name: "no-address (accept)", fixture: "keystore-no-address.json", wantErr: false},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := NewFileKeyVault(VaultOptions{
+				KeystorePath: testdataFile(t, tc.fixture),
+				PasswordPath: "/nonexistent/password-file-should-not-be-read",
+			})
+
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("NewFileKeyVault(%q): expected CodeKeystoreError, got nil", tc.fixture)
+				}
+				te, ok := err.(*ToolError)
+				if !ok {
+					t.Fatalf("NewFileKeyVault(%q): error type = %T, want *ToolError", tc.fixture, err)
+				}
+				if te.Code != CodeKeystoreError {
+					t.Errorf("NewFileKeyVault(%q): Code = %q, want %q", tc.fixture, te.Code, CodeKeystoreError)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("NewFileKeyVault(%q): unexpected error: %v", tc.fixture, err)
+				}
+			}
+		})
+	}
+}
+
 // TestNewFileKeyVault_MalformedJSON verifies that a keystore file with invalid JSON
 // returns a *ToolError{Code: CodeKeystoreError}.
 func TestNewFileKeyVault_MalformedJSON(t *testing.T) {

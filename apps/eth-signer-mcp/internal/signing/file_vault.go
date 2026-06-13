@@ -41,6 +41,91 @@ type keystoreAddressOnly struct {
 	Address string `json:"address"`
 }
 
+// keystoreShape is the minimal struct used by validateKeystoreCryptoShape to check
+// the Web3 Secret Storage v3 structural invariants at boot time. Only fields needed
+// for the presence + allowlist checks are declared; the full JSON is stored
+// separately in keystoreJSON for later decryption. NO KDF invocation; NO password
+// read; NO call to gokeystore.DecryptKey.
+type keystoreShape struct {
+	Version *int `json:"version"` // pointer: distinguishes absent (nil) from explicit 0
+	Crypto  struct {
+		Cipher     string          `json:"cipher"`
+		KDF        string          `json:"kdf"`
+		KDFParams  json.RawMessage `json:"kdfparams"`
+		MAC        string          `json:"mac"`
+		Ciphertext string          `json:"ciphertext"`
+	} `json:"crypto"`
+}
+
+// recognisedCiphers enumerates the cipher algorithm identifiers accepted by
+// gokeystore.DecryptKey in go-ethereum v1.17.3 (per
+// accounts/keystore/keystore_passphrase.go). Bumping the go-ethereum pin is the
+// only event that should change this set.
+var recognisedCiphers = map[string]struct{}{
+	"aes-128-ctr": {},
+}
+
+// recognisedKDFs enumerates the KDF identifiers accepted by gokeystore.DecryptKey
+// in go-ethereum v1.17.3.
+var recognisedKDFs = map[string]struct{}{
+	"scrypt": {},
+	"pbkdf2": {},
+}
+
+// validateKeystoreCryptoShape parses the keystore JSON into a minimal shape-
+// validation struct and returns a non-nil error if any required field is
+// missing/empty or any algorithm identifier is outside the recognised v3 allowlist.
+//
+// NO KDF invocation; NO password read; NO call to gokeystore.DecryptKey.
+//
+// Recognised algorithms (Assumption A8 — go-ethereum v1.17.3):
+//   - cipher: "aes-128-ctr" (only cipher accepted by DecryptKey)
+//   - kdf:    "scrypt" | "pbkdf2"
+//   - version: 3 (Web3 Secret Storage v3)
+//
+// Error envelope: returns a plain Go error; the caller in newFileKeyVault wraps it
+// into *ToolError{Code: CodeKeystoreError}. Error messages are static; the offending
+// field value is never echoed.
+func validateKeystoreCryptoShape(data []byte) error {
+	var shape keystoreShape
+	if err := json.Unmarshal(data, &shape); err != nil {
+		// json.Unmarshal errors are already caught by the caller's prior address-only
+		// unmarshal; this is a safety net for any type-mismatch (e.g. "version": "3"
+		// instead of an integer). Return a static message.
+		return fmt.Errorf("keystore: JSON cannot be decoded into expected shape")
+	}
+
+	// Check order is locked (spec §3.1) — most-fundamental first.
+	if shape.Version == nil {
+		return fmt.Errorf("keystore: missing required version field")
+	}
+	if *shape.Version != 3 {
+		return fmt.Errorf("keystore: unsupported version (only Web3 Secret Storage v3 is supported)")
+	}
+	if shape.Crypto.Cipher == "" {
+		return fmt.Errorf("keystore: missing crypto.cipher field")
+	}
+	if _, ok := recognisedCiphers[shape.Crypto.Cipher]; !ok {
+		return fmt.Errorf("keystore: unrecognised crypto.cipher algorithm")
+	}
+	if shape.Crypto.KDF == "" {
+		return fmt.Errorf("keystore: missing crypto.kdf field")
+	}
+	if _, ok := recognisedKDFs[shape.Crypto.KDF]; !ok {
+		return fmt.Errorf("keystore: unrecognised crypto.kdf algorithm")
+	}
+	if len(shape.Crypto.KDFParams) == 0 || string(shape.Crypto.KDFParams) == "null" {
+		return fmt.Errorf("keystore: missing crypto.kdfparams object")
+	}
+	if shape.Crypto.MAC == "" {
+		return fmt.Errorf("keystore: missing crypto.mac field")
+	}
+	if shape.Crypto.Ciphertext == "" {
+		return fmt.Errorf("keystore: missing crypto.ciphertext field")
+	}
+	return nil
+}
+
 // newFileKeyVault is the internal constructor called by NewFileKeyVault (defined in
 // vault.go). Separating the declaration from the entry point keeps vault.go clean and
 // allows internal tests to call either form.
@@ -62,6 +147,20 @@ func newFileKeyVault(opts VaultOptions) (*fileKeyVault, error) {
 		return nil, &ToolError{
 			Code:    CodeKeystoreError,
 			Message: "keystore JSON is malformed",
+			Cause:   err,
+		}
+	}
+
+	// Validate the Web3 Secret Storage v3 structural shape (version, crypto.cipher,
+	// crypto.kdf, crypto.kdfparams, crypto.mac, crypto.ciphertext) before accepting
+	// the vault. This is a JSON-parse-only check — no KDF invocation, no password
+	// read, no call to gokeystore.DecryptKey (Assumption A9). Structural problems fail
+	// fast at boot as CodeKeystoreError rather than mid-session as CodeInternalError /
+	// CodePasswordError (P2-VALIDATE-2; Finding #5).
+	if err := validateKeystoreCryptoShape(data); err != nil {
+		return nil, &ToolError{
+			Code:    CodeKeystoreError,
+			Message: "keystore JSON failed structural validation",
 			Cause:   err,
 		}
 	}

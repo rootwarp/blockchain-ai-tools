@@ -16,6 +16,12 @@
 | `keystore-weak.json` | Web3 Secret Storage v3, **test-only weakened KDF** | scrypt N=2, r=8, p=1 |
 | `keystore-no-address.json` | Optional address (spec): top-level `"address"` field removed | (copy of weak, for optional-address + discovery tests) |
 | `keystore-empty-address.json` | Optional address (spec): top-level `"address"` set to `""` | (copy of weak, for optional-address + discovery tests) |
+| `keystore-eip55-address.json` | Address field in 0x-prefixed EIP-55 mixed-case format | (address-field validator accept case) |
+| `keystore-uppercase-address.json` | Address field in 0x-prefixed all-uppercase format | (address-field validator accept case) |
+| `keystore-malformed-address-short.json` | Address field too short (reject) | (address-field validator reject case) |
+| `keystore-malformed-address-nonhex.json` | Address field contains non-hex characters (reject) | (address-field validator reject case) |
+| `keystore-malformed-address-no-prefix.json` | Address field has wrong prefix (reject) | (address-field validator reject case) |
+| `keystore-malformed-address-checksum.json` | Address field fails EIP-55 checksum (reject) | (address-field validator reject case) |
 | `password.txt` | Passphrase for all three keystores, **with a trailing `\n`** | — |
 | `gen_fixtures.go` | `//go:build ignore` generator (Go program) | — |
 
@@ -81,6 +87,29 @@ new (post-addr-opt) behaviour:
 
 Both are otherwise identical to `keystore-weak.json` (same ciphertext, same salt);
 they decrypt successfully via DecryptKey (the old constructor error path is gone).
+
+---
+
+## Structural-Validation Fixtures
+
+These nine fixtures are hand-edited copies of `keystore-weak.json` (Issue 3.1,
+`P2-VALIDATE-2`). The top-level `"address"` field is set to the canonical EIP-55
+address (`0x9858EfFD232B4033E47d90003D41EC34EcaEda94`) so the Phase-2 address-field
+validator passes. Each fixture breaks exactly one structural invariant so that
+`validateKeystoreCryptoShape` is the rejector. Do NOT regenerate via `gen_fixtures.go`
+— these are deliberately broken keystores.
+
+| File | Structural defect | Expected error |
+|------|-------------------|----------------|
+| `keystore-version-missing.json` | `version` field absent | missing required version field |
+| `keystore-version-not-three.json` | `"version": 2` | unsupported version |
+| `keystore-missing-cipher.json` | `crypto.cipher` removed | missing crypto.cipher field |
+| `keystore-unknown-cipher.json` | `"cipher": "aes-256-gcm"` (not in v3 allowlist) | unrecognised crypto.cipher algorithm |
+| `keystore-missing-kdf.json` | `crypto.kdf` removed | missing crypto.kdf field |
+| `keystore-unknown-kdf.json` | `"kdf": "argon2id"` (not in v3 allowlist) | unrecognised crypto.kdf algorithm |
+| `keystore-missing-kdfparams.json` | `crypto.kdfparams` removed | missing crypto.kdfparams object |
+| `keystore-missing-mac.json` | `crypto.mac` removed | missing crypto.mac field |
+| `keystore-missing-ciphertext.json` | `crypto.ciphertext` removed | missing crypto.ciphertext field |
 
 ---
 
