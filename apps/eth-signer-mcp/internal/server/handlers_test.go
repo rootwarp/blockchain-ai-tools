@@ -713,8 +713,11 @@ func TestSignTransaction_RequestIDCorrelation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CallTool: protocol error: %v", err)
 	}
-	if result == nil || result.IsError {
-		t.Fatalf("CallTool returned error result: IsError=%v, Content=%v", result.GetError(), result.Content)
+	if result == nil {
+		t.Fatal("CallTool returned nil result")
+	}
+	if result.IsError {
+		t.Fatalf("CallTool returned error result: Content=%v", result.Content)
 	}
 
 	// Scan log lines for the audit line.
@@ -973,9 +976,11 @@ func TestGetAddress_NoAddressFixture_InMemoryTransport_PreThenPost(t *testing.T)
 		if signErr != nil {
 			t.Fatalf("sign_transaction: protocol error: %v", signErr)
 		}
-		if signResult == nil || signResult.IsError {
-			t.Fatalf("sign_transaction: expected success, got IsError=%v; content=%v",
-				signResult.GetError(), signResult.Content)
+		if signResult == nil {
+			t.Fatal("sign_transaction: nil result")
+		}
+		if signResult.IsError {
+			t.Fatalf("sign_transaction: expected success; IsError=true; content=%v", signResult.Content)
 		}
 	}
 

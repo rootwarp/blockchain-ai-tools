@@ -511,8 +511,11 @@ func TestE2E_HTTP_FullSession(t *testing.T) {
 		if signErr != nil {
 			t.Fatalf("step 4: sign_transaction protocol error: %v", signErr)
 		}
-		if signResult == nil || signResult.IsError {
-			t.Fatalf("step 4: sign_transaction returned error; Content: %v", signResult.Content)
+		if signResult == nil {
+			t.Fatal("step 4: sign_transaction: nil result")
+		}
+		if signResult.IsError {
+			t.Fatalf("step 4: sign_transaction: IsError=true; Content: %v", signResult.Content)
 		}
 		if len(signResult.Content) == 0 {
 			t.Fatal("step 4: sign_transaction Content is empty")
@@ -928,9 +931,11 @@ func TestGetAddress_NoAddressFixture_HTTPTransport_PreThenPost(t *testing.T) {
 		if signErr != nil {
 			t.Fatalf("step 2: sign_transaction: protocol error: %v", signErr)
 		}
-		if signResult == nil || signResult.IsError {
-			t.Fatalf("step 2: sign_transaction: expected success; got IsError=%v",
-				signResult.GetError())
+		if signResult == nil {
+			t.Fatal("step 2: sign_transaction: nil result")
+		}
+		if signResult.IsError {
+			t.Fatalf("step 2: sign_transaction: IsError=true; Content=%v", signResult.Content)
 		}
 	}
 

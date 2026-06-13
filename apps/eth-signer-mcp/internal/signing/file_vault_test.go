@@ -223,9 +223,10 @@ func TestValidateKeystoreAddressField_Matrix(t *testing.T) {
 
 	cases := []testCase{
 		// ── Accept cases ──────────────────────────────────────────────────
-		{name: "eip55-mixed-case (light)", fixture: "keystore-light.json", wantErr: false},
-		{name: "eip55-mixed-case (weak)", fixture: "keystore-weak.json", wantErr: false},
-		{name: "all-uppercase", fixture: "keystore-uppercase-address.json", wantErr: false},
+		{name: "bare40-all-lowercase (light)", fixture: "keystore-light.json", wantErr: false},
+		{name: "bare40-all-lowercase (weak)", fixture: "keystore-weak.json", wantErr: false},
+		{name: "0x-prefixed-eip55-mixed-case", fixture: "keystore-eip55-address.json", wantErr: false},
+		{name: "0x-prefixed-all-uppercase", fixture: "keystore-uppercase-address.json", wantErr: false},
 		{name: "empty-address", fixture: "keystore-empty-address.json", wantErr: false},
 		{name: "no-address", fixture: "keystore-no-address.json", wantErr: false},
 		// ── Reject cases ──────────────────────────────────────────────────

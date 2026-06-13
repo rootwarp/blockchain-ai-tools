@@ -168,6 +168,7 @@ func makeGetAddressHandler(
 				Code:    signing.CodeAddressUnknown,
 				Message: "address not yet discovered; call sign_transaction once or configure a keystore with a declared address",
 			}
+			// err is always a *signing.ToolError here, so toolResult's second return is always nil.
 			toolRes, _ := toolResult(err)
 			return toolRes, nil, nil
 		}

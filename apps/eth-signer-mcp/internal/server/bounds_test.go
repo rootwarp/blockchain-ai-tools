@@ -822,15 +822,16 @@ func TestSemaphorePlumbing_CtxCancelledWhileQueued(t *testing.T) {
 	}
 
 	aResult := <-aResultCh
-	if aResult == nil || aResult.IsError {
+	if aResult == nil {
+		t.Error("A did not complete successfully after holdFn: nil result")
+	} else if aResult.IsError {
 		var content string
-		if aResult != nil && len(aResult.Content) > 0 {
+		if len(aResult.Content) > 0 {
 			if tc, ok := aResult.Content[0].(*mcp.TextContent); ok {
 				content = tc.Text
 			}
 		}
-		t.Errorf("A did not complete successfully after holdFn: IsError=%v Content=%s",
-			aResult.GetError(), content)
+		t.Errorf("A did not complete successfully after holdFn: IsError=true Content=%s", content)
 	}
 
 	// Final checks: counters unchanged after A completes.
