@@ -55,7 +55,7 @@ def validate_hex_address(addr):
 
 
 def validate_raw_tx(raw):
-    """Return raw unchanged if it is a non-empty, even-length 0x hex string."""
+    """Return raw unchanged if it is a non-empty 0x hex string with an even number of nibbles after the prefix (complete bytes)."""
     if (
         not isinstance(raw, str)
         or not _HEX_BODY_RE.match(raw)
@@ -147,9 +147,9 @@ def do_broadcast(network, raw_tx, wait=False, wait_timeout=DEFAULT_WAIT_TIMEOUT,
                  sleep=time.sleep, now=time.monotonic):
     """Submit a signed raw transaction; optionally poll for the receipt.
 
-    `rpc`, `sleep`, and `now` are injected for testing. Submission always exits
-    via the returned dict; a non-mined timeout yields status "pending" (still a
-    successful broadcast). RPC failures raise RPCError to the caller.
+    `rpc`, `sleep`, and `now` are injected for testing. A submit-time RPC error
+    raises RPCError; a successful submit always returns the result dict, even on
+    wait timeout (status 'pending').
     """
     chain_id, url = network_config(network)
     raw_tx = validate_raw_tx(raw_tx)
@@ -166,7 +166,12 @@ def do_broadcast(network, raw_tx, wait=False, wait_timeout=DEFAULT_WAIT_TIMEOUT,
 
     deadline = now() + wait_timeout
     while True:
-        receipt = rpc(url, "eth_getTransactionReceipt", [tx_hash])
+        try:
+            receipt = rpc(url, "eth_getTransactionReceipt", [tx_hash])
+        except RPCError as e:
+            raise RPCError(
+                "receipt poll failed after submit (txHash=%s): %s" % (tx_hash, e)
+            )
         if receipt is not None:
             result.update(_receipt_summary(receipt))
             return result

@@ -1,5 +1,8 @@
 import io
 import json
+import pathlib
+import subprocess
+import sys
 import unittest
 from unittest import mock
 
@@ -341,6 +344,27 @@ class TestDoBroadcastWait(unittest.TestCase):
         out = r.do_broadcast("hoodi", self.RAW, wait=False, rpc=rpc)
         self.assertEqual(out["status"], "submitted")
 
+    def test_receipt_poll_error_preserves_hash(self):
+        def rpc(url, method, params):
+            if method == "eth_sendRawTransaction":
+                return self.HASH
+            raise r.RPCError("node hiccup")
+
+        with self.assertRaises(r.RPCError) as ctx:
+            r.do_broadcast(
+                "hoodi", self.RAW, wait=True, wait_timeout=120, poll_interval=4,
+                rpc=rpc, sleep=lambda s: None, now=lambda: 0.0,
+            )
+        self.assertIn(self.HASH, str(ctx.exception))
+
+
+class TestReceiptSummary(unittest.TestCase):
+    def test_none_status_is_failed(self):
+        out = r._receipt_summary({"status": None, "blockNumber": "0x10"})
+        self.assertEqual(out["status"], "failed")
+        self.assertIsNone(out["receiptStatus"])
+        self.assertEqual(out["blockNumber"], "16")
+
 
 class TestDoBroadcastSubmit(unittest.TestCase):
     RAW = "0x02f8ab83088bb0"
@@ -402,15 +426,14 @@ class TestWeiToEthStr(unittest.TestCase):
             r.wei_to_eth_str("1")
 
 
-import subprocess
-import sys as _sys
+SKILL_DIR = pathlib.Path(__file__).parent
 
 
 class TestCliSmoke(unittest.TestCase):
     def test_help_runs(self):
         # Executes the module directly (not import) — catches definition-order bugs.
         proc = subprocess.run(
-            [_sys.executable, "eth_rpc.py", "--help"],
+            [sys.executable, str(SKILL_DIR / "eth_rpc.py"), "--help"],
             capture_output=True, text=True,
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -421,7 +444,7 @@ class TestCliSmoke(unittest.TestCase):
         # Drives the balance path through main() in a real process. Bad address
         # fails validation before any network call, so this stays offline.
         proc = subprocess.run(
-            [_sys.executable, "eth_rpc.py", "balance",
+            [sys.executable, str(SKILL_DIR / "eth_rpc.py"), "balance",
              "--network", "hoodi", "--address", "0xnope"],
             capture_output=True, text=True,
         )
