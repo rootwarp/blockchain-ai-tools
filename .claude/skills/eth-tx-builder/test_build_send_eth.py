@@ -132,5 +132,40 @@ class TestRpcCall(unittest.TestCase):
                 b.rpc_call("https://x", "eth_chainId", [])
 
 
+def make_fake_rpc(results, errors=()):
+    """Return a fake rpc(url, method, params). `results` maps method->value;
+    methods in `errors` raise RPCError."""
+    def _rpc(url, method, params):
+        if method in errors:
+            raise b.RPCError("simulated failure for %s" % method)
+        return results[method]
+    return _rpc
+
+
+class TestFetchHelpers(unittest.TestCase):
+    def test_fetch_nonce(self):
+        rpc = make_fake_rpc({"eth_getTransactionCount": "0x5"})
+        self.assertEqual(b.fetch_nonce(rpc, "https://x", "0xabc"), 5)
+
+    def test_fetch_base_fee(self):
+        rpc = make_fake_rpc(
+            {"eth_getBlockByNumber": {"baseFeePerGas": "0x77359400"}}
+        )
+        self.assertEqual(b.fetch_base_fee(rpc, "https://x"), 2_000_000_000)
+
+    def test_fetch_base_fee_missing_raises(self):
+        rpc = make_fake_rpc({"eth_getBlockByNumber": {"number": "0x1"}})
+        with self.assertRaises(b.RPCError):
+            b.fetch_base_fee(rpc, "https://x")
+
+    def test_fetch_tip(self):
+        rpc = make_fake_rpc({"eth_maxPriorityFeePerGas": "0x3b9aca00"})
+        self.assertEqual(b.fetch_tip(rpc, "https://x"), 1_000_000_000)
+
+    def test_fetch_tip_fallback_on_error(self):
+        rpc = make_fake_rpc({}, errors={"eth_maxPriorityFeePerGas"})
+        self.assertEqual(b.fetch_tip(rpc, "https://x"), b.DEFAULT_TIP_WEI)
+
+
 if __name__ == "__main__":
     unittest.main()

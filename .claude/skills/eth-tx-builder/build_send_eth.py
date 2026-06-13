@@ -16,6 +16,8 @@ NETWORKS = {
     "hoodi": (560048, "https://ethereum-hoodi-rpc.publicnode.com"),
 }
 
+DEFAULT_TIP_WEI = 1_000_000_000  # 1 gwei, fallback when eth_maxPriorityFeePerGas is unavailable
+
 
 def network_config(network):
     """Return (chain_id, rpc_url) for a network name, or raise ValueError."""
@@ -86,3 +88,24 @@ def rpc_call(url, method, params, timeout=15):
     if "result" not in body:
         raise RPCError("RPC response missing result for %s" % method)
     return body["result"]
+
+
+def fetch_nonce(rpc, url, sender):
+    """Nonce = eth_getTransactionCount(sender, "pending")."""
+    return parse_hex_int(rpc(url, "eth_getTransactionCount", [sender, "pending"]))
+
+
+def fetch_base_fee(rpc, url):
+    """baseFeePerGas of the latest block. Raise RPCError if absent (pre-EIP-1559 chain)."""
+    block = rpc(url, "eth_getBlockByNumber", ["latest", False])
+    if not isinstance(block, dict) or block.get("baseFeePerGas") is None:
+        raise RPCError("latest block has no baseFeePerGas (not an EIP-1559 chain?)")
+    return parse_hex_int(block["baseFeePerGas"])
+
+
+def fetch_tip(rpc, url):
+    """Suggested priority fee from eth_maxPriorityFeePerGas; fall back to DEFAULT_TIP_WEI."""
+    try:
+        return parse_hex_int(rpc(url, "eth_maxPriorityFeePerGas", []))
+    except Exception:
+        return DEFAULT_TIP_WEI
