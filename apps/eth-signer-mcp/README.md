@@ -137,7 +137,7 @@ the help output; the underlying Go type is `uint64`.)
 
 | Event | Behaviour |
 |-------|-----------|
-| **Binary starts** | Keystore JSON read (boot-time snapshot, fail fast on I/O or parse error). Top-level `"address"` is optional per spec; if absent `get_address` returns `IsError: true` with `code: address_unknown` until the first successful `sign_transaction` discovers it. A malformed `"address"` field (wrong length, non-hex, bad EIP-55 mixed-case) → `keystore_error` at boot. Missing/malformed keystore → `keystore_error`, non-zero exit. |
+| **Binary starts** | Keystore JSON read (boot-time snapshot, fail fast on I/O or parse error). Top-level `"address"` is optional per spec; if absent `get_address` returns `IsError: true` with `code: address_unknown` until the first successful decrypt (after `DecryptKey` succeeds, before the sign callback returns) discovers it. A malformed `"address"` field (wrong length, non-hex, bad EIP-55 mixed-case) → `keystore_error` at boot. Missing/malformed keystore → `keystore_error`, non-zero exit. |
 | **`sign_transaction` call** | **Password file re-read on every call.** Password rotation takes effect immediately; no restart needed. |
 | **Keystore file replaced on disk** | Address snapshot unchanged — **restart required** to pick up the new key. |
 | **Wrong password / unreadable file** | `password_error` returned; server stays running. Fix the file and retry. |
@@ -212,7 +212,7 @@ value is compact JSON with exactly two fields: `{"code":"…","message":"…"}`.
 | `unsupported_type` | Transaction type is not `0x0` or `0x2` |
 | `chain_id_mismatch` | Request `chainId` ≠ `--chain-id` guard value |
 | `keystore_error` | Keystore fails a boot-time structural check — covers: (a) missing or unreadable file, (b) malformed JSON, (c) present-but-malformed top-level `"address"` (wrong length, non-hex, bad EIP-55 mixed-case), (d) structurally-broken `crypto.*` v3 shape (cipher / KDF / mac / ciphertext / version). All four are detected at boot; the process exits non-zero. See §6 for the optional-address / `address_unknown` semantics. |
-| `address_unknown` | `get_address` called before the optional-address keystore has discovered its real account (via first successful `sign_transaction`); call `sign_transaction` first or use a keystore with a declared address |
+| `address_unknown` | `get_address` called before the optional-address keystore has discovered its real account (via the first successful decrypt inside `sign_transaction`); call `sign_transaction` first or use a keystore with a declared address |
 | `password_error` | Password file unreadable or wrong password (keystore MAC failure detected at first sign; structural keystore shape is validated at boot and surfaces as `keystore_error`) |
 | `internal_error` | Recovered panic, sender mismatch, or runtime ciphertext/MAC corruption detected by `DecryptKey` (structural shape is validated at boot — see `keystore_error`); `Cause` logged server-side, never sent to caller |
 
