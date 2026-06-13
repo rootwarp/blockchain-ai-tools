@@ -21,6 +21,10 @@ NETWORKS = {
 DEFAULT_TIP_WEI = 1_000_000_000  # 1 gwei, fallback when eth_maxPriorityFeePerGas is unavailable
 GAS_LIMIT_ETH_TRANSFER = 21000  # fixed intrinsic cost of a plain value transfer
 
+# Some public RPC gateways (e.g. publicnode) reject the default "Python-urllib/x.y"
+# User-Agent with HTTP 403. Send an explicit, honest UA so requests are accepted.
+USER_AGENT = "eth-tx-builder/1.0"
+
 
 def network_config(network):
     """Return (chain_id, rpc_url) for a network name, or raise ValueError."""
@@ -80,7 +84,7 @@ def rpc_call(url, method, params, timeout=15):
     req = urllib.request.Request(
         url,
         data=payload,
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "User-Agent": USER_AGENT},
         method="POST",
     )
     try:

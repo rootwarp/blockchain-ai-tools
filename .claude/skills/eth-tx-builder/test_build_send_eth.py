@@ -135,6 +135,17 @@ class TestRpcCall(unittest.TestCase):
             with self.assertRaises(b.RPCError):
                 b.rpc_call("https://x", "eth_chainId", [])
 
+    def test_sets_user_agent_header(self):
+        # Regression: publicnode rejects the default "Python-urllib/x.y" UA with HTTP 403.
+        with mock.patch(
+            "build_send_eth.urllib.request.urlopen",
+            return_value=self._fake_response({"jsonrpc": "2.0", "id": 1, "result": "0x1"}),
+        ) as urlopen:
+            b.rpc_call("https://x", "eth_chainId", [])
+        sent_request = urlopen.call_args[0][0]
+        self.assertEqual(sent_request.get_header("User-agent"), b.USER_AGENT)
+        self.assertNotIn("Python-urllib", sent_request.get_header("User-agent"))
+
 
 def make_fake_rpc(results, errors=()):
     """Return a fake rpc(url, method, params). `results` maps method->value;
