@@ -402,5 +402,32 @@ class TestWeiToEthStr(unittest.TestCase):
             r.wei_to_eth_str("1")
 
 
+import subprocess
+import sys as _sys
+
+
+class TestCliSmoke(unittest.TestCase):
+    def test_help_runs(self):
+        # Executes the module directly (not import) — catches definition-order bugs.
+        proc = subprocess.run(
+            [_sys.executable, "eth_rpc.py", "--help"],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("balance", proc.stdout)
+        self.assertIn("broadcast", proc.stdout)
+
+    def test_balance_bad_address_exits_one(self):
+        # Drives the balance path through main() in a real process. Bad address
+        # fails validation before any network call, so this stays offline.
+        proc = subprocess.run(
+            [_sys.executable, "eth_rpc.py", "balance",
+             "--network", "hoodi", "--address", "0xnope"],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("error:", proc.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

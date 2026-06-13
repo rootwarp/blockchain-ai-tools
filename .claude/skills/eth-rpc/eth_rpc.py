@@ -74,6 +74,18 @@ def parse_hex_int(s):
     return int(s, 16)
 
 
+def wei_to_eth_str(wei):
+    """Exact wei -> ETH decimal string (no float). e.g. 10**17 -> '0.1', 0 -> '0'."""
+    if not isinstance(wei, int):
+        raise ValueError("wei must be an integer")
+    sign = "-" if wei < 0 else ""
+    whole, frac = divmod(abs(wei), WEI_PER_ETH)
+    if frac == 0:
+        return "%s%d" % (sign, whole)
+    frac_str = ("%018d" % frac).rstrip("0")
+    return "%s%d.%s" % (sign, whole, frac_str)
+
+
 class RPCError(Exception):
     """A JSON-RPC transport failure or error response."""
 
@@ -202,15 +214,3 @@ def main(argv=None):
 
 if __name__ == "__main__":
     sys.exit(main())
-
-
-def wei_to_eth_str(wei):
-    """Exact wei -> ETH decimal string (no float). e.g. 10**17 -> '0.1', 0 -> '0'."""
-    if not isinstance(wei, int):
-        raise ValueError("wei must be an integer")
-    sign = "-" if wei < 0 else ""
-    whole, frac = divmod(abs(wei), WEI_PER_ETH)
-    if frac == 0:
-        return "%s%d" % (sign, whole)
-    frac_str = ("%018d" % frac).rstrip("0")
-    return "%s%d.%s" % (sign, whole, frac_str)
