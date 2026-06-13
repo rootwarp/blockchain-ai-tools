@@ -19,5 +19,21 @@ class TestNetworkConfig(unittest.TestCase):
             b.network_config("goerli")
 
 
+class TestGweiToWei(unittest.TestCase):
+    def test_one_gwei(self):
+        self.assertEqual(b.gwei_to_wei(1), 1_000_000_000)
+
+    def test_zero(self):
+        self.assertEqual(b.gwei_to_wei(0), 0)
+
+    def test_large_value_no_overflow(self):
+        # 1e9 gwei = 1 ETH = 1e18 wei (Python int is arbitrary precision)
+        self.assertEqual(b.gwei_to_wei(1_000_000_000), 1_000_000_000_000_000_000)
+
+    def test_negative_raises(self):
+        with self.assertRaises(ValueError):
+            b.gwei_to_wei(-1)
+
+
 if __name__ == "__main__":
     unittest.main()

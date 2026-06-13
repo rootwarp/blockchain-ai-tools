@@ -21,3 +21,10 @@ def network_config(network):
         raise ValueError(
             "unknown network %r; expected one of %s" % (network, sorted(NETWORKS))
         )
+
+
+def gwei_to_wei(amount_gwei):
+    """Convert an integer gwei amount to wei. Raises ValueError if negative."""
+    if amount_gwei < 0:
+        raise ValueError("amount-gwei must be non-negative")
+    return amount_gwei * 1_000_000_000
