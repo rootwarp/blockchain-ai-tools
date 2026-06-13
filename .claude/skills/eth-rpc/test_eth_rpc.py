@@ -84,5 +84,30 @@ class TestParseHexInt(unittest.TestCase):
             r.parse_hex_int(None)
 
 
+class TestWeiToEthStr(unittest.TestCase):
+    def test_zero(self):
+        self.assertEqual(r.wei_to_eth_str(0), "0")
+
+    def test_one_eth(self):
+        self.assertEqual(r.wei_to_eth_str(1_000_000_000_000_000_000), "1")
+
+    def test_tenth_eth(self):
+        self.assertEqual(r.wei_to_eth_str(100_000_000_000_000_000), "0.1")
+
+    def test_one_and_a_half(self):
+        self.assertEqual(r.wei_to_eth_str(1_500_000_000_000_000_000), "1.5")
+
+    def test_sub_eth_no_float_drift(self):
+        # 0.899976476745084 ETH expressed exactly
+        self.assertEqual(r.wei_to_eth_str(899_976_476_745_084_000), "0.899976476745084")
+
+    def test_one_wei(self):
+        self.assertEqual(r.wei_to_eth_str(1), "0.000000000000000001")
+
+    def test_non_int_raises(self):
+        with self.assertRaises(ValueError):
+            r.wei_to_eth_str("1")
+
+
 if __name__ == "__main__":
     unittest.main()
