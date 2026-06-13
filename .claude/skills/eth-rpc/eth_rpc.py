@@ -101,6 +101,21 @@ def rpc_call(url, method, params, timeout=15):
     return body["result"]
 
 
+def do_balance(network, address, rpc=rpc_call):
+    """Build the balance result dict. `rpc` is injected for testing."""
+    chain_id, url = network_config(network)
+    address = validate_hex_address(address)
+    wei = parse_hex_int(rpc(url, "eth_getBalance", [address, "latest"]))
+    return {
+        "network": network,
+        "chainId": str(chain_id),
+        "address": address,
+        "blockTag": "latest",
+        "balanceWei": str(wei),
+        "balanceEth": wei_to_eth_str(wei),
+    }
+
+
 def wei_to_eth_str(wei):
     """Exact wei -> ETH decimal string (no float). e.g. 10**17 -> '0.1', 0 -> '0'."""
     if not isinstance(wei, int):

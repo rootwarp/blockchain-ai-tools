@@ -137,6 +137,62 @@ class TestRpcCall(unittest.TestCase):
         self.assertNotIn("Python-urllib", sent_request.get_header("User-agent"))
 
 
+def make_fake_rpc(results, errors=()):
+    """Return a fake rpc(url, method, params). `results` maps method->value;
+    methods in `errors` raise RPCError."""
+    def _rpc(url, method, params):
+        if method in errors:
+            raise r.RPCError("simulated failure for %s" % method)
+        return results[method]
+    return _rpc
+
+
+class TestDoBalance(unittest.TestCase):
+    ADDR = "0x6302794A4F2487a2540c40E2dbB211Ff6AF1CD20"
+
+    def test_normal_balance(self):
+        rpc = make_fake_rpc({"eth_getBalance": "0x0c7d713b49da0000"})  # 0.9 ETH
+        out = r.do_balance("hoodi", self.ADDR, rpc=rpc)
+        self.assertEqual(
+            out,
+            {
+                "network": "hoodi",
+                "chainId": "560048",
+                "address": self.ADDR,
+                "blockTag": "latest",
+                "balanceWei": "900000000000000000",
+                "balanceEth": "0.9",
+            },
+        )
+
+    def test_zero_balance(self):
+        rpc = make_fake_rpc({"eth_getBalance": "0x0"})
+        out = r.do_balance("mainnet", self.ADDR, rpc=rpc)
+        self.assertEqual(out["chainId"], "1")
+        self.assertEqual(out["balanceWei"], "0")
+        self.assertEqual(out["balanceEth"], "0")
+
+    def test_one_eth(self):
+        rpc = make_fake_rpc({"eth_getBalance": "0x0de0b6b3a7640000"})  # 1 ETH
+        out = r.do_balance("hoodi", self.ADDR, rpc=rpc)
+        self.assertEqual(out["balanceWei"], "1000000000000000000")
+        self.assertEqual(out["balanceEth"], "1")
+
+    def test_queries_latest(self):
+        seen = {}
+
+        def rpc(url, method, params):
+            seen["params"] = params
+            return "0x0"
+
+        r.do_balance("hoodi", self.ADDR, rpc=rpc)
+        self.assertEqual(seen["params"], [self.ADDR, "latest"])
+
+    def test_malformed_address_raises(self):
+        with self.assertRaises(ValueError):
+            r.do_balance("hoodi", "0xnope", rpc=make_fake_rpc({"eth_getBalance": "0x0"}))
+
+
 class TestWeiToEthStr(unittest.TestCase):
     def test_zero(self):
         self.assertEqual(r.wei_to_eth_str(0), "0")
