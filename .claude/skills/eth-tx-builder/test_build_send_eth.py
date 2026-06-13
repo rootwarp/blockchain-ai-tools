@@ -35,5 +35,29 @@ class TestGweiToWei(unittest.TestCase):
             b.gwei_to_wei(-1)
 
 
+class TestValidateHexAddress(unittest.TestCase):
+    GOOD = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+
+    def test_valid_returns_same(self):
+        self.assertEqual(b.validate_hex_address(self.GOOD), self.GOOD)
+
+    def test_all_lower_ok(self):
+        self.assertEqual(
+            b.validate_hex_address(self.GOOD.lower()), self.GOOD.lower()
+        )
+
+    def test_missing_prefix_raises(self):
+        with self.assertRaises(ValueError):
+            b.validate_hex_address(self.GOOD[2:])
+
+    def test_too_short_raises(self):
+        with self.assertRaises(ValueError):
+            b.validate_hex_address("0x1234")
+
+    def test_non_hex_raises(self):
+        with self.assertRaises(ValueError):
+            b.validate_hex_address("0x" + "z" * 40)
+
+
 if __name__ == "__main__":
     unittest.main()
