@@ -167,5 +167,48 @@ class TestFetchHelpers(unittest.TestCase):
         self.assertEqual(b.fetch_tip(rpc, "https://x"), b.DEFAULT_TIP_WEI)
 
 
+class TestBuildTxRequest(unittest.TestCase):
+    TO = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+    SENDER = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+
+    def _rpc(self):
+        return make_fake_rpc(
+            {
+                "eth_getTransactionCount": "0x5",
+                "eth_getBlockByNumber": {"baseFeePerGas": "0x77359400"},  # 2 gwei
+                "eth_maxPriorityFeePerGas": "0x3b9aca00",  # 1 gwei
+            }
+        )
+
+    def test_full_request(self):
+        tx = b.build_tx_request("mainnet", self.TO, 1000, self.SENDER, rpc=self._rpc())
+        self.assertEqual(
+            tx,
+            {
+                "type": "eip1559",
+                "chainId": "1",
+                "nonce": "5",
+                "to": self.TO,
+                "value": "1000000000000",  # 1000 gwei = 1e12 wei
+                "data": "0x",
+                "gas": "21000",
+                "maxFeePerGas": "5000000000",  # 2*2e9 + 1e9
+                "maxPriorityFeePerGas": "1000000000",
+            },
+        )
+
+    def test_all_numeric_fields_are_decimal_strings(self):
+        tx = b.build_tx_request("hoodi", self.TO, 0, self.SENDER, rpc=self._rpc())
+        for k in ("chainId", "nonce", "value", "gas", "maxFeePerGas", "maxPriorityFeePerGas"):
+            self.assertIsInstance(tx[k], str)
+            self.assertTrue(tx[k].isdigit(), "%s not a decimal string: %r" % (k, tx[k]))
+        self.assertEqual(tx["chainId"], "560048")
+        self.assertEqual(tx["value"], "0")
+
+    def test_malformed_to_raises(self):
+        with self.assertRaises(ValueError):
+            b.build_tx_request("mainnet", "0xnope", 1, self.SENDER, rpc=self._rpc())
+
+
 if __name__ == "__main__":
     unittest.main()

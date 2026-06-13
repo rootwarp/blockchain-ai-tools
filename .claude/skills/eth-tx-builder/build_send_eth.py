@@ -17,6 +17,7 @@ NETWORKS = {
 }
 
 DEFAULT_TIP_WEI = 1_000_000_000  # 1 gwei, fallback when eth_maxPriorityFeePerGas is unavailable
+GAS_LIMIT_ETH_TRANSFER = 21000  # fixed intrinsic cost of a plain value transfer
 
 
 def network_config(network):
@@ -109,3 +110,31 @@ def fetch_tip(rpc, url):
         return parse_hex_int(rpc(url, "eth_maxPriorityFeePerGas", []))
     except Exception:
         return DEFAULT_TIP_WEI
+
+
+def build_tx_request(network, to, amount_gwei, sender, rpc=rpc_call):
+    """Build the sign_transaction request dict. `rpc` is injected for testing.
+
+    Numeric fields are decimal strings (the canonical form validate.go accepts).
+    """
+    chain_id, url = network_config(network)
+    to = validate_hex_address(to)
+    sender = validate_hex_address(sender)
+    value_wei = gwei_to_wei(amount_gwei)
+
+    nonce = fetch_nonce(rpc, url, sender)
+    base_fee = fetch_base_fee(rpc, url)
+    tip = fetch_tip(rpc, url)
+    max_fee = compute_max_fee(base_fee, tip)
+
+    return {
+        "type": "eip1559",
+        "chainId": str(chain_id),
+        "nonce": str(nonce),
+        "to": to,
+        "value": str(value_wei),
+        "data": "0x",
+        "gas": str(GAS_LIMIT_ETH_TRANSFER),
+        "maxFeePerGas": str(max_fee),
+        "maxPriorityFeePerGas": str(tip),
+    }
