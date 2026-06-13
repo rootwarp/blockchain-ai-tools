@@ -193,6 +193,41 @@ class TestDoBalance(unittest.TestCase):
             r.do_balance("hoodi", "0xnope", rpc=make_fake_rpc({"eth_getBalance": "0x0"}))
 
 
+class TestDoBroadcastSubmit(unittest.TestCase):
+    RAW = "0x02f8ab83088bb0"
+    HASH = "0xd6133a2b2713dd86f4abe32421aed32f9945aed046dbc80751f5a03871799e85"
+
+    def test_submit_returns_hash(self):
+        seen = {}
+
+        def rpc(url, method, params):
+            seen["method"] = method
+            seen["params"] = params
+            return self.HASH
+
+        out = r.do_broadcast("hoodi", self.RAW, rpc=rpc)
+        self.assertEqual(seen["method"], "eth_sendRawTransaction")
+        self.assertEqual(seen["params"], [self.RAW])
+        self.assertEqual(
+            out,
+            {
+                "network": "hoodi",
+                "chainId": "560048",
+                "txHash": self.HASH,
+                "status": "submitted",
+            },
+        )
+
+    def test_malformed_raw_raises(self):
+        with self.assertRaises(ValueError):
+            r.do_broadcast("hoodi", "not-hex", rpc=make_fake_rpc({"eth_sendRawTransaction": self.HASH}))
+
+    def test_submit_rpc_error_propagates(self):
+        rpc = make_fake_rpc({}, errors={"eth_sendRawTransaction"})
+        with self.assertRaises(r.RPCError):
+            r.do_broadcast("hoodi", self.RAW, rpc=rpc)
+
+
 class TestWeiToEthStr(unittest.TestCase):
     def test_zero(self):
         self.assertEqual(r.wei_to_eth_str(0), "0")

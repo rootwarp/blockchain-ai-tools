@@ -116,6 +116,22 @@ def do_balance(network, address, rpc=rpc_call):
     }
 
 
+def do_broadcast(network, raw_tx, rpc=rpc_call):
+    """Submit a signed raw transaction; return the submission result dict.
+
+    `rpc` is injected for testing. Polling for the receipt is added in Task 6.
+    """
+    chain_id, url = network_config(network)
+    raw_tx = validate_raw_tx(raw_tx)
+    tx_hash = rpc(url, "eth_sendRawTransaction", [raw_tx])
+    return {
+        "network": network,
+        "chainId": str(chain_id),
+        "txHash": tx_hash,
+        "status": "submitted",
+    }
+
+
 def wei_to_eth_str(wei):
     """Exact wei -> ETH decimal string (no float). e.g. 10**17 -> '0.1', 0 -> '0'."""
     if not isinstance(wei, int):
