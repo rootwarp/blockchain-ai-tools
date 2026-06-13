@@ -211,10 +211,10 @@ value is compact JSON with exactly two fields: `{"code":"…","message":"…"}`.
 | `invalid_input` | Missing / malformed field; bad EIP-55 checksum; `chainId = 0` |
 | `unsupported_type` | Transaction type is not `0x0` or `0x2` |
 | `chain_id_mismatch` | Request `chainId` ≠ `--chain-id` guard value |
-| `keystore_error` | Keystore missing or malformed (top-level `"address"` is optional per Web3 Secret Storage spec; a malformed address field — wrong length, non-hex, bad EIP-55 mixed-case — is rejected at boot) |
+| `keystore_error` | Keystore fails a boot-time structural check — covers: (a) missing or unreadable file, (b) malformed JSON, (c) present-but-malformed top-level `"address"` (wrong length, non-hex, bad EIP-55 mixed-case), (d) structurally-broken `crypto.*` v3 shape (cipher / KDF / mac / ciphertext / version). All four are detected at boot; the process exits non-zero. See §6 for the optional-address / `address_unknown` semantics. |
 | `address_unknown` | `get_address` called before the optional-address keystore has discovered its real account (via first successful `sign_transaction`); call `sign_transaction` first or use a keystore with a declared address |
-| `password_error` | Password file unreadable or wrong password (keystore MAC failure) |
-| `internal_error` | Recovered panic, sender mismatch, or non-ErrDecrypt decrypt failure; `Cause` logged server-side, never sent to caller |
+| `password_error` | Password file unreadable or wrong password (keystore MAC failure detected at first sign; structural keystore shape is validated at boot and surfaces as `keystore_error`) |
+| `internal_error` | Recovered panic, sender mismatch, or runtime ciphertext/MAC corruption detected by `DecryptKey` (structural shape is validated at boot — see `keystore_error`); `Cause` logged server-side, never sent to caller |
 
 Wire shape example:
 ```json
