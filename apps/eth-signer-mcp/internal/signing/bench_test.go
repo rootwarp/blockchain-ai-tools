@@ -175,6 +175,9 @@ func measureSignTime(t testing.TB, s *Signer) time.Duration {
 // asymmetry; measuring total before KDF in each pair removes the ordering bias.
 func TestSigner_NonKDFOverhead_Light(t *testing.T) {
 	t.Parallel()
+	if raceDetectorEnabled {
+		t.Skip("skipping timing test under -race: detector instruments all memory accesses, invalidating the < 10ms non-KDF delta measurement")
+	}
 
 	keystorePath := testdataFile(t, "keystore-light.json")
 	passwordPath := testdataFile(t, "password.txt")
@@ -269,6 +272,9 @@ func TestSigner_NonKDFOverhead_Light(t *testing.T) {
 func TestSigner_NonKDFOverhead_Standard(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping standard-scrypt overhead test under -short (each call ~0.5–1 s)")
+	}
+	if raceDetectorEnabled {
+		t.Skip("skipping timing test under -race: detector instruments all memory accesses, invalidating the < 10ms non-KDF delta measurement")
 	}
 	// NOT t.Parallel() — see comment above.
 

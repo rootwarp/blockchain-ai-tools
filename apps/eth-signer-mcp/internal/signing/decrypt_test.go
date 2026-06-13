@@ -797,12 +797,15 @@ func TestWithSigningKey_NoAddressKeystore_DiscoversAddress(t *testing.T) {
 	}
 }
 
-// TestWithSigningKey_WrongPresentAddress_SelfHeals exercises the high-severity
-// case (Finding 1): a keystore JSON with present but non-matching top-level
-// "address" (permissive parse at boot stores wrong non-zero) now self-heals
-// on first decrypt (unconditional cache from key.Address); initial Address
-// may be wrong, post-sign is correct, and sign itself succeeds (no sender mismatch).
-func TestWithSigningKey_WrongPresentAddress_SelfHeals(t *testing.T) {
+// TestWithSigningKey_WrongPresentAddress_RejectsWithInternalError is the
+// regression anchor for P0-GUARD-1 (Issue 1.2). After the discover-only CAS
+// write is in place, a keystore declaring address 0x…0001 whose ciphertext
+// decrypts to a different key MUST fail with internal_error (the restored
+// sender-mismatch guard at signer.go:185-196 fires). The declared 0x…0001 is
+// preserved on the vault — no "self-heal". The guard fires inside
+// Signer.SignTransaction (not inside WithSigningKey), so the test drives a
+// real Signer.
+func TestWithSigningKey_WrongPresentAddress_RejectsWithInternalError(t *testing.T) {
 	t.Parallel()
 
 	raw, err := os.ReadFile(testdataFile(t, "keystore-weak.json"))
@@ -823,30 +826,43 @@ func TestWithSigningKey_WrongPresentAddress_SelfHeals(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newFileKeyVault(wrong-addr): %v", err)
 	}
-	// Boot snapshot captured the wrong (non-zero) value from the field.
-	if got := v.Address().Hex(); got != "0x0000000000000000000000000000000000000001" {
-		t.Fatalf("initial (wrong) Address() = %q, want wrong value", got)
+	// Boot snapshot captured the declared (wrong) address from the field.
+	const declaredAddr = "0x0000000000000000000000000000000000000001"
+	if got := v.Address().Hex(); got != declaredAddr {
+		t.Fatalf("initial Address() = %q, want declared wrong value %q", got, declaredAddr)
 	}
 
-	if err := v.WithSigningKey(context.Background(), func(k SigningKey) error {
-		if got := k.Address().Hex(); got != FixtureTestAddress {
-			t.Errorf("SigningKey.Address() = %q, want %q", got, FixtureTestAddress)
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("WithSigningKey(wrong-addr): %v", err)
+	// Drive through Signer.SignTransaction — the sender-mismatch guard lives there.
+	s := NewSigner(v, SignerOptions{})
+	_, signErr := s.SignTransaction(context.Background(), eip1559Req())
+
+	// Must fail with internal_error; the message must name both sides of the mismatch.
+	var te *ToolError
+	if !errors.As(signErr, &te) {
+		t.Fatalf("SignTransaction error = %v (%T), want *ToolError", signErr, signErr)
+	}
+	if te.Code != CodeInternalError {
+		t.Errorf("ToolError.Code = %q, want %q", te.Code, CodeInternalError)
+	}
+	if !strings.Contains(te.Message, "recovered sender") {
+		t.Errorf("ToolError.Message %q does not contain %q", te.Message, "recovered sender")
+	}
+	if !strings.Contains(te.Message, "keystore address") {
+		t.Errorf("ToolError.Message %q does not contain %q", te.Message, "keystore address")
 	}
 
-	// Self-healed from decrypted key; subsequent readers (get_address etc) see truth.
-	if got := v.Address().Hex(); got != FixtureTestAddress {
-		t.Errorf("post-heal Address() = %q, want %q", got, FixtureTestAddress)
+	// Declared value must be preserved — no self-heal.
+	if got := v.Address().Hex(); got != declaredAddr {
+		t.Errorf("post-sign Address() = %q, want declared %q (no self-heal)", got, declaredAddr)
 	}
 }
 
-// TestWithSigningKey_NoAddress_ConcurrentReaders exercises visibility of
-// the discovery write (Finding 2/5): concurrent Address() calls overlapping
-// the first decrypt on a no-addr vault. Post-discovery, all see the real addr.
-// (Uses patterns from existing semaphore/zeroing concurrency tests.)
+// TestWithSigningKey_NoAddress_ConcurrentReaders is the regression anchor for
+// P0-RACE-1 (Issue 1.1) and the repo-wide -race CI gap (P0-RACE-2, Issue 1.3).
+// N reader goroutines launch BEFORE the first WithSigningKey call and spin on
+// v.Address() in a tight loop while the discovery write at decrypt.go fires.
+// Must run under -race and must observably fail if the address field is reverted
+// to a bare common.Address.
 func TestWithSigningKey_NoAddress_ConcurrentReaders(t *testing.T) {
 	t.Parallel()
 
@@ -858,31 +874,54 @@ func TestWithSigningKey_NoAddress_ConcurrentReaders(t *testing.T) {
 		t.Fatalf("newFileKeyVault: %v", err)
 	}
 
-	// Initial is zero (covered by sibling test); now discover synchronously.
-	if err := v.WithSigningKey(context.Background(), func(k SigningKey) error { return nil }); err != nil {
-		t.Fatalf("discover With: %v", err)
-	}
-
-	const readers = 4
+	// Launch N reader goroutines BEFORE calling WithSigningKey so they are
+	// already spinning on v.Address() when the discovery write fires inside
+	// WithSigningKey. This guarantees a real read/write overlap under -race.
+	//
+	// Barrier design: ready is closed by the first reader goroutine that
+	// actually calls v.Address(), proving ≥1 reader is live before the CAS
+	// write fires. This is GOMAXPROCS-safe (works under -cpu=1) because the
+	// main goroutine blocks on <-ready until a reader has been scheduled and
+	// executed at least one iteration — no time.Sleep heuristic required.
+	const readers = 8
 	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	ready := make(chan struct{})
+	var readyOnce sync.Once
 	wg.Add(readers)
-	post := make(chan string, readers)
-
-	// Concurrent readers on the (now discovered) value. Exercises parallel
-	// Address() calls (for Finding 2/5 coverage) after the lazy write.
 	for i := 0; i < readers; i++ {
 		go func() {
 			defer wg.Done()
-			post <- v.Address().Hex()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					_ = v.Address()
+					readyOnce.Do(func() { close(ready) })
+				}
+			}
 		}()
 	}
 
-	wg.Wait()
-	close(post)
+	// Block until at least one reader has called v.Address(), proving overlap
+	// with the discovery write is non-vacuous even under -cpu=1.
+	<-ready
 
-	for s := range post {
-		if s != FixtureTestAddress {
-			t.Errorf("concurrent post-discovery Address() = %q, want real", s)
-		}
+	// The discovery write fires inside this call (at decrypt.go); readers are in
+	// their tight loop hitting v.Address() continuously — a real overlap occurs.
+	if err := v.WithSigningKey(context.Background(), func(k SigningKey) error { return nil }); err != nil {
+		close(stop)
+		wg.Wait()
+		t.Fatalf("WithSigningKey(no-address): %v", err)
+	}
+
+	// Stop readers and wait for them to exit.
+	close(stop)
+	wg.Wait()
+
+	// Discovery must have succeeded.
+	if got := v.Address().Hex(); got != FixtureTestAddress {
+		t.Errorf("post-discovery Address() = %q, want %q", got, FixtureTestAddress)
 	}
 }

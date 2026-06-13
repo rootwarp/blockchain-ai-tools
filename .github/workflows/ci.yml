@@ -43,6 +43,9 @@ jobs:
       - name: Test
         run: make test
 
+      - name: Test (race)
+        run: make test-race
+
       - name: Build
         run: make build
 

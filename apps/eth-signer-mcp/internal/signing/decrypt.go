@@ -143,11 +143,17 @@ func (v *fileKeyVault) WithSigningKey(ctx context.Context, fn func(SigningKey) e
 		}
 	}
 
-	// Always cache the address from the *decrypted* key (the source of truth).
-	// This self-heals any present-but-wrong top-level "address" parsed at boot
-	// via permissive HexToAddress (Finding 1) and also covers the optional/absent case.
-	// The write is under sem; see file_vault.go for visibility notes.
-	v.address = key.Address
+	// Discover-only: write the key's address ONLY if the synchronised field is
+	// currently nil (optional-address keystore, no prior discovery). For
+	// present-address keystores the declared value is preserved and the
+	// sender-mismatch guard at signer.go:185-196 will fire on a mismatch
+	// (internal_error). Address is immutable once known.
+	//
+	// CompareAndSwap(nil, &discovered) is a single atomic step — no TOCTOU window.
+	// An unsuccessful CAS means the address was already known; the guard below
+	// (via signer.go) handles any real mismatch on this call.
+	discovered := key.Address
+	v.address.CompareAndSwap(nil, &discovered)
 
 	// 6. Register key-scalar zeroing BEFORE fn runs so it fires on panic inside fn.
 	//    ZeroBigInt zeros the backing word-slice of key.PrivateKey.D and re-normalises
