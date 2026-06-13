@@ -35,9 +35,10 @@ import (
 const lightOverheadIterations = 15
 
 // standardOverheadIterations is the number of iterations for the standard-scrypt
-// overhead test. Each op takes ~0.6–1 s; 10 iterations keeps the total test runtime
-// under ~12 s while giving a well-sampled minimum.
-const standardOverheadIterations = 10
+// overhead test. Each op takes ~0.6–1 s; 15 iterations (~15–20 s total in CI)
+// gives extra min-sampling margin so the minimum has more chances to catch a clean
+// non-KDF window even on a busy shared runner.
+const standardOverheadIterations = 15
 
 // coldStartIterations is the number of iterations for the cold-start median.
 // Construction is fast (I/O + JSON parse only, no KDF), so 5 iterations is enough.
@@ -255,6 +256,8 @@ func TestSigner_NonKDFOverhead_Light(t *testing.T) {
 // though the true non-KDF work is sub-millisecond. The min-based estimator
 // cancels scrypt's central tendency AND its variance, making the test robust
 // without weakening the contract (a real 50 ms regression still fails the test).
+// standardOverheadIterations=15 gives extra min-sampling margin so the minimum
+// has more chances to catch a clean non-KDF window on a busy shared runner.
 //
 // NOTE: This test is NOT t.Parallel(). The standard-scrypt KDF is CPU-bound at
 // ~0.5–1 s; running it in parallel with other tests creates goroutine scheduling

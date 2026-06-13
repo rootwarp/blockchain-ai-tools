@@ -194,7 +194,7 @@ to the bare compute floor: `min(total) ≈ scrypt_floor + overhead`, `min(KDF) �
 so their difference cancels scrypt's central tendency **and** its variance. A real 50 ms
 regression still fails the test — the contract is not weakened, only noise is removed.
 
-Iteration counts increased so the minimum is well-sampled: light N=15 (was 7), standard N=10 (was 7).
+Iteration counts increased so the minimum is well-sampled: light N=15 (was 7), standard N=15 (was 7; bumped from 10 for extra min-sampling margin on busy shared runners).
 
 Representative runs on macOS, Apple M-series, 10 logical CPUs (bench_test.go line numbers
 reflect the updated file):
@@ -204,15 +204,18 @@ bench_test.go: light-scrypt:    median total=46.529ms  median KDF=45.485ms  min 
 bench_test.go: standard-scrypt: median total=600.251ms median KDF=520.161ms min total=440.334ms min KDF=439.829ms non-KDF delta (min-based)=504µs   (limit: 10ms)
 ```
 
-CI-robustness evidence (GOMAXPROCS=2, count=5 — all passed):
+CI-robustness evidence (GOMAXPROCS=2, count=5 at N=10 — all passed; then count=3 at N=15 — all passed):
 
-| Run | Standard min-based delta | Pass? |
-|-----|--------------------------|-------|
-| 1 | 324 µs | ✅ |
-| 2 | 124 µs | ✅ |
-| 3 | -486 µs (noise, negative → pass) | ✅ |
-| 4 | 90 µs | ✅ |
-| 5 | -650 µs (noise, negative → pass) | ✅ |
+| Run | N | Standard min-based delta | Pass? |
+|-----|---|--------------------------|-------|
+| 1 | 10 | 324 µs | ✅ |
+| 2 | 10 | 124 µs | ✅ |
+| 3 | 10 | -486 µs (noise, negative → pass) | ✅ |
+| 4 | 10 | 90 µs | ✅ |
+| 5 | 10 | -650 µs (noise, negative → pass) | ✅ |
+| 6 | 15 | 231 µs | ✅ |
+| 7 | 15 | 193 µs | ✅ |
+| 8 | 15 | -1.156 ms (noise, negative → pass) | ✅ |
 
 Under-load evidence (background `yes` CPU workers, count=3 — all passed):
 
@@ -270,5 +273,5 @@ New constants and helpers added: `coldStartIterations = 5`, `measureColdStartTim
 | No shipped doc/comment carries a manual advisory claim | ✅ |
 | Cold start < 200 ms on both fixture sets | ✅ |
 | Non-KDF overhead < 10 ms on both fixture sets (isolation run) | ✅ |
-| Test uses min-of-N for overhead (N≥10), median-of-N for cold-start (N=5) | ✅ (N=15 light / N=10 standard overhead, N=5 cold-start) |
+| Test uses min-of-N for overhead (N=15 both fixtures), median-of-N for cold-start (N=5) | ✅ (N=15 light / N=15 standard overhead, N=5 cold-start) |
 | Benchmark numbers recorded for release notes | ✅ (§4 above) |
