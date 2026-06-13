@@ -33,7 +33,9 @@ def network_config(network):
 
 
 def gwei_to_wei(amount_gwei):
-    """Convert an integer gwei amount to wei. Raises ValueError if negative."""
+    """Convert an integer gwei amount to wei. Raises ValueError if non-int or negative."""
+    if not isinstance(amount_gwei, int):
+        raise ValueError("amount-gwei must be an integer")
     if amount_gwei < 0:
         raise ValueError("amount-gwei must be non-negative")
     return amount_gwei * 1_000_000_000
@@ -84,7 +86,7 @@ def rpc_call(url, method, params, timeout=15):
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             body = json.loads(resp.read().decode("utf-8"))
-    except Exception as e:  # transport / decode failure
+    except (OSError, ValueError) as e:  # transport (URLError⊂OSError) / decode (JSON/Unicode⊂ValueError)
         raise RPCError("RPC transport error calling %s: %s" % (method, e))
     if body.get("error") is not None:
         raise RPCError("RPC error for %s: %s" % (method, body["error"]))
@@ -110,7 +112,7 @@ def fetch_tip(rpc, url):
     """Suggested priority fee from eth_maxPriorityFeePerGas; fall back to DEFAULT_TIP_WEI."""
     try:
         return parse_hex_int(rpc(url, "eth_maxPriorityFeePerGas", []))
-    except Exception:
+    except (RPCError, ValueError):
         return DEFAULT_TIP_WEI
 
 

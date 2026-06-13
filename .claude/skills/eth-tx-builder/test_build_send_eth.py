@@ -37,6 +37,10 @@ class TestGweiToWei(unittest.TestCase):
         with self.assertRaises(ValueError):
             b.gwei_to_wei(-1)
 
+    def test_float_raises(self):
+        with self.assertRaises(ValueError):
+            b.gwei_to_wei(1.5)
+
 
 class TestValidateHexAddress(unittest.TestCase):
     GOOD = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
@@ -208,6 +212,10 @@ class TestBuildTxRequest(unittest.TestCase):
     def test_malformed_to_raises(self):
         with self.assertRaises(ValueError):
             b.build_tx_request("mainnet", "0xnope", 1, self.SENDER, rpc=self._rpc())
+
+    def test_malformed_sender_raises(self):
+        with self.assertRaises(ValueError):
+            b.build_tx_request("mainnet", self.TO, 1, "0xnope", rpc=self._rpc())
 
 
 class TestMain(unittest.TestCase):
