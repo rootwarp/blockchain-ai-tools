@@ -59,5 +59,35 @@ class TestValidateHexAddress(unittest.TestCase):
             b.validate_hex_address("0x" + "z" * 40)
 
 
+class TestParseHexInt(unittest.TestCase):
+    def test_simple(self):
+        self.assertEqual(b.parse_hex_int("0x5"), 5)
+
+    def test_two_gwei(self):
+        self.assertEqual(b.parse_hex_int("0x77359400"), 2_000_000_000)
+
+    def test_zero(self):
+        self.assertEqual(b.parse_hex_int("0x0"), 0)
+
+    def test_missing_prefix_raises(self):
+        with self.assertRaises(ValueError):
+            b.parse_hex_int("5")
+
+    def test_non_string_raises(self):
+        with self.assertRaises(ValueError):
+            b.parse_hex_int(None)
+
+
+class TestComputeMaxFee(unittest.TestCase):
+    def test_base_times_two_plus_tip(self):
+        # base=2 gwei, tip=1 gwei -> 2*2 + 1 = 5 gwei
+        self.assertEqual(
+            b.compute_max_fee(2_000_000_000, 1_000_000_000), 5_000_000_000
+        )
+
+    def test_zero_base(self):
+        self.assertEqual(b.compute_max_fee(0, 1_000_000_000), 1_000_000_000)
+
+
 if __name__ == "__main__":
     unittest.main()

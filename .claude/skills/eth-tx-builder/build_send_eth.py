@@ -45,3 +45,15 @@ def validate_hex_address(addr):
             "malformed address (expected 0x + 40 hex chars): %r" % (addr,)
         )
     return addr
+
+
+def parse_hex_int(s):
+    """Parse a 0x-prefixed hex quantity string into an int. Raise ValueError otherwise."""
+    if not isinstance(s, str) or not s.startswith("0x"):
+        raise ValueError("expected 0x-prefixed hex string, got %r" % (s,))
+    return int(s, 16)
+
+
+def compute_max_fee(base_fee, tip):
+    """maxFeePerGas heuristic: baseFee*2 + tip (absorbs ~6 full blocks of base-fee rise)."""
+    return base_fee * 2 + tip
