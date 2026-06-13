@@ -25,15 +25,15 @@
     - CI (workflow from 1.2) green on `main`: `make lint` (incl. depguard),
       `make test`, `make build`, `govulncheck`, `GOOS=windows` compile.
 - **Exit criteria (from the project plan):**
-  - [ ] Both demos reproduced from the written walkthrough by following
+  - [x] Both demos reproduced from the written walkthrough by following
         `docs/demo.md` verbatim.
-  - [ ] README covers flags, lifecycle contract, latency expectations,
+  - [x] README covers flags, lifecycle contract, latency expectations,
         permissions, threat model, error codes.
-  - [ ] `govulncheck` clean; pins verified; benchmark green on both scrypt
+  - [x] `govulncheck` clean; pins verified; benchmark green on both scrypt
         parameter sets (cold start < 200 ms; non-KDF overhead < 10 ms).
-  - [ ] Mutation re-checks performed and documented (offline-import +
+  - [x] Mutation re-checks performed and documented (offline-import +
         depguard; leak scan).
-  - [ ] `eth-signer-mcp/v1.0.0` tagged with CI green at the tagged commit;
+  - [x] `eth-signer-mcp/v1.0.0` tagged with CI green at the tagged commit;
         post-release smoke passed from a fresh clone.
 
 ### Phase Assumptions (recorded so execution does not stall)
@@ -175,23 +175,23 @@ the Phase 3 transport-parity test (task 3.8).
 
 **Acceptance Criteria:**
 
-- [ ] `apps/eth-signer-mcp/docs/demo.md` exists and a reader following it
+- [x] `apps/eth-signer-mcp/docs/demo.md` exists and a reader following it
       verbatim reproduces both flows (this is re-proven from a fresh clone
       in 4.5's smoke).
-- [ ] The stdio demo runs from an unmodified MCP client config; the
+- [x] The stdio demo runs from an unmodified MCP client config; the
       walkthrough contains the exact `mcpServers` snippet and the
       documented fallback CLI-client command.
-- [ ] Both transports return the same byte-identical `rawTransaction`,
+- [x] Both transports return the same byte-identical `rawTransaction`,
       equal to the committed golden vector for the demo input; the decoded
       transaction's recovered sender equals the fixture keystore address.
-- [ ] `scripts/demo/http-demo.sh` is committed, executable, exits non-zero
+- [x] `scripts/demo/http-demo.sh` is committed, executable, exits non-zero
       on any failure, never commits or prints a token, and asserts the
       golden-vector byte-equality itself.
-- [ ] The 401 (bad/missing bearer) and 403 (forged `Host`) `curl`
+- [x] The 401 (bad/missing bearer) and 403 (forged `Host`) `curl`
       one-liners are documented with captured output.
-- [ ] The walkthrough states the transaction is not broadcast and that
+- [x] The walkthrough states the transaction is not broadcast and that
       off-localhost exposure is unsupported.
-- [ ] Captured stderr from both demos is committed under
+- [x] Captured stderr from both demos is committed under
       `docs/demo-assets/` (token values and absolute home paths scrubbed)
       — input evidence for the 4.4 leak audit.
 
@@ -315,26 +315,26 @@ Mandatory sections, in order:
 
 **Acceptance Criteria:**
 
-- [ ] `apps/eth-signer-mcp/README.md` contains all twelve sections above
+- [x] `apps/eth-signer-mcp/README.md` contains all twelve sections above
       in order; total length stays in the ~300–400 line band.
-- [ ] Every flag the binary registers appears in the flag table and vice
+- [x] Every flag the binary registers appears in the flag table and vice
       versa (cross-checked against `--help` output; record the diff check
       in the PR).
-- [ ] The lifecycle section states the boot-time-snapshot / live
+- [x] The lifecycle section states the boot-time-snapshot / live
       password-rotation / restart-for-keystore-rotation /
       `password_error` contract exactly as locked.
-- [ ] The latency section states ~0.5–1 s standard scrypt / ~50 ms light
+- [x] The latency section states ~0.5–1 s standard scrypt / ~50 ms light
       scrypt, paid on every call, no warm path; the same expectation
       appears in `--help`.
-- [ ] The error-code table lists exactly the six stable codes with the
+- [x] The error-code table lists exactly the six stable codes with the
       `{"code","message"}` wire shape.
-- [ ] The stdio quick-start snippet is byte-consistent with
+- [x] The stdio quick-start snippet is byte-consistent with
       `docs/demo.md`'s snippet and links to it; the HTTP quick-start
       links to the demo script and states off-localhost is unsupported.
-- [ ] The pinned-versions section matches `go.mod` and
+- [x] The pinned-versions section matches `go.mod` and
       `.foundry-version` exactly and records the MCP protocol revision
       from the SDK v1.6.1 release notes verbatim.
-- [ ] No claim in the README lacks a corresponding test/CI gate; no
+- [x] No claim in the README lacks a corresponding test/CI gate; no
       go-ethereum advisory claims appear anywhere in it.
 
 **Testing Notes:**
@@ -430,20 +430,20 @@ Three parts:
 
 **Acceptance Criteria:**
 
-- [ ] `go.mod` pins verified exactly (go-sdk v1.6.1, go-ethereum v1.17.3,
+- [x] `go.mod` pins verified exactly (go-sdk v1.6.1, go-ethereum v1.17.3,
       urfave/cli v3 exact patch, Go 1.26); `go mod tidy` is a no-op;
       transcript in the PR description.
-- [ ] `.foundry-version` contains a single stable Foundry tag and matches
+- [x] `.foundry-version` contains a single stable Foundry tag and matches
       the committed `cast --version` capture next to the vectors.
-- [ ] The five advisories GO-2026-4314/-4315/-4507/-4508/-4511 are each
+- [x] The five advisories GO-2026-4314/-4315/-4507/-4508/-4511 are each
       confirmed fixed at or before go-ethereum v1.17.0 (evidence linked in
       the PR); `govulncheck` is clean locally and in CI on the candidate
       commit.
-- [ ] No shipped doc or comment carries a manual advisory claim.
-- [ ] `internal/signing/bench_test.go` is committed and green under
+- [x] No shipped doc or comment carries a manual advisory claim.
+- [x] `internal/signing/bench_test.go` is committed and green under
       `make test`: cold start < 200 ms; non-KDF overhead < 10 ms on
       **both** the standard- and light-scrypt fixtures.
-- [ ] Benchmark numbers for both fixture sets (KDF time, total, delta)
+- [x] Benchmark numbers for both fixture sets (KDF time, total, delta)
       are recorded in the PR description for reuse in 4.5's release notes.
 
 **Testing Notes:**
@@ -541,22 +541,22 @@ polish duty:
 
 **Acceptance Criteria:**
 
-- [ ] `make lint`, `make test`, `make build` green locally and in CI at
+- [x] `make lint`, `make test`, `make build` green locally and in CI at
       the release-candidate commit.
-- [ ] Offline-import mutation performed: with the `ethclient` import in
+- [x] Offline-import mutation performed: with the `ethclient` import in
       place, **both** the ADR-007 test and depguard fail; transcripts in
       the PR description; mutation reverted (working tree clean).
-- [ ] Leak-scan mutation performed: the embedded-Secret log line makes
+- [x] Leak-scan mutation performed: the embedded-Secret log line makes
       the scan fail naming the sentinel; transcript captured; reverted.
-- [ ] `internal/server/leakaudit_e2e_test.go` committed and green under
+- [x] `internal/server/leakaudit_e2e_test.go` committed and green under
       `make test`: full stdio + HTTP e2e at `debug` level, sentinel and
       **all encoded forms** absent from every captured byte, positive
       control present, all six error codes exercised.
-- [ ] The `--strict-perms` refusal path (exit 2) is captured and
+- [x] The `--strict-perms` refusal path (exit 2) is captured and
       sentinel-clean (committed test in `cmd/eth-signer-mcp`).
-- [ ] The 4.1 demo transcripts under `docs/demo-assets/` pass the same
+- [x] The 4.1 demo transcripts under `docs/demo-assets/` pass the same
       scan (one-off check recorded in the PR).
-- [ ] Zero TODO/FIXME in `internal/signing`; stragglers elsewhere fixed
+- [x] Zero TODO/FIXME in `internal/signing`; stragglers elsewhere fixed
       or recorded for the release notes; final `make lint` clean after
       the polish pass.
 
@@ -653,23 +653,23 @@ a fresh clone and re-running both demos.
 
 **Acceptance Criteria:**
 
-- [ ] `CHANGELOG.md` exists in Keep-a-Changelog format; the `v1.0.0`
+- [x] `CHANGELOG.md` exists in Keep-a-Changelog format; the `v1.0.0`
       entry's `Added`/`Security` content maps to shipped, tested
       behaviour only.
-- [ ] `docs/release-notes-v1.0.0.md` exists with scope, pins + protocol
+- [x] `docs/release-notes-v1.0.0.md` exists with scope, pins + protocol
       revision, measured benchmark numbers, the honest latency
       statement, lifecycle contract, threat-model pointer, and P2
       backlog; its only advisory content is the 4.3-verified
       not-affected fact plus the govulncheck-in-CI statement.
-- [ ] Every pre-tag checklist item passed and is recorded in the PR
+- [x] Every pre-tag checklist item passed and is recorded in the PR
       description; CI is green at the exact tagged SHA.
-- [ ] Tag `eth-signer-mcp/v1.0.0` exists at that commit and is pushed;
+- [x] Tag `eth-signer-mcp/v1.0.0` exists at that commit and is pushed;
       `git describe --tags` confirms.
-- [ ] Post-release smoke from a fresh clone of the tag: build + test
+- [x] Post-release smoke from a fresh clone of the tag: build + test
       green; **both demos** reproduced (stdio RLP byte-matches the
       golden vector; HTTP script exits 0; 401/403 reproduce); transcript
       recorded.
-- [ ] Final repo tidy done: clean tree, no scratch artifacts, docs
+- [x] Final repo tidy done: clean tree, no scratch artifacts, docs
       mutually consistent — the phase's polish duty fully discharged.
 
 **Testing Notes:**
