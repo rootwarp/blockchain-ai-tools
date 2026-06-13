@@ -5,6 +5,10 @@ that signs Ethereum transactions using a locally-stored Web3 Secret Storage
 keystore.  An AI agent — or any MCP client — sends a fully-specified
 transaction and receives a broadcast-ready signed transaction back.
 
+**Usage guides:** task-oriented walkthroughs (getting started, stdio/HTTP
+clients, tool reference, agent integration, production hardening,
+troubleshooting) live in [`docs/guides/README.md`](docs/guides/README.md).
+
 ---
 
 ## 1. What it is / what it is not
@@ -189,7 +193,10 @@ startup refusal with exit 2 (`--strict-perms`).
 
 **HTTP hardening layers** (outermost → innermost, ADR-006):
 
-1. `MaxBytesHandler` — 1 MiB request body cap (413 on oversize).
+1. `MaxBytesHandler` — 1 MiB request body cap. An oversize body makes the SDK's
+   JSON decode fail, so the SDK returns `400` (it does not translate
+   `*http.MaxBytesError` to `413`; pinned as `pinnedStatus = 400` in
+   `internal/server/bounds_test.go`).
 2. `reqlog` middleware — request-id + structured log; no URL / header / body echo.
 3. Bearer auth — SHA-256 constant-time compare → 401 on mismatch.
 4. SDK `StreamableHTTPHandler` — DNS-rebinding guard (non-loopback `Host` → 403).
