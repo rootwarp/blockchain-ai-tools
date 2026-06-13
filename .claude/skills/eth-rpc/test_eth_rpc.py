@@ -84,6 +84,59 @@ class TestParseHexInt(unittest.TestCase):
             r.parse_hex_int(None)
 
 
+class TestRpcCall(unittest.TestCase):
+    def _fake_response(self, payload):
+        body = json.dumps(payload).encode("utf-8")
+        resp = mock.MagicMock()
+        resp.read.return_value = body
+        resp.__enter__.return_value = resp
+        resp.__exit__.return_value = False
+        return resp
+
+    def test_returns_result(self):
+        with mock.patch(
+            "eth_rpc.urllib.request.urlopen",
+            return_value=self._fake_response({"jsonrpc": "2.0", "id": 1, "result": "0x5"}),
+        ):
+            self.assertEqual(r.rpc_call("https://x", "eth_getBalance", ["0xabc", "latest"]), "0x5")
+
+    def test_jsonrpc_error_raises(self):
+        with mock.patch(
+            "eth_rpc.urllib.request.urlopen",
+            return_value=self._fake_response(
+                {"jsonrpc": "2.0", "id": 1, "error": {"code": -32000, "message": "boom"}}
+            ),
+        ):
+            with self.assertRaises(r.RPCError):
+                r.rpc_call("https://x", "eth_chainId", [])
+
+    def test_transport_error_raises(self):
+        with mock.patch(
+            "eth_rpc.urllib.request.urlopen", side_effect=OSError("connection refused")
+        ):
+            with self.assertRaises(r.RPCError):
+                r.rpc_call("https://x", "eth_chainId", [])
+
+    def test_missing_result_raises(self):
+        with mock.patch(
+            "eth_rpc.urllib.request.urlopen",
+            return_value=self._fake_response({"jsonrpc": "2.0", "id": 1}),
+        ):
+            with self.assertRaises(r.RPCError):
+                r.rpc_call("https://x", "eth_chainId", [])
+
+    def test_sets_user_agent_header(self):
+        # Regression: publicnode rejects the default "Python-urllib/x.y" UA with HTTP 403.
+        with mock.patch(
+            "eth_rpc.urllib.request.urlopen",
+            return_value=self._fake_response({"jsonrpc": "2.0", "id": 1, "result": "0x1"}),
+        ) as urlopen:
+            r.rpc_call("https://x", "eth_chainId", [])
+        sent_request = urlopen.call_args[0][0]
+        self.assertEqual(sent_request.get_header("User-agent"), r.USER_AGENT)
+        self.assertNotIn("Python-urllib", sent_request.get_header("User-agent"))
+
+
 class TestWeiToEthStr(unittest.TestCase):
     def test_zero(self):
         self.assertEqual(r.wei_to_eth_str(0), "0")

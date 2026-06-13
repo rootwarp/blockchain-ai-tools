@@ -74,6 +74,33 @@ def parse_hex_int(s):
     return int(s, 16)
 
 
+class RPCError(Exception):
+    """A JSON-RPC transport failure or error response."""
+
+
+def rpc_call(url, method, params, timeout=15):
+    """POST a JSON-RPC request and return its `result`. Raise RPCError on any failure."""
+    payload = json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={"Content-Type": "application/json", "User-Agent": USER_AGENT},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+    except (OSError, ValueError) as e:  # transport (URLError⊂OSError) / decode (JSON/Unicode⊂ValueError)
+        raise RPCError("RPC transport error calling %s: %s" % (method, e))
+    if body.get("error") is not None:
+        raise RPCError("RPC error for %s: %s" % (method, body["error"]))
+    if "result" not in body:
+        raise RPCError("RPC response missing result for %s" % method)
+    return body["result"]
+
+
 def wei_to_eth_str(wei):
     """Exact wei -> ETH decimal string (no float). e.g. 10**17 -> '0.1', 0 -> '0'."""
     if not isinstance(wei, int):
