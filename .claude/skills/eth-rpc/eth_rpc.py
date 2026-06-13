@@ -164,6 +164,46 @@ def do_broadcast(network, raw_tx, wait=False, wait_timeout=DEFAULT_WAIT_TIMEOUT,
         sleep(poll_interval)
 
 
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        description="RPC companion for eth-signer-mcp: query balance + broadcast signed txs."
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p_bal = sub.add_parser("balance", help="query the ETH balance of an EOA")
+    p_bal.add_argument("--network", required=True, choices=sorted(NETWORKS))
+    p_bal.add_argument("--address", required=True, help="EOA to query (0x + 40 hex)")
+
+    p_bc = sub.add_parser("broadcast", help="submit a signed raw transaction")
+    p_bc.add_argument("--network", required=True, choices=sorted(NETWORKS))
+    p_bc.add_argument("--raw-tx", required=True, help="0x-prefixed signed raw tx hex")
+    p_bc.add_argument("--wait", action="store_true", help="poll for the receipt after submit")
+    p_bc.add_argument("--wait-timeout", type=int, default=DEFAULT_WAIT_TIMEOUT,
+                      help="seconds to wait for a receipt with --wait (default %(default)s)")
+
+    args = parser.parse_args(argv)
+
+    try:
+        if args.command == "balance":
+            result = do_balance(args.network, args.address)
+        else:
+            if args.wait_timeout < 0:
+                raise ValueError("--wait-timeout must be non-negative")
+            result = do_broadcast(
+                args.network, args.raw_tx, wait=args.wait, wait_timeout=args.wait_timeout
+            )
+    except (ValueError, RPCError) as e:
+        print("error: %s" % e, file=sys.stderr)
+        return 1
+
+    print(json.dumps(result, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+
+
 def wei_to_eth_str(wei):
     """Exact wei -> ETH decimal string (no float). e.g. 10**17 -> '0.1', 0 -> '0'."""
     if not isinstance(wei, int):

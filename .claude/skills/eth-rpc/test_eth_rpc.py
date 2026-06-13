@@ -193,6 +193,71 @@ class TestDoBalance(unittest.TestCase):
             r.do_balance("hoodi", "0xnope", rpc=make_fake_rpc({"eth_getBalance": "0x0"}))
 
 
+class TestMain(unittest.TestCase):
+    ADDR = "0x6302794A4F2487a2540c40E2dbB211Ff6AF1CD20"
+    RAW = "0x02f8ab83088bb0"
+
+    def test_balance_prints_json_returns_zero(self):
+        out = io.StringIO()
+        with mock.patch(
+            "eth_rpc.do_balance",
+            return_value={"network": "hoodi", "balanceEth": "1"},
+        ), mock.patch("sys.stdout", out):
+            rc = r.main(["balance", "--network", "hoodi", "--address", self.ADDR])
+        self.assertEqual(rc, 0)
+        self.assertEqual(json.loads(out.getvalue())["balanceEth"], "1")
+
+    def test_broadcast_prints_json_returns_zero(self):
+        out = io.StringIO()
+        with mock.patch(
+            "eth_rpc.do_broadcast",
+            return_value={"txHash": "0xabc", "status": "submitted"},
+        ) as do_bc, mock.patch("sys.stdout", out):
+            rc = r.main(["broadcast", "--network", "hoodi", "--raw-tx", self.RAW])
+        self.assertEqual(rc, 0)
+        self.assertEqual(json.loads(out.getvalue())["txHash"], "0xabc")
+        # default: wait is False
+        _, kwargs = do_bc.call_args
+        self.assertFalse(kwargs["wait"])
+
+    def test_broadcast_wait_flag_forwarded(self):
+        out = io.StringIO()
+        with mock.patch(
+            "eth_rpc.do_broadcast", return_value={"status": "mined"}
+        ) as do_bc, mock.patch("sys.stdout", out):
+            r.main(["broadcast", "--network", "hoodi", "--raw-tx", self.RAW,
+                    "--wait", "--wait-timeout", "30"])
+        _, kwargs = do_bc.call_args
+        self.assertTrue(kwargs["wait"])
+        self.assertEqual(kwargs["wait_timeout"], 30)
+
+    def test_rpc_error_prints_stderr_returns_one(self):
+        err = io.StringIO()
+        with mock.patch(
+            "eth_rpc.do_balance", side_effect=r.RPCError("rpc down")
+        ), mock.patch("sys.stderr", err):
+            rc = r.main(["balance", "--network", "hoodi", "--address", self.ADDR])
+        self.assertEqual(rc, 1)
+        self.assertIn("rpc down", err.getvalue())
+
+    def test_value_error_prints_stderr_returns_one(self):
+        err = io.StringIO()
+        with mock.patch(
+            "eth_rpc.do_broadcast", side_effect=ValueError("bad raw tx")
+        ), mock.patch("sys.stderr", err):
+            rc = r.main(["broadcast", "--network", "hoodi", "--raw-tx", "0xbad"])
+        self.assertEqual(rc, 1)
+        self.assertIn("bad raw tx", err.getvalue())
+
+    def test_unknown_network_rejected_by_argparse(self):
+        with self.assertRaises(SystemExit):
+            r.main(["balance", "--network", "goerli", "--address", self.ADDR])
+
+    def test_missing_subcommand_rejected(self):
+        with self.assertRaises(SystemExit):
+            r.main([])
+
+
 class TestDoBroadcastWait(unittest.TestCase):
     RAW = "0x02f8ab83088bb0"
     HASH = "0xd6133a2b2713dd86f4abe32421aed32f9945aed046dbc80751f5a03871799e85"
