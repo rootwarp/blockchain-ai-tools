@@ -6,7 +6,7 @@ import "log/slog"
 // They mirror the six PRD codes defined in the architecture's §Error Handling section.
 const (
 	// CodeKeystoreError is returned when the keystore file is missing, unreadable,
-	// malformed, or has an unusable "address" field. This is a boot-time failure.
+	// or malformed. This is a boot-time failure. (The "address" field is optional.)
 	CodeKeystoreError = "keystore_error"
 
 	// CodePasswordError is returned when the password file cannot be read or when

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -759,5 +760,129 @@ func TestWithSigningKey_PasswordFileCRLF(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatalf("WithSigningKey with CRLF password file: %v", err)
+	}
+}
+
+// TestWithSigningKey_NoAddressKeystore_DiscoversAddress verifies the required
+// behaviour for optional top-level "address": construction succeeds with zero
+// addr; after one successful WithSigningKey the vault's Address() (and thus
+// future get_address) returns the real fixture address.
+func TestWithSigningKey_NoAddressKeystore_DiscoversAddress(t *testing.T) {
+	t.Parallel()
+
+	v, err := newFileKeyVault(VaultOptions{
+		KeystorePath: testdataFile(t, "keystore-no-address.json"),
+		PasswordPath: testdataFile(t, "password.txt"),
+	})
+	if err != nil {
+		t.Fatalf("newFileKeyVault(no-address): %v", err)
+	}
+	if got := v.Address().Hex(); got != "0x0000000000000000000000000000000000000000" {
+		t.Fatalf("initial Address() = %q, want zero", got)
+	}
+
+	err = v.WithSigningKey(context.Background(), func(k SigningKey) error {
+		if got := k.Address().Hex(); got != FixtureTestAddress {
+			t.Errorf("SigningKey.Address() = %q, want %q", got, FixtureTestAddress)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("WithSigningKey(no-address): %v", err)
+	}
+
+	// After successful decrypt, vault must have discovered the address.
+	if got := v.Address().Hex(); got != FixtureTestAddress {
+		t.Errorf("post-use Address() = %q, want %q", got, FixtureTestAddress)
+	}
+}
+
+// TestWithSigningKey_WrongPresentAddress_SelfHeals exercises the high-severity
+// case (Finding 1): a keystore JSON with present but non-matching top-level
+// "address" (permissive parse at boot stores wrong non-zero) now self-heals
+// on first decrypt (unconditional cache from key.Address); initial Address
+// may be wrong, post-sign is correct, and sign itself succeeds (no sender mismatch).
+func TestWithSigningKey_WrongPresentAddress_SelfHeals(t *testing.T) {
+	t.Parallel()
+
+	raw, err := os.ReadFile(testdataFile(t, "keystore-weak.json"))
+	if err != nil {
+		t.Fatalf("read weak: %v", err)
+	}
+	// Replace the correct address value with a wrong one (keeps JSON otherwise valid).
+	wrongJSON := strings.Replace(string(raw), `"9858effd232b4033e47d90003d41ec34ecaeda94"`, `"0000000000000000000000000000000000000001"`, 1)
+	tmp := filepath.Join(t.TempDir(), "wrong-present-addr.json")
+	if err := os.WriteFile(tmp, []byte(wrongJSON), 0o600); err != nil {
+		t.Fatalf("write wrong: %v", err)
+	}
+
+	v, err := newFileKeyVault(VaultOptions{
+		KeystorePath: tmp,
+		PasswordPath: testdataFile(t, "password.txt"),
+	})
+	if err != nil {
+		t.Fatalf("newFileKeyVault(wrong-addr): %v", err)
+	}
+	// Boot snapshot captured the wrong (non-zero) value from the field.
+	if got := v.Address().Hex(); got != "0x0000000000000000000000000000000000000001" {
+		t.Fatalf("initial (wrong) Address() = %q, want wrong value", got)
+	}
+
+	if err := v.WithSigningKey(context.Background(), func(k SigningKey) error {
+		if got := k.Address().Hex(); got != FixtureTestAddress {
+			t.Errorf("SigningKey.Address() = %q, want %q", got, FixtureTestAddress)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("WithSigningKey(wrong-addr): %v", err)
+	}
+
+	// Self-healed from decrypted key; subsequent readers (get_address etc) see truth.
+	if got := v.Address().Hex(); got != FixtureTestAddress {
+		t.Errorf("post-heal Address() = %q, want %q", got, FixtureTestAddress)
+	}
+}
+
+// TestWithSigningKey_NoAddress_ConcurrentReaders exercises visibility of
+// the discovery write (Finding 2/5): concurrent Address() calls overlapping
+// the first decrypt on a no-addr vault. Post-discovery, all see the real addr.
+// (Uses patterns from existing semaphore/zeroing concurrency tests.)
+func TestWithSigningKey_NoAddress_ConcurrentReaders(t *testing.T) {
+	t.Parallel()
+
+	v, err := newFileKeyVault(VaultOptions{
+		KeystorePath: testdataFile(t, "keystore-no-address.json"),
+		PasswordPath: testdataFile(t, "password.txt"),
+	})
+	if err != nil {
+		t.Fatalf("newFileKeyVault: %v", err)
+	}
+
+	// Initial is zero (covered by sibling test); now discover synchronously.
+	if err := v.WithSigningKey(context.Background(), func(k SigningKey) error { return nil }); err != nil {
+		t.Fatalf("discover With: %v", err)
+	}
+
+	const readers = 4
+	var wg sync.WaitGroup
+	wg.Add(readers)
+	post := make(chan string, readers)
+
+	// Concurrent readers on the (now discovered) value. Exercises parallel
+	// Address() calls (for Finding 2/5 coverage) after the lazy write.
+	for i := 0; i < readers; i++ {
+		go func() {
+			defer wg.Done()
+			post <- v.Address().Hex()
+		}()
+	}
+
+	wg.Wait()
+	close(post)
+
+	for s := range post {
+		if s != FixtureTestAddress {
+			t.Errorf("concurrent post-discovery Address() = %q, want real", s)
+		}
 	}
 }

@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/urfave/cli/v3"
+
+	"github.com/rootwarp/blockchain-ai-tools/apps/eth-signer-mcp/internal/signing"
 )
 
 // tempFiles600 creates keystore and password-file temp files with mode 0600 in
@@ -62,7 +64,7 @@ func signingFixtureFiles(t *testing.T) (keystorePath, passwordPath string) {
 }
 
 // noAddressKeystoreFile returns the path to keystore-no-address.json, used to
-// test the startup keystore_error path.
+// test the (now optional) address field behaviour.
 func noAddressKeystoreFile(t *testing.T) string {
 	t.Helper()
 	_, thisFile, _, ok := runtime.Caller(0)
@@ -640,26 +642,38 @@ func TestNewCommand_FreshInstancePerRun(t *testing.T) {
 	}
 }
 
-// TestRun_NoAddressKeystore_ExitNonZero verifies that starting with a keystore
-// that has no usable "address" field fails fast with a keystore_error message
-// (issue 2.7 cmd wiring: fail fast on vault constructor error).
-//
-// Uses the committed keystore-no-address.json fixture (address field removed).
-func TestRun_NoAddressKeystore_ExitNonZero(t *testing.T) {
+// TestRun_NoAddressKeystore_Succeeds verifies that a keystore with missing top-level
+// "address" (optional per spec) now allows successful startup (no keystore_error).
+// Uses custom action to stop before RunStdio (avoids blocking). Also asserts the
+// initial vault address is the zero address.
+func TestRun_NoAddressKeystore_Succeeds(t *testing.T) {
 	t.Parallel()
 
-	_, pw := signingFixtureFiles(t) // use real password file (vault won't read it, but fsperm checks need it)
+	_, pw := signingFixtureFiles(t)
 	ks := noAddressKeystoreFile(t)
 
 	cmd := newCommand()
-	args := []string{"eth-signer-mcp", "--keystore", ks, "--password-file", pw}
-	err := cmd.Run(context.Background(), args)
-	if err == nil {
-		t.Fatal("cmd.Run() = nil; want non-zero exit for no-address keystore")
+	cmd.Action = func(ctx context.Context, c *cli.Command) error {
+		cfg := buildConfig(c)
+		if err := validate(cfg); err != nil {
+			return err
+		}
+		v, err := signing.NewFileKeyVault(signing.VaultOptions{
+			KeystorePath: cfg.KeystorePath,
+			PasswordPath: cfg.PasswordPath,
+		})
+		if err != nil {
+			t.Fatalf("NewFileKeyVault(no-addr) in run: %v", err)
+		}
+		if got := v.Address().Hex(); got != "0x0000000000000000000000000000000000000000" {
+			t.Errorf("vault.Address() = %q, want zero address", got)
+		}
+		return nil
 	}
-	// Error message must contain "keystore" to identify the failure category.
-	if !strings.Contains(strings.ToLower(err.Error()), "keystore") {
-		t.Errorf("error = %q; want it to contain 'keystore'", err.Error())
+
+	args := []string{"eth-signer-mcp", "--keystore", ks, "--password-file", pw}
+	if err := cmd.Run(context.Background(), args); err != nil {
+		t.Fatalf("cmd.Run() for no-address keystore = %v, want nil (success)", err)
 	}
 }
 

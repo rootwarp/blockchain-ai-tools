@@ -143,6 +143,12 @@ func (v *fileKeyVault) WithSigningKey(ctx context.Context, fn func(SigningKey) e
 		}
 	}
 
+	// Always cache the address from the *decrypted* key (the source of truth).
+	// This self-heals any present-but-wrong top-level "address" parsed at boot
+	// via permissive HexToAddress (Finding 1) and also covers the optional/absent case.
+	// The write is under sem; see file_vault.go for visibility notes.
+	v.address = key.Address
+
 	// 6. Register key-scalar zeroing BEFORE fn runs so it fires on panic inside fn.
 	//    ZeroBigInt zeros the backing word-slice of key.PrivateKey.D and re-normalises
 	//    via SetInt64(0). KeepAlive prevents the compiler from optimising away the clear.

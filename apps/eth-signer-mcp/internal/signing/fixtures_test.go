@@ -151,10 +151,11 @@ func TestFixtures_DecryptAllThree(t *testing.T) {
 	}
 }
 
-// TestFixtures_MalformedKeystores verifies the startup-error fixture files.
+// TestFixtures_MalformedKeystores verifies the structure of the optional-address
+// fixture files (per Web3 Secret Storage spec the top-level "address" is optional).
 // These are copies of keystore-weak.json that differ only in the top-level
 // "address" field — removed (no-address) or set to "" (empty-address).
-// They are the locked fixtures for the Issue 2.2 startup keystore_error path.
+// They now exercise the success + zero-address-until-discover path.
 func TestFixtures_MalformedKeystores(t *testing.T) {
 	t.Parallel()
 

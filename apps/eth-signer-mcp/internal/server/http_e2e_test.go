@@ -366,7 +366,6 @@ func TestE2E_HTTP_FullSession(t *testing.T) {
 	tdPath := signingTestdataPath(t) // defined in handlers_test.go
 	ks := filepath.Join(tdPath, "keystore-light.json")
 	pw := filepath.Join(tdPath, "password.txt")
-	noAddrKs := filepath.Join(tdPath, "keystore-no-address.json")
 
 	// Golden vector for happy-path binary-parity assertion.
 	// loadGoldenRawTx defined in concurrent_test.go (same package).
@@ -692,9 +691,10 @@ func TestE2E_HTTP_FullSession(t *testing.T) {
 	}
 
 	// ── Step 5e: keystore_error (startup refusal, HTTP mode) ──────────────────────
-	// A subprocess with keystore-no-address.json must exit non-zero BEFORE the HTTP
+	// A subprocess with a malformed keystore must exit non-zero BEFORE the HTTP
 	// server starts.  We supply --http and a valid token file (needed for the startup
 	// permission check); the binary fails during vault construction (step 4 of run()).
+	// (no-address fixture no longer triggers this; address field is optional.)
 	//
 	// NOTE: internal_error is NOT force-able through the real binary without a fault
 	// hook.  It is covered by TestSignTransaction_SixCodesWireEncoding in handlers_test.go.
@@ -706,8 +706,13 @@ func TestE2E_HTTP_FullSession(t *testing.T) {
 		ksCtx, ksCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer ksCancel()
 
+		badKs := filepath.Join(t.TempDir(), "bad-ks-for-http-e2e.json")
+		if werr := os.WriteFile(badKs, []byte("{not valid keystore json}"), 0o600); werr != nil {
+			t.Fatalf("step 5e: write bad ks: %v", werr)
+		}
+
 		ksCmd := exec.CommandContext(ksCtx, bin,
-			"--keystore", noAddrKs,
+			"--keystore", badKs,
 			"--password-file", pw,
 			"--http",
 			"--http-auth-token-file", ksErrTokenFile,
@@ -717,14 +722,14 @@ func TestE2E_HTTP_FullSession(t *testing.T) {
 
 		ksRunErr := ksCmd.Run()
 		if ksRunErr == nil {
-			t.Fatal("step 5e: binary exited 0; want non-zero (no-address keystore)")
+			t.Fatal("step 5e: binary exited 0; want non-zero (bad keystore)")
 		}
 		var ksExitErr *exec.ExitError
 		if !errors.As(ksRunErr, &ksExitErr) {
 			t.Fatalf("step 5e: unexpected error type %T: %v", ksRunErr, ksRunErr)
 		}
 		if ksExitErr.ExitCode() == 0 {
-			t.Error("step 5e: exit code = 0; want non-zero for no-address keystore")
+			t.Error("step 5e: exit code = 0; want non-zero for bad keystore")
 		}
 		ksStderrStr := ksStderr.String()
 		// strings.Contains is justified here: the binary exits before the HTTP server

@@ -14,8 +14,8 @@
 | `keystore-standard.json` | Web3 Secret Storage v3, standard parameters | scrypt N=262144, r=8, p=1 |
 | `keystore-light.json` | Web3 Secret Storage v3, light parameters | scrypt N=4096, r=8, p=1 |
 | `keystore-weak.json` | Web3 Secret Storage v3, **test-only weakened KDF** | scrypt N=2, r=8, p=1 |
-| `keystore-no-address.json` | Malformed: top-level `"address"` field removed | (copy of weak, for startup error tests) |
-| `keystore-empty-address.json` | Malformed: top-level `"address"` set to `""` | (copy of weak, for startup error tests) |
+| `keystore-no-address.json` | Optional address (spec): top-level `"address"` field removed | (copy of weak, for optional-address + discovery tests) |
+| `keystore-empty-address.json` | Optional address (spec): top-level `"address"` set to `""` | (copy of weak, for optional-address + discovery tests) |
 | `password.txt` | Passphrase for all three keystores, **with a trailing `\n`** | — |
 | `gen_fixtures.go` | `//go:build ignore` generator (Go program) | — |
 
@@ -63,21 +63,24 @@ are the test subject (benchmarks, ctx-cancellation-before-KDF tests).
 
 ---
 
-## Malformed Fixtures
+## Optional-Address Fixtures
 
 `keystore-no-address.json` and `keystore-empty-address.json` are hand-edited copies
-of `keystore-weak.json`. They are the committed fixtures for the Issue 2.2 vault
-constructor `keystore_error` path:
+of `keystore-weak.json`. Per the Web3 Secret Storage spec the top-level `"address"`
+is optional (and omitting it is privacy-friendly). These fixtures exercise the
+new (post-addr-opt) behaviour:
+
+- Construction succeeds; initial Address() is the zero address.
+- On first successful WithSigningKey (using the password), the address is discovered
+  from the decrypted key and cached; subsequent Address()/get_address return the
+  real value.
 
 - **`keystore-no-address.json`** — the top-level `"address"` field is **absent**.
-  Triggers the error: *keystore JSON has no usable "address" field*.
 - **`keystore-empty-address.json`** — the top-level `"address"` field is present
   but set to `""`.
-  Triggers the same error.
 
 Both are otherwise identical to `keystore-weak.json` (same ciphertext, same salt);
-they still decrypt if you call `keystore.DecryptKey` directly. The vault constructor
-fails before attempting decryption.
+they decrypt successfully via DecryptKey (the old constructor error path is gone).
 
 ---
 
@@ -100,7 +103,7 @@ The generator:
    `password.txt`.
 4. Round-trip verifies each file before exiting.
 
-After running the generator, regenerate the malformed fixtures by hand:
+After running the generator, (re)create the optional-address fixtures by hand:
 
 ```sh
 cp keystore-weak.json keystore-no-address.json

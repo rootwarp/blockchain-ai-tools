@@ -101,55 +101,45 @@ func TestNewFileKeyVault_ConstructorDoesNotReadPassword(t *testing.T) {
 	}
 }
 
-// TestNewFileKeyVault_NoAddressKeystore verifies that keystore-no-address.json
-// returns a *ToolError with Code == CodeKeystoreError whose message names the
-// missing "address" field. This is the locked startup-error case from Issue 2.2.
+// TestNewFileKeyVault_NoAddressKeystore verifies that a keystore with the
+// top-level "address" field absent now succeeds (per spec the field is optional).
+// Initial Address() must be the zero address; discovery occurs on first sign.
 func TestNewFileKeyVault_NoAddressKeystore(t *testing.T) {
 	t.Parallel()
 
-	_, err := NewFileKeyVault(VaultOptions{
+	vault, err := NewFileKeyVault(VaultOptions{
 		KeystorePath: testdataFile(t, "keystore-no-address.json"),
 		PasswordPath: testdataFile(t, "password.txt"),
 	})
-	if err == nil {
-		t.Fatal("NewFileKeyVault(no-address): expected error, got nil")
+	if err != nil {
+		t.Fatalf("NewFileKeyVault(no-address): unexpected error: %v", err)
 	}
-
-	te, ok := err.(*ToolError)
-	if !ok {
-		t.Fatalf("NewFileKeyVault(no-address): error type = %T, want *ToolError", err)
+	if vault == nil {
+		t.Fatal("NewFileKeyVault(no-address): returned nil vault")
 	}
-	if te.Code != CodeKeystoreError {
-		t.Errorf("NewFileKeyVault(no-address): Code = %q, want %q", te.Code, CodeKeystoreError)
-	}
-	if te.Message == "" {
-		t.Error("NewFileKeyVault(no-address): Message is empty; must name the missing address field")
+	if got := vault.Address().Hex(); got != "0x0000000000000000000000000000000000000000" {
+		t.Errorf("Address() = %q, want zero address", got)
 	}
 }
 
-// TestNewFileKeyVault_EmptyAddressKeystore verifies that keystore-empty-address.json
-// returns a *ToolError{Code: CodeKeystoreError} naming the empty "address" field.
-// This is the second locked startup-error fixture from Issue 2.2.
+// TestNewFileKeyVault_EmptyAddressKeystore verifies that a keystore with the
+// top-level "address" field present but empty now succeeds (per spec optional).
+// Initial Address() must be the zero address.
 func TestNewFileKeyVault_EmptyAddressKeystore(t *testing.T) {
 	t.Parallel()
 
-	_, err := NewFileKeyVault(VaultOptions{
+	vault, err := NewFileKeyVault(VaultOptions{
 		KeystorePath: testdataFile(t, "keystore-empty-address.json"),
 		PasswordPath: testdataFile(t, "password.txt"),
 	})
-	if err == nil {
-		t.Fatal("NewFileKeyVault(empty-address): expected error, got nil")
+	if err != nil {
+		t.Fatalf("NewFileKeyVault(empty-address): unexpected error: %v", err)
 	}
-
-	te, ok := err.(*ToolError)
-	if !ok {
-		t.Fatalf("NewFileKeyVault(empty-address): error type = %T, want *ToolError", err)
+	if vault == nil {
+		t.Fatal("NewFileKeyVault(empty-address): returned nil vault")
 	}
-	if te.Code != CodeKeystoreError {
-		t.Errorf("NewFileKeyVault(empty-address): Code = %q, want %q", te.Code, CodeKeystoreError)
-	}
-	if te.Message == "" {
-		t.Error("NewFileKeyVault(empty-address): Message is empty; must name the empty address field")
+	if got := vault.Address().Hex(); got != "0x0000000000000000000000000000000000000000" {
+		t.Errorf("Address() = %q, want zero address", got)
 	}
 }
 

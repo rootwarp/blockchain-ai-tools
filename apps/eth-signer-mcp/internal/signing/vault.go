@@ -10,16 +10,21 @@ import (
 // KeyVault provides access to a keystore-backed signing key.
 //
 // Lifecycle contract (locked):
-//   - The keystore JSON and its address are a boot-time snapshot — read eagerly
-//     at vault construction; missing/empty "address" field or any read/parse error
-//     causes the constructor to fail immediately (fail fast).
+//   - The keystore JSON is a boot-time snapshot — read eagerly at vault
+//     construction. Any I/O or JSON-parse error causes immediate failure (fail fast).
+//     The top-level "address" field is optional (per Web3 Secret Storage spec);
+//     if absent/empty the initial Address() is the zero address (or a present-but-wrong
+//     value) and is overwritten from the decrypted key on first successful WithSigningKey.
 //   - The password file is re-read on every WithSigningKey call, so password
 //     rotation works without restarting the process.
 //   - Rotating the keystore file itself requires a restart; the snapshot read at
 //     construction is authoritative until then.
 type KeyVault interface {
-	// Address returns the account address from the boot-time keystore snapshot.
-	// It is safe to log; it does NOT read the password file.
+	// Address returns the account address from the boot-time keystore snapshot
+	// (zero if the optional top-level "address" field was absent/empty at construction).
+	// For such keystores it is updated to the real value on first successful
+	// WithSigningKey (best-effort visibility to concurrent readers). Safe to log;
+	// does NOT read the password file.
 	Address() common.Address
 
 	// WithSigningKey re-reads the password file, decrypts the keystore snapshot
@@ -55,8 +60,8 @@ type SigningKey interface {
 type VaultOptions struct {
 	// KeystorePath is the path to the Web3 Secret Storage keystore JSON file.
 	// The file is read eagerly at construction (boot-time snapshot). A missing,
-	// unreadable, malformed, or address-less keystore returns an error at
-	// construction time.
+	// unreadable or malformed keystore returns an error at construction time.
+	// The top-level "address" field is optional.
 	KeystorePath string
 
 	// PasswordPath is the path to the password file. It is re-read inside every
@@ -67,13 +72,13 @@ type VaultOptions struct {
 
 // NewFileKeyVault constructs a KeyVault backed by a keystore file on disk.
 //
-// It reads the keystore file eagerly, validates the top-level "address" field
-// (missing or empty → *ToolError{Code: CodeKeystoreError}), and holds the JSON
-// ciphertext snapshot in memory. The password file is NOT read at construction.
+// It reads the keystore file eagerly and holds the JSON ciphertext snapshot
+// in memory. The top-level "address" is optional per spec; if absent or empty
+// the initial Address() returns the zero address (discovery on first decrypt).
+// The password file is NOT read at construction.
 //
 // Error codes:
-//   - *ToolError{Code: CodeKeystoreError} — missing/unreadable/malformed file or
-//     missing/empty "address" field.
+//   - *ToolError{Code: CodeKeystoreError} — missing/unreadable/malformed file.
 func NewFileKeyVault(opts VaultOptions) (KeyVault, error) {
 	return newFileKeyVault(opts)
 }

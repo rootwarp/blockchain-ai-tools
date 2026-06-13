@@ -137,7 +137,7 @@ the help output; the underlying Go type is `uint64`.)
 
 | Event | Behaviour |
 |-------|-----------|
-| **Binary starts** | Keystore JSON read; Ethereum address extracted — **boot-time snapshot, fail fast**. Missing / malformed keystore → `keystore_error`, non-zero exit. |
+| **Binary starts** | Keystore JSON read (boot-time snapshot, fail fast on I/O or parse error). Top-level `"address"` is optional per spec; if absent get_address returns the zero address until first successful `sign_transaction` (which discovers it). Missing/malformed keystore → `keystore_error`, non-zero exit. |
 | **`sign_transaction` call** | **Password file re-read on every call.** Password rotation takes effect immediately; no restart needed. |
 | **Keystore file replaced on disk** | Address snapshot unchanged — **restart required** to pick up the new key. |
 | **Wrong password / unreadable file** | `password_error` returned; server stays running. Fix the file and retry. |
@@ -212,7 +212,7 @@ value is compact JSON with exactly two fields: `{"code":"…","message":"…"}`.
 | `invalid_input` | Missing / malformed field; bad EIP-55 checksum; `chainId = 0` |
 | `unsupported_type` | Transaction type is not `0x0` or `0x2` |
 | `chain_id_mismatch` | Request `chainId` ≠ `--chain-id` guard value |
-| `keystore_error` | Keystore missing, malformed, or has no usable `"address"` field |
+| `keystore_error` | Keystore missing or malformed (top-level `"address"` is optional per Web3 Secret Storage spec; when omitted, `get_address` returns `0x0000…0000` until first successful sign) |
 | `password_error` | Password file unreadable or wrong password (keystore MAC failure) |
 | `internal_error` | Recovered panic, sender mismatch, or non-ErrDecrypt decrypt failure; `Cause` logged server-side, never sent to caller |
 

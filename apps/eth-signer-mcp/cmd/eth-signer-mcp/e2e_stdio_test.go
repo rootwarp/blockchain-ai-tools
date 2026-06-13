@@ -259,7 +259,6 @@ func TestE2E_Stdio_FullSession(t *testing.T) {
 
 	keystorePath := filepath.Join(tdPath, "keystore-light.json")
 	passwordPath := filepath.Join(tdPath, "password.txt")
-	noAddressKsPath := filepath.Join(tdPath, "keystore-no-address.json")
 
 	// Load the legacy-mainnet golden vector for binary-parity assertion (Step 4).
 	mainnetVec := loadE2EVector(t, tdPath, "legacy-mainnet.json")
@@ -692,10 +691,10 @@ func TestE2E_Stdio_FullSession(t *testing.T) {
 	}
 
 	// ── Step 5e: keystore_error (startup refusal) ──────────────────────────────
-	// A subprocess pointed at keystore-no-address.json must exit non-zero before
-	// the MCP session is established — boot-time keystore_error per the lifecycle
-	// contract (keystore JSON+address is a boot-time snapshot; missing address →
-	// fail fast).  We run the command directly without the SDK transport.
+	// A subprocess pointed at a malformed keystore must exit non-zero before the
+	// MCP session is established (boot-time keystore_error). Use a temp bad-JSON
+	// (no-address fixture no longer triggers error at startup; address is optional).
+	// We run the command directly without the SDK transport.
 	//
 	// NOTE: internal_error is NOT force-able through the real binary without a
 	// fault hook (e.g. a key whose recovered sender differs from vault.Address()).
@@ -705,8 +704,13 @@ func TestE2E_Stdio_FullSession(t *testing.T) {
 		ksCtx, ksCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		t.Cleanup(ksCancel)
 
+		badKs := filepath.Join(t.TempDir(), "bad-for-keystore-error.json")
+		if werr := os.WriteFile(badKs, []byte("{not-json-keystore}"), 0o600); werr != nil {
+			t.Fatalf("step 5e: write bad ks: %v", werr)
+		}
+
 		ksCmd := exec.CommandContext(ksCtx, bin,
-			"--keystore", noAddressKsPath,
+			"--keystore", badKs,
 			"--password-file", passwordPath,
 		)
 		var ksStderr syncBuffer
@@ -714,14 +718,14 @@ func TestE2E_Stdio_FullSession(t *testing.T) {
 
 		ksRunErr := ksCmd.Run()
 		if ksRunErr == nil {
-			t.Fatal("step 5e: binary exited 0; want non-zero (no-address keystore)")
+			t.Fatal("step 5e: binary exited 0; want non-zero (bad keystore)")
 		}
 		var exitErr *exec.ExitError
 		if !errors.As(ksRunErr, &exitErr) {
 			t.Fatalf("step 5e: unexpected error type %T: %v", ksRunErr, ksRunErr)
 		}
 		if exitErr.ExitCode() == 0 {
-			t.Error("step 5e: exit code = 0; want non-zero for no-address keystore")
+			t.Error("step 5e: exit code = 0; want non-zero for bad keystore")
 		}
 		// stderr must carry the "keystore_error" code string, emitted by:
 		//   fmt.Fprintf(os.Stderr, "...: %v\n", err) where err.Error() contains the code.

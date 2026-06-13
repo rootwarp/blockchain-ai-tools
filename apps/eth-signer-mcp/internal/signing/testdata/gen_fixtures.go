@@ -158,7 +158,7 @@ func main() {
 	fmt.Println("All keystores verified.")
 
 	fmt.Printf(`
-After generation, create the malformed-keystore fixtures:
+After generation, create the optional-address fixtures (address field omitted per spec):
   cp keystore-weak.json keystore-no-address.json    # then remove the "address" field
   cp keystore-weak.json keystore-empty-address.json # then set "address": ""
 `)

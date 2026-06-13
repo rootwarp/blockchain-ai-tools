@@ -214,14 +214,14 @@ func run(ctx context.Context, cmd *cli.Command) error {
 
 	// Step 4: construct the KeyVault (boot-time snapshot, fail fast).
 	//
-	// Any failure here is a startup error — the keystore is missing, malformed,
-	// or has no usable address field. The error is a *signing.ToolError with
-	// Code == signing.CodeKeystoreError and a clear message. We print the message
-	// to stderr and exit non-zero so the operator can diagnose without reading logs.
+	// Any failure here is a startup error — the keystore is missing, unreadable or
+	// malformed. The error is a *signing.ToolError with Code == signing.CodeKeystoreError
+	// and a clear message. We print the message to stderr and exit non-zero so the
+	// operator can diagnose without reading logs.
 	//
-	// The constructor reads the keystore JSON and address but does NOT read the
-	// password file (per the lifecycle contract: password is re-read on each signing
-	// call to support password rotation without restart).
+	// The constructor reads the keystore JSON (address field optional) but does NOT
+	// read the password file (per the lifecycle contract: password is re-read on
+	// each signing call to support password rotation without restart).
 	vault, err := signing.NewFileKeyVault(signing.VaultOptions{
 		KeystorePath: cfg.KeystorePath,
 		PasswordPath: cfg.PasswordPath,

@@ -25,6 +25,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -429,32 +430,39 @@ func TestBinary_Stdio_SIGINTCleanExit(t *testing.T) {
 }
 
 // TestBinary_NoAddressKeystore_ExitNonZero verifies that starting the binary with
-// a keystore that has no usable "address" field causes non-zero exit and a clear
-// keystore_error message on stderr (issue 2.7 cmd wiring smoke test).
+// a bad (malformed) keystore causes non-zero exit and keystore_error on stderr
+// (the no-address case no longer triggers error; we use a temp bad-JSON trigger
+// for the startup-refusal smoke per addr-opt change).
 func TestBinary_NoAddressKeystore_ExitNonZero(t *testing.T) {
 	bin := getTestBinary(t)
 	_, pw := signingFixtureFiles(t)
-	ks := noAddressKeystoreFile(t)
+
+	// Use a temp malformed JSON (not the no-address fixture, which now loads).
+	// This still exercises the binary's keystore_error early-exit path.
+	badKs := filepath.Join(t.TempDir(), "bad-keystore.json")
+	if err := os.WriteFile(badKs, []byte("{not valid json for keystore}"), 0o600); err != nil {
+		t.Fatalf("write bad ks: %v", err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	var stderr strings.Builder
-	cmd := exec.CommandContext(ctx, bin, "--keystore", ks, "--password-file", pw)
+	cmd := exec.CommandContext(ctx, bin, "--keystore", badKs, "--password-file", pw)
 	cmd.Stderr = &stderr
 
 	err := cmd.Run()
 
 	// Must exit non-zero.
 	if err == nil {
-		t.Fatal("binary exited 0; want non-zero exit for no-address keystore")
+		t.Fatal("binary exited 0; want non-zero exit for bad keystore")
 	}
 	var exitErr *exec.ExitError
 	if !errors.As(err, &exitErr) {
 		t.Fatalf("unexpected error type %T: %v", err, err)
 	}
 	if exitErr.ExitCode() == 0 {
-		t.Error("exit code = 0; want non-zero for no-address keystore")
+		t.Error("exit code = 0; want non-zero for bad keystore")
 	}
 
 	// stderr must contain "keystore" to identify the error category.

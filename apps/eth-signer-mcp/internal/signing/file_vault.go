@@ -23,7 +23,7 @@ import (
 type fileKeyVault struct {
 	keystoreJSON []byte                       // ciphertext snapshot; safe to hold long-term
 	passwordPath string                       // path re-read on every WithSigningKey call
-	address      common.Address               // extracted at construction; safe to expose
+	address      common.Address               // boot snapshot (or zero if absent); overwritten on first successful decrypt with the key's true address (see decrypt.go). Readers observe best-effort (may briefly see zero or stale during first discovery on optional-addr keystores); the sem serializes writers. Analogous to ADR-009 best-effort docs.
 	sem          chan struct{}                // capacity 1 — send to acquire, receive to release
 	readFileFn   func(string) ([]byte, error) // normally os.ReadFile; injectable per-instance for tests
 }
@@ -60,19 +60,17 @@ func newFileKeyVault(opts VaultOptions) (*fileKeyVault, error) {
 		}
 	}
 
-	// A missing or empty "address" field is a startup failure (locked decision).
-	// The caller (cmd) must exit non-zero; the message names the problem explicitly.
-	if ks.Address == "" {
-		return nil, &ToolError{
-			Code:    CodeKeystoreError,
-			Message: `keystore JSON has no usable "address" field; re-export the keystore`,
-		}
+	// Top-level "address" is optional per the Web3 Secret Storage spec (ethereum.org
+	// notes it is "unnecessary and compromises privacy"; official vectors omit it).
+	// If absent or "", store zero address; discovery happens on first successful
+	// WithSigningKey (see decrypt.go).
+	addr := common.Address{}
+	if ks.Address != "" {
+		// common.HexToAddress accepts both checksummed and lowercase hex; it handles
+		// the optional "0x" prefix. The vault exposes the canonical checksummed form
+		// via Address().Hex() so all callers work with EIP-55 addresses.
+		addr = common.HexToAddress(ks.Address)
 	}
-
-	// common.HexToAddress accepts both checksummed and lowercase hex; it handles
-	// the optional "0x" prefix. The vault exposes the canonical checksummed form
-	// via Address().Hex() so all callers work with EIP-55 addresses.
-	addr := common.HexToAddress(ks.Address)
 
 	// sem is a buffered channel of capacity 1; sending acquires the semaphore (blocks
 	// if full), receiving releases it. Initialised empty so the first caller proceeds
@@ -88,8 +86,10 @@ func newFileKeyVault(opts VaultOptions) (*fileKeyVault, error) {
 	}, nil
 }
 
-// Address returns the Ethereum address extracted from the keystore snapshot at
-// construction time. It is safe to log and does NOT require the password file.
+// Address returns the Ethereum address from the boot snapshot (or zero for
+// optional absent top-level field) or the value discovered on first decrypt.
+// Visibility of the one-time lazy write is best-effort (see struct comment);
+// safe to log, no password required.
 func (v *fileKeyVault) Address() common.Address {
 	return v.address
 }

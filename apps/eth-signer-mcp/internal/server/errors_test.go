@@ -39,7 +39,7 @@ func TestToolResult_SixCodes(t *testing.T) {
 		{signing.CodeInvalidInput, "field X is required"},
 		{signing.CodeUnsupportedType, "transaction type 0x3 is not supported"},
 		{signing.CodeChainIDMismatch, "request chain-id 5 does not match guard 1"},
-		{signing.CodeKeystoreError, "keystore JSON has no usable address field"},
+		{signing.CodeKeystoreError, "keystore file could not be read"},
 		{signing.CodePasswordError, "password file is unreadable"},
 		{signing.CodeInternalError, "recovered sender does not match keystore address"},
 	}

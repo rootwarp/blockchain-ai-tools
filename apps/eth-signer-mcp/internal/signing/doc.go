@@ -5,10 +5,9 @@
 //
 // # Keystore lifecycle contract
 //
-// The keystore JSON and its Ethereum address are a boot-time snapshot: they
-// are read eagerly at vault construction and the constructor fails fast on any
-// error. A missing or empty "address" field in the keystore JSON is a startup
-// keystore_error with a clear message.
+// The keystore JSON is a boot-time snapshot: it is read eagerly at vault
+// construction and the constructor fails fast on I/O or parse errors (the
+// top-level "address" field is optional per spec; see vault.go).
 //
 // The password file is re-read on every signing call, so password rotation
 // works without restarting the process. Rotating the keystore file itself
