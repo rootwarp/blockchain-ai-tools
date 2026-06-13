@@ -1,0 +1,149 @@
+HTTP demo session transcript — eth-signer-mcp Issue 4.1
+Captured: 2026-06-12   Keystore: keystore-light.json (light-scrypt, N=4096, ~50 ms)
+Decoder:  ethers v6 (cast not available on this machine; see vectors/cast-version.txt)
+Scrubbing: bearer token never appears in output or server logs; no absolute home paths
+           (relative paths used). Ephemeral ports are local to each run.
+Note: the SCRIPT OUTPUT section is from the original demo run (session T36SQD3MNIDWOGLSR5ZNFSTZBV,
+      port 58526). The SERVER STDERR section was re-captured on a verification run (session
+      R6YWJN5S3MBY2KZ6H2MOQEWN5T, port 58927) to ensure all log lines are present and accurate.
+
+=== COMMAND ===
+
+  scripts/demo/http-demo.sh --no-build
+
+=== SCRIPT OUTPUT ===
+
+>>> repo root: <REPO_ROOT>
+>>> --no-build: skipping build; using <REPO_ROOT>/bin/eth-signer-mcp
+✓  server bound at http://127.0.0.1:58526
+>>> Step 1: initialize
+✓  initialized; session=T36SQD3MNIDWOGLSR5ZNFSTZBV
+>>> Step 2: tools/list
+✓  tools/list: sign_transaction + get_address present
+>>> Step 3: get_address
+✓  get_address: 0x9858EfFD232B4033E47d90003D41EC34EcaEda94
+>>> Step 4: sign_transaction (legacy-mainnet golden vector)
+>>>   rawTransaction: 0xf871808504a817c800830186a0949858effd232b4033e47d90003d41ec34ecaeda94880de0b6b3a764000084deadbeef26a082dc9bb5c5916b7728febf0a7269cef831012cf86eb0f2a4c69aa77ba92755dea073b452e7edc29e44a5f2b6887e90d59aec9ca1b81c858f592362e45a4e9ffcac
+>>>   from:           0x9858EfFD232B4033E47d90003D41EC34EcaEda94
+>>>   hash:           0xfa41dd66cc50da67d7e59d1b7277e794cbe69d5b10deb88a9ca2930fae65a239
+>>> Asserting rawTransaction == golden vector ...
+✓  rawTransaction is byte-identical to the committed golden vector
+✓  recovered from == fixture address (0x9858EfFD232B4033E47d90003D41EC34EcaEda94)
+>>> Security demo 1: missing bearer token → 401
+✓  missing bearer → 401 Unauthorized
+>>> Security demo 2: wrong bearer token → 401
+✓  wrong bearer → 401 Unauthorized
+>>> Security demo 3: forged Host header (DNS-rebinding guard) → 403
+✓  forged Host header → 403 Forbidden (DNS-rebinding guard)
+
+✓ HTTP demo complete
+  NOTE: the signed transaction was NOT broadcast — the binary has no RPC capability (ADR-007)
+  NOTE: off-localhost exposure is unsupported (loopback-only bind enforced)
+
+=== SERVER STDERR (JSON structured logs) ===
+
+{"time":"2026-06-12T19:16:38.234480+09:00","level":"INFO","msg":"eth-signer-mcp starting","log_level":"info"}
+{"time":"2026-06-12T19:16:38.234602+09:00","level":"WARN","msg":"file is group/world accessible; consider chmod 600 (use --strict-perms to refuse)","path":"apps/eth-signer-mcp/internal/signing/testdata/keystore-light.json"}
+{"time":"2026-06-12T19:16:38.234615+09:00","level":"WARN","msg":"file is group/world accessible; consider chmod 600 (use --strict-perms to refuse)","path":"apps/eth-signer-mcp/internal/signing/testdata/password.txt"}
+{"time":"2026-06-12T19:16:38.234686+09:00","level":"INFO","msg":"keystore loaded","address":"0x9858EfFD232B4033E47d90003D41EC34EcaEda94"}
+eth-signer-mcp listening on 127.0.0.1:58927
+{"time":"2026-06-12T19:16:38.235168+09:00","level":"INFO","msg":"http server listening","addr":"127.0.0.1:58927"}
+{"time":"2026-06-12T19:16:38.364244+09:00","level":"INFO","msg":"server connecting"}
+{"time":"2026-06-12T19:16:38.364276+09:00","level":"INFO","msg":"server session connected","session_id":"R6YWJN5S3MBY2KZ6H2MOQEWN5T"}
+{"time":"2026-06-12T19:16:38.364619+09:00","level":"INFO","msg":"http request","request_id":"b0511fa6-6cc9-4ec4-85ae-e2899c86b5b1","remote_addr":"127.0.0.1:58928","status":200,"latency_ms":0}
+{"time":"2026-06-12T19:16:38.490138+09:00","level":"INFO","msg":"http request","request_id":"36cfce25-b36c-4dba-8aff-e56770f1ee96","remote_addr":"127.0.0.1:58929","status":202,"latency_ms":0}
+{"time":"2026-06-12T19:16:38.490200+09:00","level":"INFO","msg":"session initialized"}
+{"time":"2026-06-12T19:16:38.611604+09:00","level":"INFO","msg":"http request","request_id":"57ad11cb-c088-4f3b-b1e1-f04bc1b4683b","remote_addr":"127.0.0.1:58930","status":200,"latency_ms":0}
+{"time":"2026-06-12T19:16:38.736661+09:00","level":"INFO","msg":"http request","request_id":"c9ba2c9a-6e7d-4714-9315-5f10860fac7f","remote_addr":"127.0.0.1:58931","status":200,"latency_ms":0}
+{"time":"2026-06-12T19:16:38.921477+09:00","level":"INFO","msg":"signing: transaction signed successfully","request_id":"b0511fa6-6cc9-4ec4-85ae-e2899c86b5b1","tx_hash":"0xfa41dd66cc50da67d7e59d1b7277e794cbe69d5b10deb88a9ca2930fae65a239","chain_id":1,"nonce":0}
+{"time":"2026-06-12T19:16:38.921649+09:00","level":"INFO","msg":"http request","request_id":"27ad1c20-d667-46ba-8a2e-04bb95d5dcd4","remote_addr":"127.0.0.1:58932","status":200,"latency_ms":54}
+{"time":"2026-06-12T19:16:39.277787+09:00","level":"INFO","msg":"http request","request_id":"bc989557-adbd-4e93-9195-66ba8da00c3b","remote_addr":"127.0.0.1:58933","status":401,"latency_ms":0}
+{"time":"2026-06-12T19:16:39.424310+09:00","level":"INFO","msg":"http request","request_id":"f8a85285-b18c-43aa-8250-1b0ec1af5113","remote_addr":"127.0.0.1:58934","status":401,"latency_ms":0}
+{"time":"2026-06-12T19:16:39.567327+09:00","level":"INFO","msg":"http request","request_id":"bce3c8cf-231c-4974-a8b1-db93dbcc13fb","remote_addr":"127.0.0.1:58935","status":403,"latency_ms":0}
+
+=== RAW CURL OUTPUT (tool calls — illustrative, condensed) ===
+
+# initialize
+curl -si -X POST http://127.0.0.1:58526/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Authorization: Bearer <TOKEN>" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"http-demo-sh","version":"1.0"}}}'
+
+Response headers (relevant):
+  HTTP/1.1 200 OK
+  Mcp-Session-Id: T36SQD3MNIDWOGLSR5ZNFSTZBV
+
+Response body (SSE):
+  event: message
+  data: {"jsonrpc":"2.0","id":1,"result":{"capabilities":{"logging":{},"tools":{"listChanged":true}},"protocolVersion":"2025-03-26","serverInfo":{"name":"eth-signer-mcp","version":"(devel)"}}}
+
+# sign_transaction
+curl -s -X POST http://127.0.0.1:58526/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Authorization: Bearer <TOKEN>" \
+  -H "Mcp-Session-Id: T36SQD3MNIDWOGLSR5ZNFSTZBV" \
+  -d '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"sign_transaction","arguments":{"type":"0x0","chainId":"1","nonce":"0","to":"0x9858EfFD232B4033E47d90003D41EC34EcaEda94","value":"1000000000000000000","data":"0xdeadbeef","gas":"100000","gasPrice":"20000000000"}}}'
+
+Response (SSE):
+  event: message
+  data: {"jsonrpc":"2.0","id":4,"result":{"content":[{"type":"text","text":"{\"from\":\"0x9858EfFD232B4033E47d90003D41EC34EcaEda94\",\"hash\":\"0xfa41dd66cc50da67d7e59d1b7277e794cbe69d5b10deb88a9ca2930fae65a239\",\"rawTransaction\":\"0xf871808504a817c800830186a0949858effd232b4033e47d90003d41ec34ecaeda94880de0b6b3a764000084deadbeef26a082dc9bb5c5916b7728febf0a7269cef831012cf86eb0f2a4c69aa77ba92755dea073b452e7edc29e44a5f2b6887e90d59aec9ca1b81c858f592362e45a4e9ffcac\",\"signature\":{\"r\":\"0x82dc9bb5c5916b7728febf0a7269cef831012cf86eb0f2a4c69aa77ba92755de\",\"s\":\"0x73b452e7edc29e44a5f2b6887e90d59aec9ca1b81c858f592362e45a4e9ffcac\",\"v\":\"0x26\"}}"}],"structuredContent":{"from":"0x9858EfFD232B4033E47d90003D41EC34EcaEda94","hash":"0xfa41dd66cc50da67d7e59d1b7277e794cbe69d5b10deb88a9ca2930fae65a239","rawTransaction":"0xf871808504a817c800830186a0949858effd232b4033e47d90003d41ec34ecaeda94880de0b6b3a764000084deadbeef26a082dc9bb5c5916b7728febf0a7269cef831012cf86eb0f2a4c69aa77ba92755dea073b452e7edc29e44a5f2b6887e90d59aec9ca1b81c858f592362e45a4e9ffcac","signature":{"r":"0x82dc9bb5c5916b7728febf0a7269cef831012cf86eb0f2a4c69aa77ba92755de","s":"0x73b452e7edc29e44a5f2b6887e90d59aec9ca1b81c858f592362e45a4e9ffcac","v":"0x26"}}}}
+
+# 401: missing bearer
+curl -si -X POST http://127.0.0.1:58526/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '...'
+→ HTTP/1.1 401 Unauthorized
+  Www-Authenticate: Bearer
+  Content-Length: 0
+
+# 403: forged Host header
+curl -si -X POST http://127.0.0.1:58526/mcp \
+  -H "Authorization: Bearer <TOKEN>" \
+  -H "Host: evil.example.com" \
+  -d '...'
+→ HTTP/1.1 403 Forbidden
+  Content-Type: text/plain; charset=utf-8
+  Content-Length: 50
+
+=== DECODER VERIFICATION (ethers v6) ===
+
+Same raw transaction as the stdio demo; output is byte-identical (ADR-002 transport parity):
+
+  rawTransaction: 0xf871808504a817c800830186a0949858effd232b4033e47d90003d41ec34ecaeda94880de0b6b3a764000084deadbeef26a082dc9bb5c5916b7728febf0a7269cef831012cf86eb0f2a4c69aa77ba92755dea073b452e7edc29e44a5f2b6887e90d59aec9ca1b81c858f592362e45a4e9ffcac
+
+  Decoded (ethers v6):
+    type:      0 (legacy EIP-155)
+    chainId:   1
+    nonce:     0
+    to:        0x9858EfFD232B4033E47d90003D41EC34EcaEda94
+    value:     1000000000000000000 wei (1 ETH)
+    gasLimit:  100000
+    gasPrice:  20000000000 wei (20 Gwei)
+    data:      0xdeadbeef
+    from:      0x9858EfFD232B4033E47d90003D41EC34EcaEda94  (recovered sender)
+    hash:      0xfa41dd66cc50da67d7e59d1b7277e794cbe69d5b10deb88a9ca2930fae65a239
+
+  from == fixture address:  true
+  hash matches vector:      true
+
+=== NOTES ===
+
+- The bearer token NEVER appears in any log line (scrubbed above as <TOKEN>; token is
+  also never written to any file inside the repo tree).
+- The signing audit log line (level INFO, msg "signing: transaction signed successfully")
+  contains: request_id, tx_hash, chain_id, nonce. No key material, no tx body, no password.
+- The signing audit log line carries the request_id of the INITIALIZE HTTP request
+  (b0511fa6 here, the first reqlog line with status 200). The go-sdk's
+  StreamableHTTPHandler routes tool calls through the session context established by
+  the initialize call, so all tool handlers share that session's request_id. The
+  sign_transaction POST's own reqlog line (27ad1c20, status 200, latency 54 ms) has a
+  different request_id — that is the transport-layer request, not the tool-handler
+  context. Correct correlation: initialize reqlog request_id == signing audit
+  request_id (this property is verified by parity_transport_test.go).
+- The transaction is NOT broadcast. The binary makes no outbound network calls (ADR-007).
+- The WARN lines are expected for the committed keystore fixtures (chmod 644 from git).
+  In production: chmod 600 your keystore and password files.
+- This transcript is input evidence for the Issue 4.4 end-to-end leak audit.

@@ -1,0 +1,27 @@
+{
+  "name": "legacy-mainnet",
+  "tx": {
+    "type": "0x0",
+    "chainId": "1",
+    "nonce": "0",
+    "to": "0x9858EfFD232B4033E47d90003D41EC34EcaEda94",
+    "value": "1000000000000000000",
+    "data": "0xdeadbeef",
+    "gas": "100000",
+    "gasPrice": "20000000000"
+  },
+  "expected": {
+    "raw_tx": "0xf871808504a817c800830186a0949858effd232b4033e47d90003d41ec34ecaeda94880de0b6b3a764000084deadbeef26a082dc9bb5c5916b7728febf0a7269cef831012cf86eb0f2a4c69aa77ba92755dea073b452e7edc29e44a5f2b6887e90d59aec9ca1b81c858f592362e45a4e9ffcac",
+    "tx_hash": "0xfa41dd66cc50da67d7e59d1b7277e794cbe69d5b10deb88a9ca2930fae65a239",
+    "r": "0x82dc9bb5c5916b7728febf0a7269cef831012cf86eb0f2a4c69aa77ba92755de",
+    "s": "0x73b452e7edc29e44a5f2b6887e90d59aec9ca1b81c858f592362e45a4e9ffcac",
+    "v": "0x26"
+  },
+  "meta": {
+    "oracles": {
+      "ethers": "6.16.0",
+      "cast": "not-run-in-this-env"
+    },
+    "regenerated_at": "2026-06-11T00:00:00Z"
+  }
+}

@@ -5,6 +5,19 @@ bin/
 *.so
 *.dylib
 
+# Stray module-named binaries built directly inside app directories (e.g. by
+# `go build .` run inside apps/eth-signer-mcp/ instead of from the repo root).
+# The canonical output location is bin/ (via `make build`).
+apps/*/eth-signer-mcp
+apps/*/eth-signer-mcp.exe
+
+# Stray demo client binaries built directly in the scripts/demo/ module.
+# The canonical way to run the demo client is via `go run ./scripts/demo/cmd/...`.
+# Anchored to the exact output location so the pattern does not suppress unrelated
+# files with the same basename elsewhere in the tree.
+/scripts/demo/cmd/stdio-client/stdio-client
+/scripts/demo/cmd/stdio-client/stdio-client.exe
+
 # Test & coverage artifacts
 *.test
 *.out
@@ -26,3 +39,8 @@ go.work.sum
 # OS cruft
 .DS_Store
 Thumbs.db
+
+# Node / npm (regen-vectors-ethers.mjs tooling — not committed)
+scripts/node_modules/
+scripts/package.json
+scripts/package-lock.json

@@ -1,0 +1,92 @@
+Stdio demo session transcript — eth-signer-mcp Issue 4.1
+Captured: 2026-06-12   Keystore: keystore-light.json (light-scrypt, N=4096, ~50 ms)
+Decoder:  ethers v6 (cast not available on this machine; see vectors/cast-version.txt)
+Scrubbing: no absolute home paths appear (relative paths used); no token in output.
+
+=== COMMAND ===
+
+  go run ./scripts/demo/cmd/stdio-client \
+    -binary      ./bin/eth-signer-mcp \
+    -keystore    ./apps/eth-signer-mcp/internal/signing/testdata/keystore-light.json \
+    -password-file ./apps/eth-signer-mcp/internal/signing/testdata/password.txt \
+    -want-raw-tx 0xf871808504a817c800830186a0949858effd232b4033e47d90003d41ec34ecaeda94880de0b6b3a764000084deadbeef26a082dc9bb5c5916b7728febf0a7269cef831012cf86eb0f2a4c69aa77ba92755dea073b452e7edc29e44a5f2b6887e90d59aec9ca1b81c858f592362e45a4e9ffcac
+
+=== CLIENT STDOUT ===
+
+connecting to eth-signer-mcp via stdio (CommandTransport) ...
+
+>>> calling get_address ...
+<<< get_address result: {"address":"0x9858EfFD232B4033E47d90003D41EC34EcaEda94"}
+
+>>> calling sign_transaction (legacy-mainnet vector) ...
+    input: map[chainId:1 data:0xdeadbeef gas:100000 gasPrice:20000000000 nonce:0 to:0x9858EfFD232B4033E47d90003D41EC34EcaEda94 type:0x0 value:1000000000000000000]
+<<< sign_transaction result:
+    rawTransaction: 0xf871808504a817c800830186a0949858effd232b4033e47d90003d41ec34ecaeda94880de0b6b3a764000084deadbeef26a082dc9bb5c5916b7728febf0a7269cef831012cf86eb0f2a4c69aa77ba92755dea073b452e7edc29e44a5f2b6887e90d59aec9ca1b81c858f592362e45a4e9ffcac
+    hash:           0xfa41dd66cc50da67d7e59d1b7277e794cbe69d5b10deb88a9ca2930fae65a239
+    from:           0x9858EfFD232B4033E47d90003D41EC34EcaEda94
+    signature.r:    0x82dc9bb5c5916b7728febf0a7269cef831012cf86eb0f2a4c69aa77ba92755de
+    signature.s:    0x73b452e7edc29e44a5f2b6887e90d59aec9ca1b81c858f592362e45a4e9ffcac
+    signature.v:    0x26
+
+✓ rawTransaction MATCHES golden vector (byte-identical)
+
+✓ stdio demo complete — server signs from the committed keystore fixture
+  NOTE: this transaction is NOT broadcast — the binary has no RPC capability (ADR-007)
+  NOTE: off-localhost exposure is unsupported
+
+=== SERVER STDERR (binary logs to stderr; stdout carries MCP frames only) ===
+
+{"time":"2026-06-12T18:44:26.649303+09:00","level":"INFO","msg":"eth-signer-mcp starting","log_level":"info"}
+{"time":"2026-06-12T18:44:26.649427+09:00","level":"WARN","msg":"file is group/world accessible; consider chmod 600 (use --strict-perms to refuse)","path":"./apps/eth-signer-mcp/internal/signing/testdata/keystore-light.json"}
+{"time":"2026-06-12T18:44:26.649437+09:00","level":"WARN","msg":"file is group/world accessible; consider chmod 600 (use --strict-perms to refuse)","path":"./apps/eth-signer-mcp/internal/signing/testdata/password.txt"}
+{"time":"2026-06-12T18:44:26.649496+09:00","level":"INFO","msg":"keystore loaded","address":"0x9858EfFD232B4033E47d90003D41EC34EcaEda94"}
+{"time":"2026-06-12T18:44:26.649885+09:00","level":"INFO","msg":"server run start"}
+{"time":"2026-06-12T18:44:26.649894+09:00","level":"INFO","msg":"server connecting"}
+{"time":"2026-06-12T18:44:26.649915+09:00","level":"INFO","msg":"server session connected","session_id":""}
+{"time":"2026-06-12T18:44:26.650766+09:00","level":"INFO","msg":"session initialized"}
+{"time":"2026-06-12T18:44:26.689202+09:00","level":"INFO","msg":"signing: transaction signed successfully","request_id":"3d66b78c-42ba-4f82-a164-7ebb6b6c5b63","tx_hash":"0xfa41dd66cc50da67d7e59d1b7277e794cbe69d5b10deb88a9ca2930fae65a239","chain_id":1,"nonce":0}
+{"time":"2026-06-12T18:44:26.689505+09:00","level":"INFO","msg":"server session disconnected","session_id":""}
+{"time":"2026-06-12T18:44:26.689522+09:00","level":"INFO","msg":"server session ended"}
+
+=== DECODER VERIFICATION (ethers v6) ===
+
+  node -e "
+    const { ethers } = require('ethers');
+    const raw = '0xf871808504a817c800830186a0949858effd232b4033e47d90003d41ec34ecaeda94880de0b6b3a764000084deadbeef26a082dc9bb5c5916b7728febf0a7269cef831012cf86eb0f2a4c69aa77ba92755dea073b452e7edc29e44a5f2b6887e90d59aec9ca1b81c858f592362e45a4e9ffcac';
+    const tx = ethers.Transaction.from(raw);
+    console.log('type:     ', tx.type, '(legacy EIP-155)');
+    console.log('chainId:  ', tx.chainId.toString());
+    console.log('nonce:    ', tx.nonce);
+    console.log('to:       ', tx.to);
+    console.log('value:    ', tx.value.toString(), 'wei (1 ETH)');
+    console.log('gasLimit: ', tx.gasLimit.toString());
+    console.log('gasPrice: ', tx.gasPrice.toString(), 'wei (20 Gwei)');
+    console.log('data:     ', tx.data);
+    console.log('from:     ', tx.from, '(recovered sender)');
+    console.log('hash:     ', tx.hash);
+  "
+
+  Output:
+    type:      0 (legacy EIP-155)
+    chainId:   1
+    nonce:     0
+    to:        0x9858EfFD232B4033E47d90003D41EC34EcaEda94
+    value:     1000000000000000000 wei (1 ETH)
+    gasLimit:  100000
+    gasPrice:  20000000000 wei (20 Gwei)
+    data:      0xdeadbeef
+    from:      0x9858EfFD232B4033E47d90003D41EC34EcaEda94  (recovered sender)
+    hash:      0xfa41dd66cc50da67d7e59d1b7277e794cbe69d5b10deb88a9ca2930fae65a239
+
+  from == fixture address:  true
+  hash matches vector:      true
+
+=== NOTES ===
+
+- The signing audit log line contains: request_id, tx_hash, chain_id, nonce.
+  It does NOT contain the private key, raw tx body, signature components, or password.
+- The transaction is NOT broadcast. The binary makes no outbound network calls (ADR-007).
+- The WARN lines for keystore-light.json and password.txt are expected; both committed
+  fixture files are group-readable (chmod 644 from git). In production, use chmod 600
+  and/or --strict-perms to refuse startup on world/group-readable files.
+- This transcript is input evidence for the Issue 4.4 end-to-end leak audit.

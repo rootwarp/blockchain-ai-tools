@@ -1,0 +1,672 @@
+package server
+
+// concurrent_test.go — Issue 3.6: Concurrent-calls integration test (REQUIRED).
+//
+// ADR-006 required acceptance test — non-waivable.
+// NO testing.Short, build tag, or t.Skip guards exist anywhere in this file.
+// If this test is flaky, fix the root cause; never add a skip path.
+//
+// Design rationale:
+//
+//	N = 10 goroutines (≥ 8), each owning a pre-created SDK v1.6.1 session that
+//	issues one sign_transaction with a unique nonce.  All N CallTool calls are
+//	dispatched simultaneously from their goroutines.
+//
+//	The vault semaphore of 1 (Phase 2, task 2.2) serializes the N decrypts;
+//	this is proven via the recordingKeyVault wrapper (defined in bounds_test.go,
+//	same package) that tracks maxActiveFn (high-water mark of goroutines inside
+//	the fn body after semaphore acquisition + KDF).
+//
+//	SDK sessions are created in the main test goroutine (so t.Fatalf is safe);
+//	the burst goroutines only call CallTool and write to a pre-allocated result
+//	slice — no t.Fatal/t.Errorf from goroutines.
+//
+// Test table:
+//
+//	2 entries exactly match committed golden vectors (task 2.9) → byte-equality
+//	asserted against the committed raw_tx (NOT re-derived with go-ethereum).
+//	8 synthetic entries with unique nonces → sender-recovery verification only.
+//
+// Acceptance criteria verified (issue 3.6):
+//
+//	(1) All N succeed; every rawTransaction decoded and sender recovered.
+//	(2) Golden byte-equality for the 2 matched vectors.
+//	(3) maxActiveFn (instrumented vault) == 1 → decrypts serialized.
+//	(4) Memory bounded: ReadMemStats heap-growth sanity check.
+//	(5) Runs clean under -race (structural design, no data races by construction).
+//	(6) Cross-call bleed: distinct nonces, N distinct request_ids, correlation.
+//	(7) Leak scan: bearer token absent from logs + responses; fixture key absent
+//	    from logs (address legitimately appears in rawTransaction/from fields).
+
+import (
+	"bytes"
+	"context"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/rootwarp/blockchain-ai-tools/apps/eth-signer-mcp/internal/signing"
+)
+
+// concSignCase describes one request in the concurrent burst.
+type concSignCase struct {
+	// name is a short identifier for failure messages.
+	name string
+	// args is the sign_transaction argument map (matches signing.TxRequest fields).
+	args map[string]any
+	// goldenRawTx, when non-empty, is the committed rawTransaction from task 2.9.
+	// The test asserts rawTransaction == goldenRawTx byte-for-byte.
+	// MUST match the JSON file exactly — do NOT re-derive with go-ethereum.
+	goldenRawTx string
+}
+
+// concSignResult holds the outcome of one goroutine's CallTool invocation.
+// Errors are collected here (not via t.Errorf) so goroutines stay t-safe.
+type concSignResult struct {
+	idx     int    // index into the test table
+	rawTx   string // "0x..."-prefixed rawTransaction; empty when isError=true
+	rawJSON string // full SignResult JSON text (tc.Text) from Content[0]; empty on error
+	isError bool
+	errText string // server error-response body or protocol error; appended to leak-scan buffer
+}
+
+// concurrentSignTable returns the N test cases for the burst.
+//
+// Nonce uniqueness is required across all N entries so the test can verify
+// response-to-request pairing via the decoded transaction nonce.
+//
+// Entries 0–1 match committed golden vectors exactly; goldenRawTx is loaded
+// from the JSON files (never hardcoded) to track regenerations automatically.
+// Entries 2–9 are synthetic with nonces 100–107 (not in any golden vector).
+func concurrentSignTable(t *testing.T) []concSignCase {
+	t.Helper()
+	return []concSignCase{
+		// ── Golden vector: 1559-mainnet (nonce=42) ────────────────────────────
+		// Source: internal/signing/testdata/vectors/1559-mainnet.json.
+		// All tx fields match exactly; goldenRawTx is loaded from the file so
+		// the assertion automatically tracks vector regenerations.
+		{
+			name: "golden-1559-mainnet",
+			args: map[string]any{
+				"type":                 "0x2",
+				"chainId":              "1",
+				"nonce":                "42",
+				"to":                   "0x9858EfFD232B4033E47d90003D41EC34EcaEda94",
+				"value":                "1000000000000000000",
+				"data":                 "0xcafebabe",
+				"gas":                  "100000",
+				"maxFeePerGas":         "30000000000",
+				"maxPriorityFeePerGas": "2000000000",
+			},
+			goldenRawTx: loadGoldenRawTx(t, "1559-mainnet.json"),
+		},
+		// ── Golden vector: legacy-mainnet (nonce=0) ───────────────────────────
+		// Source: internal/signing/testdata/vectors/legacy-mainnet.json.
+		// All tx fields match exactly; goldenRawTx is loaded from the file.
+		{
+			name: "golden-legacy-mainnet",
+			args: map[string]any{
+				"type":     "0x0",
+				"chainId":  "1",
+				"nonce":    "0",
+				"to":       "0x9858EfFD232B4033E47d90003D41EC34EcaEda94",
+				"value":    "1000000000000000000",
+				"data":     "0xdeadbeef",
+				"gas":      "100000",
+				"gasPrice": "20000000000",
+			},
+			goldenRawTx: loadGoldenRawTx(t, "legacy-mainnet.json"),
+		},
+		// ── Synthetic EIP-1559 cases (nonces 100–107) ─────────────────────────
+		// These nonces do not appear in any committed golden vector.
+		// Sender-recovery verification only; no golden byte-equality assertion.
+		{name: "synthetic-1559-n100", args: concSynth1559Args("100")},
+		{name: "synthetic-1559-n101", args: concSynth1559Args("101")},
+		{name: "synthetic-1559-n102", args: concSynth1559Args("102")},
+		{name: "synthetic-1559-n103", args: concSynth1559Args("103")},
+		{name: "synthetic-1559-n104", args: concSynth1559Args("104")},
+		{name: "synthetic-1559-n105", args: concSynth1559Args("105")},
+		{name: "synthetic-1559-n106", args: concSynth1559Args("106")},
+		{name: "synthetic-1559-n107", args: concSynth1559Args("107")},
+	}
+}
+
+// loadGoldenRawTx reads the committed golden vector file and returns the
+// expected.raw_tx string.  This ensures golden values are always in sync with
+// the committed JSON — no risk of silent drift if vectors are regenerated.
+//
+// vectorFile is the bare filename (e.g. "1559-mainnet.json") under
+// internal/signing/testdata/vectors/.
+func loadGoldenRawTx(t *testing.T, vectorFile string) string {
+	t.Helper()
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatalf("loadGoldenRawTx: runtime.Caller(0) failed")
+	}
+	path := filepath.Join(filepath.Dir(thisFile), "..", "signing", "testdata", "vectors", vectorFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("loadGoldenRawTx %q: %v", vectorFile, err)
+	}
+	var v struct {
+		Expected struct {
+			RawTx string `json:"raw_tx"`
+		} `json:"expected"`
+	}
+	if jsonErr := json.Unmarshal(data, &v); jsonErr != nil {
+		t.Fatalf("loadGoldenRawTx %q: json.Unmarshal: %v", vectorFile, jsonErr)
+	}
+	if v.Expected.RawTx == "" {
+		t.Fatalf("loadGoldenRawTx %q: expected.raw_tx is empty", vectorFile)
+	}
+	return v.Expected.RawTx
+}
+
+// concSynth1559Args returns a minimal valid EIP-1559 argument map with the given
+// nonce.  Nonces 100–107 are reserved for synthetic concurrent-test cases and do
+// not appear in any committed golden vector (task 2.9 vector matrix).
+func concSynth1559Args(nonce string) map[string]any {
+	return map[string]any{
+		"type":                 "0x2",
+		"chainId":              "1",
+		"nonce":                nonce,
+		"to":                   "0x9858EfFD232B4033E47d90003D41EC34EcaEda94",
+		"value":                "0",
+		"data":                 "0x",
+		"gas":                  "21000",
+		"maxFeePerGas":         "30000000000",
+		"maxPriorityFeePerGas": "2000000000",
+	}
+}
+
+// ── Main test ─────────────────────────────────────────────────────────────────
+
+// TestConcurrentSignTransaction_SerializedDecrypts is the ADR-006 required
+// concurrent-calls integration test.  It MUST NOT be skipped, conditioned on
+// testing.Short, or protected by build tags — it is an unconditional CI gate.
+//
+// Timing (light fixture, n=2 scrypt):
+//
+//	~50 ms per KDF × 10 serialized calls ≈ 0.5 s total.
+//	Total with SDK round-trips and session setup ≈ 1–2 s.
+//	Test timeout: 120 s (well within standard CI limits).
+func TestConcurrentSignTransaction_SerializedDecrypts(t *testing.T) {
+	// NOT t.Parallel(): uses the light-fixture KDF (~50 ms each, serialized by
+	// the vault semaphore).  Running concurrently with other KDF-heavy tests risks
+	// flaky timeouts under CI load.
+
+	// ── 1. Vault: real FileKeyVault (light fixture) + instrumented wrapper ──────
+	//
+	// The recordingKeyVault (defined in bounds_test.go, same package) wraps the
+	// real vault, tracking concurrent fn invocations via atomic gauge + max tracker.
+	// holdFnCh = nil: fn proceeds immediately after KDF (no artificial hold).
+	tdPath := signingTestdataPath(t) // signingTestdataPath defined in handlers_test.go
+	innerVault, err := signing.NewFileKeyVault(signing.VaultOptions{
+		KeystorePath: filepath.Join(tdPath, "keystore-light.json"),
+		PasswordPath: filepath.Join(tdPath, "password.txt"),
+	})
+	if err != nil {
+		t.Fatalf("NewFileKeyVault(light): %v", err)
+	}
+
+	// newRecordingVault defined in bounds_test.go (same package).
+	rv := newRecordingVault(innerVault, nil)
+
+	// ── 2. Server with log capture ───────────────────────────────────────────
+	//
+	// Both the signer and the HTTP server write to the same logger so that audit
+	// lines and reqlog lines share one captured buffer — required for correlation
+	// assertions in step (6).
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	signer := signing.NewSigner(rv, signing.SignerOptions{Logger: logger})
+	srv := New(signer, Options{
+		Name:    "concurrent-test-server",
+		Version: "v0.0.0-test",
+		Logger:  logger,
+	})
+
+	// ── 3. Start the HTTP server ─────────────────────────────────────────────
+	//
+	// Generate a fresh random bearer token for this run.  Keep rawToken for the
+	// sentinel; zero it on test completion.
+	//
+	// startRunHTTP (defined in http_test.go) registers a t.Cleanup that cancels
+	// the server and waits for RunHTTP to exit.  sdkClient cleanups (registered
+	// later, LIFO order) close the sessions BEFORE this cleanup cancels the server,
+	// so the server drains cleanly without racing session teardown.
+	rawToken := randTokenBytes(32)       // randTokenBytes defined in auth_test.go
+	tokenStr := hexEncodeBytes(rawToken) // hexEncodeBytes defined in auth_test.go
+	// Best-effort zeroing of the raw token bytes (ADR-009).
+	// NOTE: tokenStr (the hex wire form), the token file on disk, SDK transport
+	// buffers, and sentinel defensive copies are GC-only — not covered by this call.
+	defer signing.ZeroBytes(rawToken)
+	tokenFile := writeTokenFile(t, tokenStr+"\n")
+	readyCh := make(chan net.Addr, 1)
+
+	startRunHTTP(t, srv, HTTPOptions{
+		Addr:          "127.0.0.1:0",
+		TokenFilePath: tokenFile,
+		ReadyCh:       readyCh,
+	})
+
+	addr := waitReady(t, readyCh, 10*time.Second)
+	endpoint := fmt.Sprintf("http://%s", addr.String())
+
+	// ── 4. Build test table and sanity-check N ───────────────────────────────
+	// concurrentSignTable loads golden raw_tx values from the committed JSON files
+	// (not hardcoded) so assertions automatically track vector regenerations.
+	table := concurrentSignTable(t)
+	N := len(table)
+	if N < 8 {
+		// Structural canary: table shrinkage must fail loudly.
+		t.Fatalf("concurrentSignTable must return N>=8 entries (ADR-006); got %d", N)
+	}
+
+	// ── 5. Create N SDK sessions in the MAIN goroutine ───────────────────────
+	//
+	// Sessions are created here (not inside goroutines) so that sdkClient's
+	// t.Fatalf call is safe.  Each session sends one initialize round-trip (~10 ms)
+	// which does NOT touch the vault — only the bearer auth middleware validates the
+	// token.  The N sessions all remain open during the burst; they are closed by
+	// t.Cleanup (LIFO order, after the burst).
+	testCtx, testCancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer testCancel()
+
+	sessions := make([]*mcp.ClientSession, N)
+	for i := range sessions {
+		sessions[i] = sdkClient(t, testCtx, endpoint, tokenStr)
+	}
+
+	// ── 6. Snapshot memory BEFORE the burst ─────────────────────────────────
+	runtime.GC()
+	var memBefore runtime.MemStats
+	runtime.ReadMemStats(&memBefore)
+
+	// ── 7. Fire N goroutines simultaneously ──────────────────────────────────
+	//
+	// Each goroutine owns one session and issues exactly one sign_transaction.
+	// All N calls are in-flight at the same time; the vault semaphore of 1
+	// serializes the KDF invocations.  Results are written to a pre-allocated
+	// slice; t.Errorf/t.Fatal are NOT called from goroutines.
+	results := make([]concSignResult, N)
+	var wg sync.WaitGroup
+	wg.Add(N)
+
+	for i := 0; i < N; i++ {
+		i := i // shadow loop variable for goroutine capture
+		go func() {
+			defer wg.Done()
+			callCtx, callCancel := context.WithTimeout(testCtx, 90*time.Second)
+			defer callCancel()
+
+			r, callErr := sessions[i].CallTool(callCtx, &mcp.CallToolParams{
+				Name:      "sign_transaction",
+				Arguments: table[i].args,
+			})
+
+			switch {
+			case callErr != nil:
+				results[i] = concSignResult{
+					idx:     i,
+					isError: true,
+					errText: fmt.Sprintf("CallTool protocol error: %v", callErr),
+				}
+			case r == nil:
+				results[i] = concSignResult{idx: i, isError: true, errText: "nil *mcp.CallToolResult"}
+			case r.IsError:
+				text := "<no Content>"
+				if len(r.Content) > 0 {
+					if tc, ok := r.Content[0].(*mcp.TextContent); ok {
+						text = tc.Text
+					}
+				}
+				results[i] = concSignResult{idx: i, isError: true, errText: "tool error: " + text}
+			case len(r.Content) == 0:
+				results[i] = concSignResult{idx: i, isError: true, errText: "success result has empty Content"}
+			default:
+				tc, ok := r.Content[0].(*mcp.TextContent)
+				if !ok {
+					results[i] = concSignResult{
+						idx:     i,
+						isError: true,
+						errText: fmt.Sprintf("Content[0] type %T; want *mcp.TextContent", r.Content[0]),
+					}
+					return
+				}
+				var sr signing.SignResult
+				if jsonErr := json.Unmarshal([]byte(tc.Text), &sr); jsonErr != nil {
+					results[i] = concSignResult{
+						idx:     i,
+						isError: true,
+						errText: fmt.Sprintf("json.Unmarshal(SignResult): %v", jsonErr),
+					}
+					return
+				}
+				// rawJSON is the FULL SignResult JSON (tc.Text), which includes
+				// rawTransaction, signature.{r,s,v}, hash, and from.
+				// Scanning rawJSON catches leaks through any output field, not
+				// just rawTransaction.
+				results[i] = concSignResult{idx: i, rawTx: sr.RawTransaction, rawJSON: tc.Text}
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	// ── 8. Snapshot memory AFTER the burst ──────────────────────────────────
+	runtime.GC()
+	var memAfter runtime.MemStats
+	runtime.ReadMemStats(&memAfter)
+
+	// ═══════════════════════════════════════════════════════════════════════
+	// Assertion (1): All N calls succeeded
+	// ═══════════════════════════════════════════════════════════════════════
+	for i, res := range results {
+		if res.isError {
+			t.Errorf("concurrent call %d (%q) failed: %s", i, table[i].name, res.errText)
+		}
+	}
+
+	// ═══════════════════════════════════════════════════════════════════════
+	// Assertion (2): Signature verification + golden byte-equality
+	//
+	// For every non-error result:
+	//   (a) Decode rawTransaction via types.Transaction.UnmarshalBinary.
+	//   (b) Recover sender using the chain ID embedded in the signed transaction.
+	//   (c) Assert recovered sender == fixture address.
+	//   (d) If the test case has a goldenRawTx, assert rawTx == goldenRawTx.
+	//       Source of truth: committed JSON files, NOT re-derived values.
+	// ═══════════════════════════════════════════════════════════════════════
+	fixtureAddr := common.HexToAddress(signing.FixtureTestAddress)
+
+	for i, res := range results {
+		if res.isError {
+			continue // already reported in assertion (1)
+		}
+		tc := table[i]
+
+		// Decode rawTransaction.
+		rawHex := strings.TrimPrefix(res.rawTx, "0x")
+		rawHex = strings.TrimPrefix(rawHex, "0X")
+		rawBytes, hexErr := hex.DecodeString(rawHex)
+		if hexErr != nil {
+			t.Errorf("call %d (%q): hex.DecodeString(rawTransaction): %v", i, tc.name, hexErr)
+			continue
+		}
+
+		var tx types.Transaction
+		if unmarshalErr := tx.UnmarshalBinary(rawBytes); unmarshalErr != nil {
+			t.Errorf("call %d (%q): types.Transaction.UnmarshalBinary: %v", i, tc.name, unmarshalErr)
+			continue
+		}
+
+		// Recover sender using the chain ID embedded in the signed transaction.
+		// For EIP-155 (type 0) and EIP-1559 (type 2), ChainId() is always non-nil.
+		chainID := tx.ChainId()
+		if chainID == nil {
+			t.Errorf("call %d (%q): unexpected nil chainId in signed transaction "+
+				"(all test cases use EIP-155 or EIP-1559)", i, tc.name)
+			continue
+		}
+		ethSigner := types.LatestSignerForChainID(chainID)
+		sender, senderErr := types.Sender(ethSigner, &tx)
+		if senderErr != nil {
+			t.Errorf("call %d (%q): types.Sender: %v", i, tc.name, senderErr)
+			continue
+		}
+		if sender != fixtureAddr {
+			t.Errorf("call %d (%q): recovered sender = %s; want fixture %s",
+				i, tc.name, sender.Hex(), fixtureAddr.Hex())
+		}
+
+		// Golden byte-equality: asserted only for entries that match a committed vector.
+		// DO NOT re-derive the expected value — the committed JSON is the source of truth.
+		if tc.goldenRawTx != "" && res.rawTx != tc.goldenRawTx {
+			t.Errorf("call %d (%q): rawTransaction golden mismatch:\n  got:  %s\n  want: %s",
+				i, tc.name, res.rawTx, tc.goldenRawTx)
+		}
+	}
+
+	// ═══════════════════════════════════════════════════════════════════════
+	// Assertion (3): Decrypts observably serialized (max concurrent == 1)
+	//
+	// maxActiveFn is the high-water mark of goroutines simultaneously inside the
+	// recording vault's fn body (i.e. past semaphore + ctx re-check + KDF).
+	// The Phase 2 vault semaphore of 1 (task 2.2) must keep this at exactly 1.
+	//
+	// Proof chain:
+	//   The vault semaphore is a capacity-1 channel.  file_vault.go's
+	//   WithSigningKey sends on it (acquire) before calling fn and receives
+	//   (release) in a LIFO defer that fires after fn returns — the semaphore
+	//   is held across the entire fn body, which includes the KDF call.
+	//   Therefore maxActiveFn == 1 proves no two KDF allocations ever overlapped.
+	//
+	// This is an instrumentation-based assertion — never a wall-clock check.
+	// ═══════════════════════════════════════════════════════════════════════
+	maxConc := rv.maxActiveFn.Load()
+	if maxConc != 1 {
+		t.Errorf("maxActiveFn (max concurrent decrypts) = %d; want 1. "+
+			"The vault semaphore (task 2.2) must serialize all KDF invocations. "+
+			"A value > 1 means the semaphore is not protecting the decrypt section.",
+			maxConc)
+	}
+
+	// Canary: fnCallsTotal must equal N (one completed fn per successful signing call).
+	// An excess would mean the semaphore is not tracking correctly.
+	if got, want := rv.fnCallsTotal.Load(), int32(N); got != want {
+		t.Errorf("fnCallsTotal = %d; want %d (one per signing call)", got, want)
+	}
+
+	// Non-vacuity guard: maxActiveAtEntry must be ≥ 2.
+	//
+	// maxActiveAtEntry tracks how many goroutines were simultaneously present
+	// between vault entry and inner.WithSigningKey return (i.e. racing for the
+	// semaphore).  If this is < 2, some upstream stage (HTTP server, auth, SDK)
+	// serialized all calls before they reached the vault, and the maxActiveFn == 1
+	// assertion above would be vacuously true — it would prove nothing about the
+	// semaphore.  ≥ 2 concurrent callers at the vault entrance confirms the
+	// semaphore actually had to arbitrate real contention.
+	if entryMax := rv.maxActiveAtEntry.Load(); entryMax < 2 {
+		t.Errorf("maxActiveAtEntry = %d; want ≥ 2. "+
+			"Fewer than 2 goroutines reached the vault concurrently; the "+
+			"decrypt-serialization proof (maxActiveFn == 1) is vacuous — "+
+			"≥ 2 calls must race the semaphore for maxActiveFn == 1 to prove anything.",
+			entryMax)
+	}
+
+	// ═══════════════════════════════════════════════════════════════════════
+	// Assertion (4): Memory bounded
+	//
+	// The vault semaphore of 1 is the structural memory bound: at most one KDF
+	// allocation can be alive at a time.  The ReadMemStats assertion is a generous
+	// sanity check against unbounded parallel allocation, not an allocator-noise
+	// check.
+	//
+	// Bound: 50 MiB of heap growth during the burst.  With the light fixture
+	// (~50 ms/KDF, one allocation at a time), actual growth should be < 5 MiB.
+	// 50 MiB is intentionally generous to avoid flakiness on loaded CI runners.
+	// ═══════════════════════════════════════════════════════════════════════
+	const maxHeapGrowthBytes uint64 = 50 * 1024 * 1024 // 50 MiB
+	if memAfter.HeapInuse > memBefore.HeapInuse+maxHeapGrowthBytes {
+		t.Errorf("heap growth during concurrent burst = %d MiB "+
+			"(before=%d MiB, after=%d MiB); want < 50 MiB. "+
+			"The vault semaphore should limit live KDF allocations to 1 at a time. "+
+			"Growth > 50 MiB suggests the semaphore is not constraining parallelism.",
+			(memAfter.HeapInuse-memBefore.HeapInuse)>>20,
+			memBefore.HeapInuse>>20,
+			memAfter.HeapInuse>>20)
+	}
+
+	// ═══════════════════════════════════════════════════════════════════════
+	// Assertion (6): Cross-call state bleed + request_id correlation
+	//
+	// Parse the captured log and verify:
+	//   (a) Exactly N audit lines (msg contains "signed successfully").
+	//   (b) All N request_ids in audit lines are distinct.
+	//   (c) Each audit line has a matching reqlog line (same request_id).
+	//
+	// parseLogLines and reqlogLines are defined in reqlog_test.go (same package).
+	// ═══════════════════════════════════════════════════════════════════════
+	allLines := parseLogLines(&logBuf)
+
+	// Collect audit lines.
+	var auditLines []map[string]any
+	for _, m := range allLines {
+		if msg, _ := m["msg"].(string); strings.Contains(msg, "signed successfully") {
+			auditLines = append(auditLines, m)
+		}
+	}
+	if got, want := len(auditLines), N; got != want {
+		t.Errorf("audit line count = %d; want %d (one per successful signing call)", got, want)
+	}
+
+	// All N audit request_ids must be distinct (no cross-call bleed).
+	auditIDs := make(map[string]int, N)
+	for _, al := range auditLines {
+		rid, _ := al["request_id"].(string)
+		if rid == "" {
+			t.Error("audit line has empty request_id; each signing call must produce a unique id")
+			continue
+		}
+		auditIDs[rid]++
+	}
+	for rid, count := range auditIDs {
+		if count > 1 {
+			t.Errorf("duplicate request_id %q appears in %d audit lines; "+
+				"cross-call state bleed: each call must produce a unique request_id",
+				rid, count)
+		}
+	}
+
+	// Each audit line must have a matching reqlog line (HTTP correlation).
+	rqLines := reqlogLines(allLines)
+	for _, al := range auditLines {
+		auditRID, _ := al["request_id"].(string)
+		if auditRID == "" {
+			continue // already reported
+		}
+		var matched bool
+		for _, rl := range rqLines {
+			if rid, _ := rl["request_id"].(string); rid == auditRID {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			t.Errorf("audit line request_id %q has no matching reqlog line "+
+				"(reqlog middleware must propagate the same request_id to the signing context)",
+				auditRID)
+		}
+	}
+
+	// ═══════════════════════════════════════════════════════════════════════
+	// Assertion (7): Leak scan
+	//
+	// Response surface scanned: full SignResult JSON (rawJSON) for success results,
+	// errText for error results.  This covers rawTransaction, signature.{r,s,v},
+	// hash, from, and error-response bodies — no output channel is left unscanned.
+	//
+	// Sentinel (a): Bearer token — must not appear in logs OR response surface.
+	// Sentinel (b): FixtureKeySentinel — must not appear in logs.
+	//   NOTE: FixtureKeySentinel includes the fixture ADDRESS, which legitimately
+	//   appears in rawJSON (as the 'to' field in rawTransaction and in the 'from'
+	//   JSON field).  Scanning the full sentinel on responses would produce false
+	//   positives on the address form; response bytes are scanned with the scalar-
+	//   only sentinel instead.
+	// Sentinel (c): Scalar-only sentinel — scans response bytes for the 32-byte
+	//   private key scalar (WITHOUT address forms), which must NEVER appear in any
+	//   signed output (r/s values are derived but do not contain the scalar).
+	// ═══════════════════════════════════════════════════════════════════════
+
+	// Bearer token sentinel.
+	bearerSentinel := signing.NewSentinel("concurrent-bearer-token", rawToken)
+	// Belt-and-braces: NewSentinel already derives "hex-lower" from rawToken; since
+	// tokenStr == hexEncodeBytes(rawToken) this RegisterForm is a no-op duplicate
+	// (sentinel.RegisterForm deduplicates silently).  Kept for explicitness.
+	bearerSentinel.RegisterForm("bearer-hex-string", []byte(tokenStr))
+
+	// Fixture private key sentinel (includes address forms — scanned on logs only).
+	keySentinel := signing.FixtureKeySentinel()
+
+	logOutput := logBuf.Bytes()
+
+	// Scan captured logs with both sentinels.
+	if leaked := bearerSentinel.Scan(logOutput); len(leaked) > 0 {
+		// SAFETY: report form names only, never the bytes or the token value.
+		t.Errorf("concurrent leak-scan: bearer token found in captured logs: forms=%v "+
+			"(sentinel=%q). reqlog.go must not log Authorization header values.",
+			leaked, bearerSentinel.Name)
+	}
+	if leaked := keySentinel.Scan(logOutput); len(leaked) > 0 {
+		// SAFETY: report form names only, never the bytes or the key value.
+		t.Errorf("concurrent leak-scan: fixture key found in captured logs: forms=%v "+
+			"(sentinel=%q). The private key scalar or its address must not appear in logs.",
+			leaked, keySentinel.Name)
+	}
+
+	// Collect the full response surface for leak scanning (SF-2 + SF-3):
+	//   - Success: append rawJSON (full SignResult JSON — covers rawTransaction,
+	//     signature.{r,s,v}, hash, and from), not just rawTx.
+	//   - Error: append errText (server error-response body verbatim — a possible
+	//     leak surface if signing error messages incorporate secret material).
+	// Including both paths ensures no output channel is left unscanned.
+	var responseBytes bytes.Buffer
+	for _, res := range results {
+		if res.isError {
+			responseBytes.WriteString(res.errText)
+		} else {
+			responseBytes.WriteString(res.rawJSON)
+		}
+	}
+	respOut := responseBytes.Bytes()
+
+	// Scan response bytes with the bearer sentinel.
+	// The bearer token must never appear in signing outputs.
+	if leaked := bearerSentinel.Scan(respOut); len(leaked) > 0 {
+		// SAFETY: report form names only.
+		t.Errorf("concurrent leak-scan: bearer token found in response bytes: forms=%v "+
+			"(sentinel=%q). The bearer token must never appear in signing outputs.",
+			leaked, bearerSentinel.Name)
+	}
+
+	// Scan response bytes for the fixture private-key SCALAR specifically.
+	//
+	// The full FixtureKeySentinel includes the fixture address, which legitimately
+	// appears in rawTransaction as the RLP-encoded 'to' field — scanning the full
+	// sentinel on responses produces a false positive on the address form.
+	// Instead we build a scalar-only sentinel (raw bytes + hex/base64 forms of the
+	// 32-byte secret, WITHOUT the address forms) and scan the response bytes with it.
+	//
+	// The scalar hex is the single fixture private key disclosed in
+	// internal/signing/testdata/README.md and fixture_sentinel.go (TEST-ONLY key).
+	// It must never appear in any signed transaction output (r/s values are derived
+	// from the scalar but do not contain it; the to-field is the address, not the scalar).
+	const fixtureScalarHex = "1ab42cc412b618bdea3a599e3c9bae199ebf030895b039e9db1e30dafb12b727"
+	scalarRaw, scalarDecErr := hex.DecodeString(fixtureScalarHex)
+	if scalarDecErr != nil {
+		t.Fatalf("concurrent leak-scan: decode fixture scalar hex: %v", scalarDecErr)
+	}
+	// signing.NewSentinel registers: raw bytes, hex-lower, hex-upper, base64 forms.
+	// It does NOT register the address (that is address-derived, not the scalar itself).
+	scalarSentinel := signing.NewSentinel("fixture-private-key-scalar", scalarRaw)
+	if leaked := scalarSentinel.Scan(respOut); len(leaked) > 0 {
+		// SAFETY: report form names only, never the scalar bytes.
+		t.Errorf("concurrent leak-scan: fixture private-key scalar found in response bytes: forms=%v "+
+			"(sentinel=%q). The private-key scalar must NEVER appear in any signed output.",
+			leaked, scalarSentinel.Name)
+	}
+}

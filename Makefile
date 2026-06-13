@@ -34,7 +34,7 @@ build:
 	@test -n "$(MODULES)" || echo "$(NO_MODULES_MSG)"
 	@for m in $(MODULES); do echo ">> build $$m"; \
 		case $$m in \
-			apps/*) ( cd $$m && $(GO) build -o "$(BIN)/" ./... ) || exit 1 ;; \
+			apps/*) ( cd $$m && $(GO) build -trimpath -buildvcs=true -o "$(BIN)/" ./... ) || exit 1 ;; \
 			*)      ( cd $$m && $(GO) build ./... )            || exit 1 ;; \
 		esac; \
 	done
@@ -44,6 +44,12 @@ build:
 test:
 	@test -n "$(MODULES)" || echo "$(NO_MODULES_MSG)"
 	@for m in $(MODULES); do echo ">> test $$m"; ( cd $$m && $(GO) test ./... ) || exit 1; done
+
+## test-race: Run tests with the race detector in all modules.
+.PHONY: test-race
+test-race:
+	@test -n "$(MODULES)" || echo "$(NO_MODULES_MSG)"
+	@for m in $(MODULES); do echo ">> test-race $$m"; ( cd $$m && $(GO) test -race ./... ) || exit 1; done
 
 ## vet: Run go vet in all modules.
 .PHONY: vet
