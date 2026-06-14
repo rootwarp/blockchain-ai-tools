@@ -16,7 +16,8 @@ separately with the signer.
 - `test_build_send_eth.py` — unit tests for `build_send_eth.py` (mocked RPC; no live network).
 - `build_erc20.py` — stdlib-only helper: ERC-20 `transfer`, `approve`, `transferFrom`
   (ABI calldata encoding, `decimals()` read, `eth_estimateGas` with +20% buffer/300k cap,
-  human-amount conversion, stdout=JSON / stderr=summary discipline). No third-party packages.
+  human-amount conversion, soft-check warnings, `--summary-only` dry-run mode,
+  stdout=JSON / stderr=summary discipline). No third-party packages.
 - `test_build_erc20.py` — unit tests for `build_erc20.py` (mocked RPC; no live network).
 
 ## Prerequisites
@@ -35,6 +36,16 @@ python3 -m unittest test_build_erc20 -v
 ```
 
 No live RPC calls are made — the transport is mocked in both test files.
+
+## ERC-20 flags quick reference
+
+| Flag | Subcommands | Description |
+|---|---|---|
+| `--token` | all | ERC-20 contract address |
+| `--sender` | all | Signing account address (from `get_address`) |
+| `--amount` | `transfer`, `approve`, `transfer-from` | Human-readable amount (e.g. `1.5`) |
+| `--approve-max` | `approve` | Grant unlimited (`MAX_UINT256`) authority; mutually exclusive with `--amount` |
+| `--summary-only` | all | Print stderr summary + warnings; suppress stdout JSON (dry-run preview) |
 
 ## Manual end-to-end (use hoodi — testnet, no real funds)
 
@@ -159,9 +170,28 @@ python3 build_erc20.py transfer-from \
 
 <insert on-chain confirmation (block number / receipt status) — filled in by Issue 1.10b>
 
-## Networks
+### Phase 2 preview — `--summary-only` dry-run runs
 
-| network | chainId | RPC |
-|---|---|---|
-| `mainnet` | 1 | `https://ethereum-rpc.publicnode.com` |
-| `hoodi` | 560048 | `https://ethereum-hoodi-rpc.publicnode.com` |
+> This section will be populated by Issue 2.8c with recorded `--summary-only`
+> invocations for each of `transfer`, `approve`, and `transfer-from` on hoodi
+> (or sepolia if an ERC-20 token is available there). Each entry will show the
+> exact command, the stderr output (summary + any warnings), and confirm that
+> stdout is empty.
+
+<insert --summary-only transfer run stderr here — filled in by Issue 2.8c>
+
+<insert --summary-only approve run stderr here — filled in by Issue 2.8c>
+
+<insert --summary-only transfer-from run stderr here — filled in by Issue 2.8c>
+
+## Supported networks
+
+| network | chainId | RPC | Notes |
+|---|---|---|---|
+| `mainnet` | 1 | `https://ethereum-rpc.publicnode.com` | |
+| `hoodi` | 560048 | `https://ethereum-hoodi-rpc.publicnode.com` | Preferred testnet |
+| `sepolia` | 11155111 | `https://ethereum-sepolia-rpc.publicnode.com` | |
+| `holesky` | 17000 | `https://ethereum-holesky-rpc.publicnode.com` | Scheduled for deprecation (post-2025); prefer `hoodi` for new work |
+
+Available in both `build_send_eth.py` (native ETH) and `build_erc20.py` (ERC-20).
+Pass one of these values as `--network` on any subcommand.
