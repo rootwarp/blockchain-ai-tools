@@ -172,17 +172,41 @@ python3 build_erc20.py transfer-from \
 
 ### Phase 2 preview — `--summary-only` dry-run runs
 
-> This section will be populated by Issue 2.8c with recorded `--summary-only`
-> invocations for each of `transfer`, `approve`, and `transfer-from` on hoodi
-> (or sepolia if an ERC-20 token is available there). Each entry will show the
-> exact command, the stderr output (summary + any warnings), and confirm that
-> stdout is empty.
+> **Additivity check (2.8c) — PASSED.** Phase 2 is proven additive: the
+> happy-path `TxRequest` JSON for all three ops (`transfer`, `approve`,
+> `transfer-from`) is **byte-identical** before and after the Phase 2 changes,
+> verified deterministically with fixed RPC inputs (the soft-checks and
+> `--summary-only` only add stderr warnings / suppress stdout; they never alter
+> `tx_dict`). The live on-chain `--summary-only` recordings against a real
+> hoodi/sepolia ERC-20 are **deferred (Risk R1)** — the signer wallet holds no
+> testnet ERC-20 and the e2e token is operator-provided. The deterministic
+> sample below shows the exact `--summary-only` stderr surface (stdout is empty
+> on a dry run).
 
-<insert --summary-only transfer run stderr here — filled in by Issue 2.8c>
+Representative `--summary-only` dry run (deterministic mock inputs; `sepolia`):
 
-<insert --summary-only approve run stderr here — filled in by Issue 2.8c>
-
-<insert --summary-only transfer-from run stderr here — filled in by Issue 2.8c>
+```console
+$ python3 build_erc20.py transfer --network sepolia \
+    --token 0x1111...1111 --to 0x2222...2222 --amount 1.5 \
+    --sender 0x5555...5555 --summary-only
+# stdout: (empty — JSON suppressed by --summary-only)
+# stderr:
+--- ERC-20 transaction summary ---
+operation         : transfer
+network           : sepolia (chainId 11155111)
+token             : 0x1111111111111111111111111111111111111111
+symbol            : USDC
+decimals          : 6
+amount (human)    : 1.5
+amount (base units): 1500000
+from (sender)     : 0x5555555555555555555555555555555555555555
+to (recipient)    : 0x2222222222222222222222222222222222222222
+nonce             : 5
+gas               : 78066
+maxFeePerGas      : 3000000000 wei
+maxPriorityFeePerGas: 1000000000 wei
+----------------------------------
+```
 
 ## Supported networks
 

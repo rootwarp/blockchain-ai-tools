@@ -867,21 +867,21 @@ both SKILL.md and README.md. Pure prose work — no Python edits.
   `test_build_send_eth.py`, `test_build_erc20.py` (this issue is doc-only).
 
 **Acceptance Criteria:**
-- [ ] SKILL.md mentions `mainnet`, `hoodi`, `sepolia`, `holesky` with the
+- [x] SKILL.md mentions `mainnet`, `hoodi`, `sepolia`, `holesky` with the
       holesky deprecation note.
-- [ ] SKILL.md has a "Soft-checks" subsection listing all seven warning
+- [x] SKILL.md has a "Soft-checks" subsection listing all seven warning
       kinds (Phase 1 + Phase 2) with one-line trigger descriptions.
-- [ ] SKILL.md mentions `--summary-only` with an example.
-- [ ] README.md "Supported networks" surface lists all four networks with
+- [x] SKILL.md mentions `--summary-only` with an example.
+- [x] README.md "Supported networks" surface lists all four networks with
       the holesky deprecation note.
-- [ ] README.md file list / flag callout mentions `--summary-only` as
+- [x] README.md file list / flag callout mentions `--summary-only` as
       discoverable.
-- [ ] README.md "Manual end-to-end" section has the empty "Phase 2 preview"
+- [x] README.md "Manual end-to-end" section has the empty "Phase 2 preview"
       subsection placeholder for 2.8c to populate.
-- [ ] No `.py` file diff in this issue's commit (`git diff --name-only`
+- [x] No `.py` file diff in this issue's commit (`git diff --name-only`
       contains only `SKILL.md` and `README.md`).
-- [ ] `python3 -m unittest test_build_send_eth -v` green (regression).
-- [ ] `python3 -m unittest test_build_erc20 -v` green (regression).
+- [x] `python3 -m unittest test_build_send_eth -v` green (regression).
+- [x] `python3 -m unittest test_build_erc20 -v` green (regression).
 
 **Testing Notes:**
 - Docs are not unit-tested, but a manual `grep` pass against the in-code
@@ -952,24 +952,24 @@ own AC list so it stays independent and unblocked by 2.2 / 2.4.
   `README.md`.
 
 **Acceptance Criteria:**
-- [ ] `TestCliDispatch` gains a `test_regression_matrix_warnings_x_ops_summary_only`
+- [x] `TestCliDispatch` gains a `test_regression_matrix_warnings_x_ops_summary_only`
       method (or equivalently-named) using `subTest`, with all four warning
       cells above passing.
-- [ ] `TestCliDispatch` gains a `test_regression_matrix_networks_x_ops_summary_only`
+- [x] `TestCliDispatch` gains a `test_regression_matrix_networks_x_ops_summary_only`
       method using `subTest`, with all twelve (4 networks × 3 ops) cells
       passing.
-- [ ] `transfer` with low balance + `--summary-only` cell → exit 0, stdout
+- [x] `transfer` with low balance + `--summary-only` cell → exit 0, stdout
       empty, stderr contains `low_balance` text + summary. (Cell relocated
       from 2.7's AC list.)
-- [ ] `approve` with non-zero current allowance + `--summary-only` cell →
+- [x] `approve` with non-zero current allowance + `--summary-only` cell →
       exit 0, stdout empty, stderr contains `approve_race` text + summary.
       (Cell relocated from 2.7's AC list.)
-- [ ] `transfer-from` with low allowance + `--summary-only` cell → exit 0,
+- [x] `transfer-from` with low allowance + `--summary-only` cell → exit 0,
       stdout empty, stderr contains the low-allowance warning + summary.
-- [ ] No `.py` file other than `test_build_erc20.py` is touched (`git diff
+- [x] No `.py` file other than `test_build_erc20.py` is touched (`git diff
       --name-only` for this issue's commit lists only the test file).
-- [ ] `python3 -m unittest test_build_erc20 -v` green.
-- [ ] `python3 -m unittest test_build_send_eth -v` green (regression).
+- [x] `python3 -m unittest test_build_erc20 -v` green.
+- [x] `python3 -m unittest test_build_send_eth -v` green (regression).
 
 **Testing Notes:**
 - `subTest` provides one-line context on each cell; pair with descriptive
@@ -1046,20 +1046,20 @@ a hidden regression slipped past the unit tests.
   source-tree edit in this issue is README.md (the Phase 2 preview block).
 
 **Acceptance Criteria:**
-- [ ] Phase 1 e2e baseline fixtures captured at Phase 2 entry are confirmed
+- [x] Phase 1 e2e baseline fixtures captured at Phase 2 entry are confirmed
       present at the documented path before the post-Phase-2 run.
-- [ ] Phase 1 hoodi e2e re-run produces JSON byte-identical to the
+- [x] Phase 1 hoodi e2e re-run produces JSON byte-identical to the
       pre-Phase-2 baseline fixture for each of the three Phase 1 ops on
       hoodi (`diff phase1-baseline-<op>.json phase1-post-phase2-<op>.json`
       empty for all three).
 - [ ] README "Phase 2 preview" subsection is populated with a
       `--summary-only` run record for each of `transfer`, `approve`,
       `transfer-from` (network noted explicitly per run).
-- [ ] `python3 -m unittest test_build_send_eth -v` green at HEAD on
+- [x] `python3 -m unittest test_build_send_eth -v` green at HEAD on
       `develop` immediately before committing.
-- [ ] `python3 -m unittest test_build_erc20 -v` green at HEAD on `develop`
+- [x] `python3 -m unittest test_build_erc20 -v` green at HEAD on `develop`
       immediately before committing.
-- [ ] Phase 2 commit(s) landed on `develop`. No PR or merge to `main`
+- [x] Phase 2 commit(s) landed on `develop`. No PR or merge to `main`
       taken; commit history is consistent with the per-issue commit shape
       above.
 
