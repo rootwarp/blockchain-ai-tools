@@ -17,6 +17,16 @@ class TestNetworkConfig(unittest.TestCase):
         self.assertEqual(chain_id, 560048)
         self.assertEqual(url, "https://ethereum-hoodi-rpc.publicnode.com")
 
+    def test_sepolia(self):
+        chain_id, url = b.network_config("sepolia")
+        self.assertEqual(chain_id, 11155111)
+        self.assertEqual(url, "https://ethereum-sepolia-rpc.publicnode.com")
+
+    def test_holesky(self):
+        chain_id, url = b.network_config("holesky")
+        self.assertEqual(chain_id, 17000)
+        self.assertEqual(url, "https://ethereum-holesky-rpc.publicnode.com")
+
     def test_unknown_network_raises(self):
         with self.assertRaises(ValueError):
             b.network_config("goerli")

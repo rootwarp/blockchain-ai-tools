@@ -16,6 +16,8 @@ import urllib.request
 NETWORKS = {
     "mainnet": (1, "https://ethereum-rpc.publicnode.com"),
     "hoodi": (560048, "https://ethereum-hoodi-rpc.publicnode.com"),
+    "sepolia": (11155111, "https://ethereum-sepolia-rpc.publicnode.com"),
+    "holesky": (17000, "https://ethereum-holesky-rpc.publicnode.com"),
 }
 
 DEFAULT_TIP_WEI = 1_000_000_000  # 1 gwei, fallback when eth_maxPriorityFeePerGas is unavailable
