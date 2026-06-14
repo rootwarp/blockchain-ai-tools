@@ -14,6 +14,7 @@ import json
 import re
 import sys
 import time
+import urllib.parse
 import urllib.request
 
 # network -> (chainId, rpc_url)
@@ -29,6 +30,15 @@ WEI_PER_ETH = 1_000_000_000_000_000_000
 DEFAULT_WAIT_TIMEOUT = 120  # seconds to wait for a receipt with --wait
 DEFAULT_POLL_INTERVAL = 4   # seconds between receipt polls
 
+# --- passthrough safety (call op) ---
+_DENY_METHODS = frozenset({
+    "eth_sendRawTransaction", "eth_sendTransaction",
+    "eth_sign", "eth_signTransaction",
+    "eth_signTypedData", "eth_signTypedData_v3", "eth_signTypedData_v4",
+})
+_DENY_PREFIXES = ("personal_", "admin_", "miner_", "engine_", "clique_")
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
 
 def network_config(network):
     """Return (chain_id, rpc_url) for a network name, or raise ValueError."""
@@ -38,6 +48,49 @@ def network_config(network):
         raise ValueError(
             "unknown network %r; expected one of %s" % (network, sorted(NETWORKS))
         )
+
+
+# === MODULE: endpoint_resolution ===
+# Public: _validate_rpc_url(url) -> str
+# Public: _resolve_endpoint(network, rpc_url, chain_id) -> (int, str)
+
+def _validate_rpc_url(url):
+    """Return url unchanged if it is a safe RPC endpoint; else raise ValueError.
+
+    HTTPS is always accepted. HTTP is accepted only for loopback hosts
+    (127.0.0.1, localhost, ::1) — relies on documented
+    SplitResult.hostname semantics: bracket-stripping + lowercasing.
+    """
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme not in ("http", "https"):
+        raise ValueError(
+            "unsupported scheme %r in RPC URL (expected http or https)" % parts.scheme
+        )
+    if parts.scheme == "http":
+        if parts.hostname not in _LOOPBACK_HOSTS:
+            raise ValueError(
+                "http:// RPC URL is only allowed for loopback hosts "
+                "(%s); got %r" % (sorted(_LOOPBACK_HOSTS), parts.hostname)
+            )
+    return url
+
+
+def _resolve_endpoint(network=None, rpc_url=None, chain_id=None):
+    """Return (chain_id_int, url_str) for the given endpoint selection.
+
+    Exactly one of the two modes must be used:
+      - Named network: pass network=<name>; rpc_url and chain_id must be None.
+      - Custom endpoint: pass rpc_url + chain_id; network must be None.
+    """
+    if network is not None and (rpc_url is not None or chain_id is not None):
+        raise ValueError("use --network OR (--rpc-url + --chain-id), not both")
+    if network is not None:
+        return network_config(network)
+    if rpc_url is None or chain_id is None:
+        raise ValueError("--rpc-url and --chain-id are required together")
+    return (int(chain_id), _validate_rpc_url(rpc_url))
+
+# === END MODULE: endpoint_resolution ===
 
 
 _ADDR_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")

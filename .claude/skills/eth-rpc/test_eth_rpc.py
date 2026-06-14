@@ -429,6 +429,112 @@ class TestWeiToEthStr(unittest.TestCase):
 SKILL_DIR = pathlib.Path(__file__).parent
 
 
+class TestDenylistContents(unittest.TestCase):
+    """Drift guard (ADR-011): any intentional change to the denylist constants
+    requires updating both the constant and this test in the same commit."""
+
+    def test_deny_methods_exact(self):
+        self.assertEqual(
+            r._DENY_METHODS,
+            frozenset({
+                "eth_sendRawTransaction",
+                "eth_sendTransaction",
+                "eth_sign",
+                "eth_signTransaction",
+                "eth_signTypedData",
+                "eth_signTypedData_v3",
+                "eth_signTypedData_v4",
+            }),
+        )
+
+    def test_deny_prefixes_exact(self):
+        self.assertEqual(
+            r._DENY_PREFIXES,
+            ("personal_", "admin_", "miner_", "engine_", "clique_"),
+        )
+
+    def test_loopback_hosts_exact(self):
+        self.assertEqual(
+            r._LOOPBACK_HOSTS,
+            frozenset({"127.0.0.1", "localhost", "::1"}),
+        )
+
+
+class TestValidateRpcUrl(unittest.TestCase):
+    def test_https_accepted(self):
+        url = "https://ethereum-rpc.publicnode.com"
+        self.assertEqual(r._validate_rpc_url(url), url)
+
+    def test_http_loopback_ipv4_accepted(self):
+        url = "http://127.0.0.1:8545"
+        self.assertEqual(r._validate_rpc_url(url), url)
+
+    def test_http_loopback_localhost_accepted(self):
+        url = "http://localhost:8545"
+        self.assertEqual(r._validate_rpc_url(url), url)
+
+    def test_http_loopback_ipv6_accepted(self):
+        # Bracketed form in URL; urlsplit strips brackets -> "::1"
+        url = "http://[::1]:8545"
+        self.assertEqual(r._validate_rpc_url(url), url)
+
+    def test_http_non_loopback_rejected(self):
+        with self.assertRaises(ValueError):
+            r._validate_rpc_url("http://example.com")
+
+    def test_ftp_scheme_rejected(self):
+        with self.assertRaises(ValueError):
+            r._validate_rpc_url("ftp://example.com/rpc")
+
+    def test_unsupported_scheme_rejected(self):
+        with self.assertRaises(ValueError):
+            r._validate_rpc_url("ws://127.0.0.1:8545")
+
+
+class TestResolveEndpoint(unittest.TestCase):
+    def test_named_network_hoodi(self):
+        chain_id, url = r._resolve_endpoint(network="hoodi")
+        self.assertEqual(chain_id, 560048)
+        self.assertEqual(url, "https://ethereum-hoodi-rpc.publicnode.com")
+
+    def test_named_network_mainnet(self):
+        chain_id, url = r._resolve_endpoint(network="mainnet")
+        self.assertEqual(chain_id, 1)
+        self.assertEqual(url, "https://ethereum-rpc.publicnode.com")
+
+    def test_custom_url_and_chain_id(self):
+        chain_id, url = r._resolve_endpoint(
+            rpc_url="http://127.0.0.1:8545", chain_id=31337
+        )
+        self.assertEqual(chain_id, 31337)
+        self.assertEqual(url, "http://127.0.0.1:8545")
+
+    def test_mutual_exclusion_raises(self):
+        with self.assertRaises(ValueError) as ctx:
+            r._resolve_endpoint(
+                network="hoodi", rpc_url="http://127.0.0.1:8545", chain_id=31337
+            )
+        self.assertIn("not both", str(ctx.exception))
+
+    def test_mutual_exclusion_network_with_url_only_raises(self):
+        with self.assertRaises(ValueError):
+            r._resolve_endpoint(network="hoodi", rpc_url="http://127.0.0.1:8545")
+
+    def test_missing_chain_id_raises(self):
+        with self.assertRaises(ValueError) as ctx:
+            r._resolve_endpoint(rpc_url="http://127.0.0.1:8545")
+        self.assertIn("required together", str(ctx.exception))
+
+    def test_missing_rpc_url_raises(self):
+        with self.assertRaises(ValueError) as ctx:
+            r._resolve_endpoint(chain_id=31337)
+        self.assertIn("required together", str(ctx.exception))
+
+    def test_neither_mode_raises(self):
+        with self.assertRaises(ValueError):
+            r._resolve_endpoint()
+
+
 class TestCliSmoke(unittest.TestCase):
     def test_help_runs(self):
         # Executes the module directly (not import) — catches definition-order bugs.
