@@ -503,6 +503,66 @@ class TestContractReads(unittest.TestCase):
                               holder="0x" + "1" * 40,
                               spender="0x" + "2" * 40)
 
+    # --- SEL_BALANCE_OF constant ---
+
+    def test_sel_balance_of_value(self):
+        """SEL_BALANCE_OF == '0x70a08231' (keccak256('balanceOf(address)')[:4])."""
+        self.assertEqual(b.SEL_BALANCE_OF, "0x70a08231")
+
+    # --- encode_balance_of_call ---
+
+    def test_encode_balance_of_call_zero_address(self):
+        """encode_balance_of_call('0x'+'00'*20) returns selector + zero-padded word."""
+        result = b.encode_balance_of_call("0x" + "00" * 20)
+        self.assertEqual(result, "0x70a08231" + "00" * 32)
+
+    def test_encode_balance_of_call_bit_pattern(self):
+        """encode_balance_of_call round-trips against a mixed-case address."""
+        holder = "0x890e560a6012bFA5d0d71a4a107dBa4Aed698f38"
+        result = b.encode_balance_of_call(holder)
+        expected = (
+            "0x70a08231"
+            + format(int(holder, 16), "064x")
+        )
+        self.assertEqual(result, expected)
+
+    # --- decode_balance ---
+
+    def test_decode_balance_zero(self):
+        self.assertEqual(b.decode_balance("0x" + "0" * 64), 0)
+
+    def test_decode_balance_ten(self):
+        self.assertEqual(b.decode_balance("0x" + "0" * 63 + "a"), 10)
+
+    def test_decode_balance_max_uint256(self):
+        self.assertEqual(b.decode_balance("0x" + "f" * 64), (1 << 256) - 1)
+
+    # --- fetch_balance_of ---
+
+    def test_fetch_balance_of_happy_path(self):
+        """Returns 6 when rpc returns a 32-byte word with low byte 0x06."""
+        hex_6 = "0x" + "0" * 62 + "06"
+        mock_rpc = mock.Mock(return_value=hex_6)
+        token = "0x" + "a" * 40
+        holder = "0x" + "1" * 40
+        result = b.fetch_balance_of(rpc=mock_rpc, url="https://x",
+                                    token=token, holder=holder)
+        self.assertEqual(result, 6)
+        args = mock_rpc.call_args
+        self.assertEqual(args[0][1], "eth_call")
+        call_obj = args[0][2][0]
+        self.assertEqual(call_obj["to"], token)
+        self.assertTrue(call_obj["data"].startswith("0x70a08231"))
+        self.assertEqual(args[0][2][1], "latest")
+
+    def test_fetch_balance_of_propagates_rpc_error(self):
+        """RPCError propagates (soft-check posture is caller's job per ADR-006)."""
+        mock_rpc = mock.Mock(side_effect=b._core.RPCError("down"))
+        with self.assertRaises(b._core.RPCError):
+            b.fetch_balance_of(rpc=mock_rpc, url="https://x",
+                               token="0x" + "a" * 40,
+                               holder="0x" + "1" * 40)
+
 
 class TestGasEstimator(unittest.TestCase):
     """Tests for the Layer 2 gas_estimator section."""

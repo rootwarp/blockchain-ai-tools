@@ -41,6 +41,7 @@ SEL_TRANSFER_FROM  = "0x23b872dd"   # keccak256("transferFrom(address,address,ui
 SEL_DECIMALS       = "0x313ce567"   # keccak256("decimals()")[:4]
 SEL_SYMBOL         = "0x95d89b41"   # keccak256("symbol()")[:4]
 SEL_ALLOWANCE      = "0xdd62ed3e"   # keccak256("allowance(address,address)")[:4]
+SEL_BALANCE_OF     = "0x70a08231"   # keccak256("balanceOf(address)")[:4]
 
 MAX_DECIMALS = 36  # research §1.4; rejects hostile values above this ceiling
 
@@ -106,6 +107,11 @@ def encode_allowance_call(holder, spender):
     return _pack_call(SEL_ALLOWANCE, _encode_address(holder), _encode_address(spender))
 
 
+def encode_balance_of_call(holder):
+    """ABI-encode a balanceOf(address) read calldata."""
+    return _pack_call(SEL_BALANCE_OF, _encode_address(holder))
+
+
 def decode_decimals(hex_result):
     """Decode the uint8 return from decimals().
 
@@ -168,6 +174,15 @@ def decode_allowance(hex_result):
             "decode_allowance: result is not a hex string: got %s" % type(hex_result).__name__
         )
     return int(hex_result, 16)
+
+
+def decode_balance(hex_result):
+    """Decode the uint256 return from balanceOf().
+
+    Delegates to _core.parse_hex_int, which parses a 0x-prefixed hex string
+    into an integer (a single 32-byte uint256 word, same shape as allowance).
+    """
+    return _core.parse_hex_int(hex_result)
 
 # === end Layer 1: abi_codec ===
 
@@ -305,6 +320,27 @@ def fetch_allowance(rpc, url, token, holder, spender):
     call_obj = {"to": token, "data": encode_allowance_call(holder, spender)}
     hex_result = rpc(url, "eth_call", [call_obj, "latest"])
     return decode_allowance(hex_result)
+
+
+def fetch_balance_of(rpc, url, token, holder):
+    """Fetch the ERC-20 balanceOf(holder) for the given token. FATAL on failure.
+
+    No try/except — RPCError propagates by design. The soft-check
+    try/except is the caller's responsibility (architecture ADR-006,
+    see tx_assembly.do_transfer).
+
+    Args:
+        rpc: callable with signature rpc(url, method, params) -> result.
+        url: RPC endpoint URL string.
+        token: token contract address (hex string with 0x prefix).
+        holder: address to query balance for (hex string with 0x prefix).
+
+    Returns:
+        int: current balance in base units (uint256).
+    """
+    call_obj = {"to": token, "data": encode_balance_of_call(holder)}
+    hex_result = rpc(url, "eth_call", [call_obj, "latest"])
+    return decode_balance(hex_result)
 
 # === end Layer 2: contract_reads ===
 
