@@ -1568,6 +1568,13 @@ class TestDecodeResult(unittest.TestCase):
         result = r._decode_result("eth_blockNumber", "not-hex")
         self.assertEqual(result, "not-hex")
 
+    def test_bare_0x_passthrough(self):
+        # "0x" with no hex digits: int("0x", 16) raises ValueError,
+        # which the decoder catches -> passthrough (returns string unchanged).
+        result = r._decode_result("eth_blockNumber", "0x")
+        self.assertEqual(result, "0x")
+        self.assertIsInstance(result, str)
+
     def test_hex_quantity_methods_frozenset(self):
         # Drift guard: the frozenset must contain exactly these seven methods
         self.assertEqual(
