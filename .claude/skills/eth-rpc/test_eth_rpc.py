@@ -1244,16 +1244,24 @@ class TestParseParams(unittest.TestCase):
         result = r._parse_params("@/path/to/params.json", opener=opener)
         self.assertEqual(result, [{"fromBlock": "0x0", "toBlock": "0x10"}])
 
+    def _make_missing_opener(self, path):
+        """Return a fake opener that raises FileNotFoundError for the given path."""
+        def opener(p, mode="r"):
+            raise FileNotFoundError(2, "No such file or directory", p)
+        return opener
+
     def test_at_file_no_such_file_raises(self):
-        # Real filesystem: no such file
+        # Inject a fake opener that raises FileNotFoundError (no real filesystem access).
+        opener = self._make_missing_opener("/no/such/file.json")
         with self.assertRaises(ValueError) as ctx:
-            r._parse_params("@/no/such/file.json")
+            r._parse_params("@/no/such/file.json", opener=opener)
         self.assertIn("/no/such/file.json", str(ctx.exception))
 
     def test_at_dash_raises_with_path_in_message(self):
-        # @- falls into file branch; must raise a clear ValueError, not open stdin
+        # @- falls into file branch; inject a fake opener that raises FileNotFoundError.
+        opener = self._make_missing_opener("-")
         with self.assertRaises(ValueError) as ctx:
-            r._parse_params("@-")
+            r._parse_params("@-", opener=opener)
         self.assertIn("@-", str(ctx.exception))
 
     def test_stdin_regression(self):
