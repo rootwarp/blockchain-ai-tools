@@ -941,6 +941,86 @@ class TestSummary(unittest.TestCase):
         self.assertIn("WARNING:", output)
         self.assertIn("rpc down", output)
 
+    # --- warn_approve_race ---
+
+    def test_warn_approve_race_writes_warning_prefix(self):
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+            b.warn_approve_race(
+                holder="0x" + "1" * 40,
+                spender="0x" + "2" * 40,
+                current=5_000_000,
+                requested=1_000_000,
+                decimals=6,
+                symbol="USDC",
+            )
+            output = fake_err.getvalue()
+        self.assertIn("WARNING:", output)
+        self.assertIn("0x" + "2" * 40, output)  # spender must appear
+
+    def test_warn_approve_race_contains_swc114_reference(self):
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+            b.warn_approve_race(
+                holder="0x" + "1" * 40,
+                spender="0x" + "2" * 40,
+                current=5_000_000,
+                requested=1_000_000,
+                decimals=6,
+                symbol="USDC",
+            )
+            output = fake_err.getvalue()
+        self.assertIn("SWC-114", output)
+
+    def test_warn_approve_race_writes_to_stderr(self):
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+                b.warn_approve_race(
+                    holder="0x" + "1" * 40,
+                    spender="0x" + "2" * 40,
+                    current=5_000_000,
+                    requested=1_000_000,
+                    decimals=6,
+                    symbol="USDC",
+                )
+        self.assertGreater(len(fake_err.getvalue()), 0)
+        self.assertEqual(fake_out.getvalue(), "")
+
+    # --- warn_approve_race_check_skipped ---
+
+    def test_warn_approve_race_check_skipped_contains_reason(self):
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+            b.warn_approve_race_check_skipped(reason="rpc timeout")
+            output = fake_err.getvalue()
+        self.assertIn("WARNING:", output)
+        self.assertIn("rpc timeout", output)
+
+    def test_warn_approve_race_check_skipped_build_continues(self):
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+            b.warn_approve_race_check_skipped(reason="down")
+            output = fake_err.getvalue()
+        self.assertIn("Build continues", output)
+
+    # --- emit_warning: approve_race and approve_race_check_skipped ---
+
+    def test_emit_warning_approve_race_dispatches(self):
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+            b.emit_warning("approve_race", {
+                "holder": "0x" + "1" * 40,
+                "spender": "0x" + "2" * 40,
+                "current": 5_000_000,
+                "requested": 1_000_000,
+                "decimals": 6,
+                "symbol": "USDC",
+            })
+            output = fake_err.getvalue()
+        self.assertIn("WARNING:", output)
+
+    def test_emit_warning_approve_race_check_skipped_dispatches(self):
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+            b.emit_warning("approve_race_check_skipped", {"reason": "rpc down"})
+            output = fake_err.getvalue()
+        self.assertIn("WARNING:", output)
+        self.assertIn("rpc down", output)
+
 
 class TestTxAssembly(unittest.TestCase):
     """Tests for the Layer 3 tx_assembly section.
@@ -1298,7 +1378,8 @@ class TestTxAssembly(unittest.TestCase):
     # -----------------------------------------------------------------------
 
     def test_do_approve_happy_path_tx_shape(self):
-        rpc = self._make_rpc_for_transfer()
+        # Use allowance_hex=0 so no approve_race warning fires (common first-approval case)
+        rpc = self._make_rpc_for_transfer(allowance_hex="0x" + "0" * 64)
         tx, ctx, warns = b.do_approve(
             network="mainnet", token=self.TOKEN, spender=self.SPENDER,
             amount="1.5", sender=self.SENDER, rpc=rpc,
@@ -1336,6 +1417,115 @@ class TestTxAssembly(unittest.TestCase):
         self.assertEqual(kind, "approve_max")
         self.assertIn("token", payload)
         self.assertIn("spender", payload)
+
+    # -----------------------------------------------------------------------
+    # do_approve — approve-race guard (Issue 2.4)
+    # -----------------------------------------------------------------------
+
+    def test_do_approve_race_zero_allowance_no_warning(self):
+        """Allowance == 0 → no approve_race warning (most common modern case)."""
+        rpc = self._make_rpc_for_transfer(allowance_hex="0x" + "0" * 64)
+        _, _, warns = b.do_approve(
+            network="mainnet", token=self.TOKEN, spender=self.SPENDER,
+            amount="1.5", sender=self.SENDER, rpc=rpc,
+        )
+        race_warns = [w for w in warns if w[0] == "approve_race"]
+        self.assertEqual(race_warns, [])
+
+    def test_do_approve_race_allowance_equals_requested_no_warning(self):
+        """Allowance == requested → no race (no-op approve, same amount)."""
+        # amount="1.5" with decimals=6 → amount_base=1_500_000
+        rpc = self._make_rpc_for_transfer(
+            allowance_hex="0x" + format(1_500_000, "064x")
+        )
+        _, _, warns = b.do_approve(
+            network="mainnet", token=self.TOKEN, spender=self.SPENDER,
+            amount="1.5", sender=self.SENDER, rpc=rpc,
+        )
+        race_warns = [w for w in warns if w[0] == "approve_race"]
+        self.assertEqual(race_warns, [])
+
+    def test_do_approve_race_nonzero_allowance_different_amount_queues_warning(self):
+        """Allowance != 0 AND != requested → approve_race warning; tx still built."""
+        rpc = self._make_rpc_for_transfer(
+            allowance_hex="0x" + format(5_000_000, "064x")  # 5 USDC, != 1.5 USDC requested
+        )
+        tx, _, warns = b.do_approve(
+            network="mainnet", token=self.TOKEN, spender=self.SPENDER,
+            amount="1.5", sender=self.SENDER, rpc=rpc,
+        )
+        race_warns = [w for w in warns if w[0] == "approve_race"]
+        self.assertEqual(len(race_warns), 1)
+        kind, payload = race_warns[0]
+        self.assertEqual(kind, "approve_race")
+        self.assertIn("holder", payload)
+        self.assertIn("spender", payload)
+        self.assertIn("current", payload)
+        self.assertIn("requested", payload)
+        self.assertIn("decimals", payload)
+        self.assertIn("symbol", payload)
+        # tx is still built
+        self.assertIn("data", tx)
+
+    def test_do_approve_max_no_race_check(self):
+        """approve_max=True → only approve_max warning; no approve_race."""
+        rpc = self._make_rpc_for_transfer(
+            allowance_hex="0x" + format(5_000_000, "064x")
+        )
+        _, _, warns = b.do_approve(
+            network="mainnet", token=self.TOKEN, spender=self.SPENDER,
+            amount=None, sender=self.SENDER, approve_max=True, rpc=rpc,
+        )
+        kinds = [w[0] for w in warns]
+        self.assertIn("approve_max", kinds)
+        self.assertNotIn("approve_race", kinds)
+
+    def test_do_approve_zero_amount_no_race_check(self):
+        """amount=0 (revocation) → no approve_race warning."""
+        rpc = self._make_rpc_for_transfer(
+            allowance_hex="0x" + format(5_000_000, "064x")
+        )
+        _, _, warns = b.do_approve(
+            network="mainnet", token=self.TOKEN, spender=self.SPENDER,
+            amount="0", sender=self.SENDER, rpc=rpc,
+        )
+        race_warns = [w for w in warns if w[0] == "approve_race"]
+        self.assertEqual(race_warns, [])
+
+    def test_do_approve_race_rpc_error_queues_skipped_warning(self):
+        """Allowance RPC error → approve_race_check_skipped warning; tx still built."""
+        base_rpc = self._make_rpc_for_transfer()
+
+        def _rpc_allowance_fails(url, method, params):
+            if method == "eth_call":
+                call_obj = params[0]
+                data = call_obj.get("data", "")
+                if data.startswith(b.SEL_ALLOWANCE):
+                    raise b._core.RPCError("allowance rpc down")
+            return base_rpc(url, method, params)
+
+        tx, _, warns = b.do_approve(
+            network="mainnet", token=self.TOKEN, spender=self.SPENDER,
+            amount="1.5", sender=self.SENDER, rpc=_rpc_allowance_fails,
+        )
+        race_warns = [w for w in warns if w[0] == "approve_race_check_skipped"]
+        self.assertEqual(len(race_warns), 1)
+        kind, payload = race_warns[0]
+        self.assertIn("reason", payload)
+        self.assertIn("data", tx)
+
+    def test_do_approve_estimate_gas_error_propagates(self):
+        """estimate_gas RPCError propagates; not caught by race check (ADR-007)."""
+        def _rpc_gas_fails(url, method, params):
+            if method == "eth_estimateGas":
+                raise b._core.RPCError("gas reverted")
+            return self._make_rpc_for_transfer()(url, method, params)
+
+        with self.assertRaises(b._core.RPCError):
+            b.do_approve(
+                network="mainnet", token=self.TOKEN, spender=self.SPENDER,
+                amount="1.5", sender=self.SENDER, rpc=_rpc_gas_fails,
+            )
 
     # -----------------------------------------------------------------------
     # do_transfer_from — happy path (sufficient allowance)
@@ -1750,6 +1940,32 @@ class TestCliDispatch(unittest.TestCase):
     # -----------------------------------------------------------------------
     # balanceOf soft-check at the CLI layer (Issue 2.2)
     # -----------------------------------------------------------------------
+
+    def test_approve_race_warning_returns_0_warning_on_stderr_json_on_stdout(self):
+        """Non-zero current allowance → exit 0, WARNING: on stderr, valid JSON on stdout."""
+        approve_ctx = dict(self.FAKE_CTX, operation="approve",
+                           holder=self.SENDER, spender=self.SPENDER, is_max_uint=False)
+        warns = [("approve_race", {
+            "holder":    self.SENDER,
+            "spender":   self.SPENDER,
+            "current":   5_000_000,
+            "requested": 1_500_000,
+            "decimals":  6,
+            "symbol":    "USDC",
+        })]
+        with mock.patch("build_erc20.do_approve",
+                        return_value=(self.FAKE_TX, approve_ctx, warns)):
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+                with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+                    result = b.main([
+                        "approve", "--network", "mainnet",
+                        "--token", self.TOKEN, "--spender", self.SPENDER,
+                        "--amount", "1.5", "--sender", self.SENDER,
+                    ])
+        self.assertEqual(result, 0)
+        self.assertIn("WARNING:", fake_err.getvalue())
+        parsed = json.loads(fake_out.getvalue())
+        self.assertEqual(parsed, self.FAKE_TX)
 
     def test_transfer_low_balance_returns_0_warning_on_stderr_json_on_stdout(self):
         """Low balance: exit 0, WARNING: on stderr, valid JSON on stdout."""

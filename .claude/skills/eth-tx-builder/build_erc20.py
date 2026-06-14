@@ -543,6 +543,39 @@ def warn_balance_check_skipped(reason):
     )
 
 
+def warn_approve_race(holder, spender, current, requested, decimals, symbol):
+    """Write the approve-race WARNING block to stderr (multi-line, names SWC-114).
+
+    Fires when the current allowance is non-zero AND different from the requested
+    amount, indicating the ERC-20 approve race window (SWC-114) is open.
+    """
+    sym = symbol if symbol is not None else "<unknown>"
+    current_human = base_units_to_human(current, decimals)
+    requested_human = base_units_to_human(requested, decimals)
+    msg = (
+        "WARNING: current allowance(%s, %s) is %d (%s %s);"
+        " requested approve is %d (%s %s).\n"
+        "The ERC-20 \"approve race\" (SWC-114) lets the spender front-run this"
+        " transaction to pull tokens at the OLD allowance and then again at the"
+        " NEW. To eliminate the race, broadcast approve(%s, 0) first, then this"
+        " approve.\n"
+        % (
+            holder, spender,
+            current, current_human, sym,
+            requested, requested_human, sym,
+            spender,
+        )
+    )
+    sys.stderr.write(msg)
+
+
+def warn_approve_race_check_skipped(reason):
+    """Write an approve-race-check-skipped WARNING line to stderr."""
+    sys.stderr.write(
+        "WARNING: approve-race pre-check skipped: %s. Build continues.\n" % reason
+    )
+
+
 def warn_symbol_unavailable():
     """Write a symbol-unavailable WARNING line to stderr (optional, info-only)."""
     sys.stderr.write(
@@ -555,7 +588,7 @@ def emit_warning(kind, payload):
 
     kind must be one of: "approve_max", "low_allowance",
     "allowance_check_skipped", "symbol_unavailable", "low_balance",
-    "balance_check_skipped".
+    "balance_check_skipped", "approve_race", "approve_race_check_skipped".
 
     Raises ValueError on an unknown kind (defensive — a typo in tx_assembly
     should surface in tests rather than silently dropping a warning).
@@ -570,6 +603,10 @@ def emit_warning(kind, payload):
         warn_low_balance(**payload)
     elif kind == "balance_check_skipped":
         warn_balance_check_skipped(**payload)
+    elif kind == "approve_race":
+        warn_approve_race(**payload)
+    elif kind == "approve_race_check_skipped":
+        warn_approve_race_check_skipped(**payload)
     elif kind == "symbol_unavailable":
         if payload:  # Fix 5: symbol_unavailable accepts no payload
             raise ValueError("symbol_unavailable takes no payload, got: %r" % payload)
@@ -751,6 +788,18 @@ def do_approve(network, token, spender, amount, sender, *,
         amount_base = human_to_base_units(amount, decimals)
     # Step 5: Build calldata.
     calldata = encode_approve(spender, amount_base)
+    # Step 5a: Approve-race soft check — only on bounded, non-zero approvals.
+    # Revocations (amount==0) and --approve-max have no race window to warn about.
+    if not approve_max and amount_base != 0:
+        warnings.extend(_soft_check_allowance(
+            rpc, url, token, holder=sender, spender=spender,
+            requested=amount_base,
+            skipped_kind="approve_race_check_skipped",
+            low_kind="approve_race",
+            low_payload_extra={"holder": sender, "spender": spender,
+                               "decimals": decimals, "symbol": symbol},
+            trigger=lambda cur, req: cur != 0 and cur != req,
+        ))
     # Step 6: Estimate gas — FATAL; RPCError propagates (ADR-007).
     gas = estimate_gas(rpc, url, sender, token, calldata)
     # Step 7: Fetch nonce and fees.
