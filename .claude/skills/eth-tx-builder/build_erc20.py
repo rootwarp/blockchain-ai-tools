@@ -228,6 +228,70 @@ def base_units_to_human(amount, decimals):
 
 # === Layer 2: contract_reads ===
 
+
+def fetch_decimals(rpc, url, token):
+    """Fetch the token's decimals() value from the chain. FATAL on failure.
+
+    No try/except — RPCError propagates by design (architecture ADR-006).
+    Raises ValueError if the returned value exceeds MAX_DECIMALS.
+
+    Args:
+        rpc: callable with signature rpc(url, method, params) -> result.
+             Defaults to _core.rpc_call when called from tx_assembly.
+        url: RPC endpoint URL string.
+        token: token contract address (hex string with 0x prefix).
+
+    Returns:
+        int: decimals (0 .. MAX_DECIMALS inclusive).
+    """
+    call_obj = {"to": token, "data": encode_decimals_call()}
+    hex_result = rpc(url, "eth_call", [call_obj, "latest"])
+    return decode_decimals(hex_result)
+
+
+def fetch_symbol(rpc, url, token):
+    """Fetch the token's symbol() value from the chain. Best-effort.
+
+    Swallows ALL exceptions and returns None on any failure (architecture
+    ADR-006: enrichment read — degrading gracefully is correct here).
+
+    Args:
+        rpc: callable with signature rpc(url, method, params) -> result.
+        url: RPC endpoint URL string.
+        token: token contract address (hex string with 0x prefix).
+
+    Returns:
+        Optional[str]: the token symbol, or None if unavailable.
+    """
+    try:
+        call_obj = {"to": token, "data": encode_symbol_call()}
+        hex_result = rpc(url, "eth_call", [call_obj, "latest"])
+        return decode_symbol(hex_result)
+    except Exception:
+        return None
+
+
+def fetch_allowance(rpc, url, token, holder, spender):
+    """Fetch the current ERC-20 allowance(holder, spender). FATAL on failure.
+
+    No try/except — RPCError propagates by design. The soft-check
+    try/except is the caller's responsibility (architecture ADR-006,
+    see tx_assembly.do_transfer_from).
+
+    Args:
+        rpc: callable with signature rpc(url, method, params) -> result.
+        url: RPC endpoint URL string.
+        token: token contract address (hex string with 0x prefix).
+        holder: token holder address (hex string with 0x prefix).
+        spender: spender address (hex string with 0x prefix).
+
+    Returns:
+        int: current allowance in base units (uint256).
+    """
+    call_obj = {"to": token, "data": encode_allowance_call(holder, spender)}
+    hex_result = rpc(url, "eth_call", [call_obj, "latest"])
+    return decode_allowance(hex_result)
+
 # === end Layer 2: contract_reads ===
 
 # === Layer 2: gas_estimator ===

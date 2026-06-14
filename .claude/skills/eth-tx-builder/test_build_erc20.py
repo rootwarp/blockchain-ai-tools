@@ -328,5 +328,108 @@ class TestAbiCodec(unittest.TestCase):
         self.assertEqual(b.MAX_DECIMALS, 36)
 
 
+class TestContractReads(unittest.TestCase):
+    """Tests for the Layer 2 contract_reads section.
+
+    All network I/O is mocked via the injected `rpc` kwarg.
+    """
+
+    # --- fetch_decimals ---
+
+    def test_fetch_decimals_happy_path(self):
+        """Returns 6 when rpc returns a 32-byte hex word with low byte 0x06."""
+        hex_6 = "0x" + "0" * 62 + "06"
+        mock_rpc = mock.Mock(return_value=hex_6)
+        token = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+        url = "https://ethereum-rpc.publicnode.com"
+
+        result = b.fetch_decimals(rpc=mock_rpc, url=url, token=token)
+
+        self.assertEqual(result, 6)
+        mock_rpc.assert_called_once()
+        args = mock_rpc.call_args
+        self.assertEqual(args[0][1], "eth_call")   # method
+        self.assertEqual(args[0][2][1], "latest")  # block tag
+
+    def test_fetch_decimals_propagates_rpc_error(self):
+        """RPCError propagates out (FATAL — no catch inside fetch_decimals)."""
+        mock_rpc = mock.Mock(side_effect=b._core.RPCError("boom"))
+        with self.assertRaises(b._core.RPCError):
+            b.fetch_decimals(rpc=mock_rpc, url="https://x", token="0x" + "a" * 40)
+
+    def test_fetch_decimals_rejects_suspicious_value(self):
+        """If decimals > MAX_DECIMALS the decode raises ValueError (propagated)."""
+        # 37 = 0x25 which exceeds MAX_DECIMALS=36
+        hex_37 = "0x" + "0" * 62 + "25"
+        mock_rpc = mock.Mock(return_value=hex_37)
+        with self.assertRaises(ValueError):
+            b.fetch_decimals(rpc=mock_rpc, url="https://x", token="0x" + "a" * 40)
+
+    # --- fetch_symbol ---
+
+    def test_fetch_symbol_happy_path_usdc(self):
+        """Returns 'USDC' when rpc returns a standard ABI-encoded string."""
+        # Standard ABI: offset=32, length=4, payload "USDC" right-padded to 32 bytes
+        offset_word = "0020".zfill(64)
+        length_word = "0004".zfill(64)
+        payload = "55534443" + "00" * 28  # "USDC" in hex + 28 zero bytes
+        hex_result = "0x" + offset_word + length_word + payload
+        mock_rpc = mock.Mock(return_value=hex_result)
+        token = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+
+        result = b.fetch_symbol(rpc=mock_rpc, url="https://x", token=token)
+
+        self.assertEqual(result, "USDC")
+        args = mock_rpc.call_args
+        self.assertEqual(args[0][1], "eth_call")
+        self.assertEqual(args[0][2][1], "latest")
+
+    def test_fetch_symbol_returns_none_on_rpc_error(self):
+        """Returns None (not raises) when rpc raises RPCError (best-effort)."""
+        mock_rpc = mock.Mock(side_effect=b._core.RPCError("gone"))
+        result = b.fetch_symbol(rpc=mock_rpc, url="https://x", token="0x" + "a" * 40)
+        self.assertIsNone(result)
+
+    def test_fetch_symbol_returns_none_when_decode_returns_none(self):
+        """Returns None when decode_symbol returns None (malformed response)."""
+        mock_rpc = mock.Mock(return_value="0xdeadbeef")  # too short for any decode
+        result = b.fetch_symbol(rpc=mock_rpc, url="https://x", token="0x" + "a" * 40)
+        self.assertIsNone(result)
+
+    def test_fetch_symbol_never_raises(self):
+        """Any exception from rpc must be swallowed — never re-raised."""
+        mock_rpc = mock.Mock(side_effect=RuntimeError("unexpected error"))
+        # Should not raise
+        result = b.fetch_symbol(rpc=mock_rpc, url="https://x", token="0x" + "a" * 40)
+        self.assertIsNone(result)
+
+    # --- fetch_allowance ---
+
+    def test_fetch_allowance_happy_path(self):
+        """Returns 10 when rpc returns a 32-byte word with low byte 0x0a."""
+        hex_10 = "0x" + "0" * 62 + "0a"
+        mock_rpc = mock.Mock(return_value=hex_10)
+        token = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+        holder = "0x" + "1" * 40
+        spender = "0x" + "2" * 40
+
+        result = b.fetch_allowance(rpc=mock_rpc, url="https://x", token=token,
+                                   holder=holder, spender=spender)
+
+        self.assertEqual(result, 10)
+        args = mock_rpc.call_args
+        self.assertEqual(args[0][1], "eth_call")
+        self.assertEqual(args[0][2][1], "latest")
+
+    def test_fetch_allowance_propagates_rpc_error(self):
+        """RPCError propagates out (soft-check is caller's job per ADR-006)."""
+        mock_rpc = mock.Mock(side_effect=b._core.RPCError("timeout"))
+        with self.assertRaises(b._core.RPCError):
+            b.fetch_allowance(rpc=mock_rpc, url="https://x",
+                              token="0x" + "a" * 40,
+                              holder="0x" + "1" * 40,
+                              spender="0x" + "2" * 40)
+
+
 if __name__ == "__main__":
     unittest.main()
