@@ -419,7 +419,10 @@ def render_summary(ctx):
     PRD §16 fields. All labels are stable so TestSummary can grep them.
 
     Expected ctx keys:
-        operation        str    e.g. "transfer", "approve", "transfer-from"
+        op_label         str    e.g. "transfer", "approve", "revoke", "transfer-from"
+        operation        str    legacy alias — same value as op_label for Phase 1
+                                ops; present for backward compat but op_label is
+                                the single source of truth for the operation line.
         network          str    e.g. "mainnet"
         chain_id         int    e.g. 1
         token            str    token contract address
@@ -430,15 +433,17 @@ def render_summary(ctx):
         is_max_uint      bool   True -> render base_amount as "MAX UINT256"
         from_            str    sender address (transfer / transfer-from)
         to               str    recipient address (transfer / transfer-from)
-        -- approve-specific keys (when present) --
-        spender          str    (approve)
-        holder           str    (approve / transfer-from)
+        -- approve/revoke-specific keys (when present) --
+        spender          str    (approve / revoke)
+        holder           str    (approve / revoke / transfer-from)
         nonce            int
         gas              int
         max_fee          int    wei
         max_priority_fee int    wei
     """
-    op = ctx["operation"]
+    # op_label is the single source of truth for the operation line (Phase 3 ADR-012).
+    # Fall back to ctx["operation"] for any caller that hasn't been updated yet.
+    op_label = ctx.get("op_label", ctx.get("operation", ""))
     symbol_display = ctx["symbol"] if ctx.get("symbol") is not None else "(unavailable)"
     base_amt_display = (
         "MAX UINT256" if ctx.get("is_max_uint") else str(ctx["base_amount"])
@@ -449,7 +454,7 @@ def render_summary(ctx):
 
     lines = [
         "--- ERC-20 transaction summary ---",
-        "operation         : %s" % op,
+        "operation         : %s" % op_label,
         "network           : %s (chainId %s)" % (ctx["network"], ctx["chain_id"]),
         "token             : %s" % ctx["token"],
         "symbol            : %s" % symbol_display,
@@ -458,14 +463,15 @@ def render_summary(ctx):
         "amount (base units): %s" % base_amt_display,
     ]
 
-    # Role-specific address lines per operation
-    if op == "transfer":
+    # Role-specific address lines per operation.
+    # "revoke" shares the approve address layout (holder + spender).
+    if op_label == "transfer":
         lines.append("from (sender)     : %s" % ctx.get("from_", ""))
         lines.append("to (recipient)    : %s" % ctx.get("to", ""))
-    elif op == "approve":
+    elif op_label in ("approve", "revoke"):
         lines.append("holder (sender)   : %s" % ctx.get("from_", ctx.get("holder", "")))
         lines.append("spender           : %s" % ctx.get("spender", ""))
-    elif op == "transfer-from":
+    elif op_label == "transfer-from":
         lines.append("source (from)     : %s" % ctx.get("from_", ""))
         lines.append("to (recipient)    : %s" % ctx.get("to", ""))
         lines.append("signer / spender  : %s" % ctx.get("sender", ctx.get("signer_spender", "")))
@@ -592,12 +598,39 @@ def warn_symbol_unavailable():
     )
 
 
+def warn_approve_revoke(symbol, token, spender):
+    """Write the --revoke confirmation block to stderr (informational, no WARNING: prefix).
+
+    Unlike warn_approve_max, this is not a WARNING because the operator chose
+    --revoke deliberately — the confirmation block is informational guidance,
+    not a loud alert. Per ADR-012 decision (2): the summary op label already
+    reads "revoke" to echo intent; the confirmation names the exact
+    token + spender so the operator can verify they are revoking the right
+    approval before signing.
+
+    Args:
+        symbol:  Optional[str] — token symbol or None (rendered as "<unknown>").
+        token:   str           — token contract address (0x-prefixed).
+        spender: str           — spender address whose allowance is revoked.
+    """
+    sym = symbol if symbol is not None else "<unknown>"
+    msg = (
+        "Revoking approval: setting allowance to 0 for\n"
+        "  token  : %s (%s)\n"
+        "  spender: %s\n"
+        "This transaction calls approve(spender, 0).\n"
+        % (sym, token, spender)
+    )
+    sys.stderr.write(msg)
+
+
 def emit_warning(kind, payload):
     """Dispatch a (kind, payload_dict) warning tuple to the matching warn_* emitter.
 
     kind must be one of: "approve_max", "low_allowance",
     "allowance_check_skipped", "symbol_unavailable", "low_balance",
-    "balance_check_skipped", "approve_race", "approve_race_check_skipped".
+    "balance_check_skipped", "approve_race", "approve_race_check_skipped",
+    "approve_revoke".
 
     Raises ValueError on an unknown kind (defensive — a typo in tx_assembly
     should surface in tests rather than silently dropping a warning).
@@ -616,6 +649,8 @@ def emit_warning(kind, payload):
         warn_approve_race(**payload)
     elif kind == "approve_race_check_skipped":
         warn_approve_race_check_skipped(**payload)
+    elif kind == "approve_revoke":
+        warn_approve_revoke(**payload)
     elif kind == "symbol_unavailable":
         if payload:  # Fix 5: symbol_unavailable accepts no payload
             raise ValueError("symbol_unavailable takes no payload, got: %r" % payload)
@@ -754,7 +789,8 @@ def do_transfer(network, token, to, amount, sender, *, rpc=_core.rpc_call):
     tx_dict = _build_eip1559_envelope(chain_id, nonce, token, calldata, gas, base_fee, tip)
     # Build summary context with stable keys.
     summary_ctx = {
-        "operation":      "transfer",
+        "op_label":       "transfer",
+        "operation":      "transfer",   # legacy alias; op_label is authoritative
         "network":        network,
         "chain_id":       chain_id,
         "token":          token,
@@ -774,33 +810,58 @@ def do_transfer(network, token, to, amount, sender, *, rpc=_core.rpc_call):
 
 
 def do_approve(network, token, spender, amount, sender, *,
-               approve_max=False, rpc=_core.rpc_call):
+               approve_max=False, revoke=False, rpc=_core.rpc_call):
     """Build an ERC-20 approve(spender, amount) TxRequest.
 
     When approve_max=True, amount must be None; MAX_UINT256 is used and an
-    "approve_max" warning is queued. Returns (tx_dict, summary_ctx, warnings_list).
+    "approve_max" warning is queued.
+    When revoke=True, amount_base is forced to 0; human_to_base_units is NOT
+    called; decimals() is still fetched (preserves ADR-006 fatal-or-skip
+    contract); an "approve_revoke" informational entry is queued.
+    Returns (tx_dict, summary_ctx, warnings_list).
 
     Args:
         network:     str network name.
         token:       str ERC-20 contract address (pre-validated).
         spender:     str spender address (pre-validated).
-        amount:      str human-readable amount, or None when approve_max=True.
+        amount:      str human-readable amount, or None when approve_max/revoke=True.
         sender:      str signing account address (pre-validated).
         approve_max: bool — if True, approve MAX_UINT256 and queue a warning.
+        revoke:      bool — if True, approve 0 and queue an informational entry.
         rpc:         callable — injected for testing.
 
     Returns:
         tuple: (tx_dict, summary_ctx, warnings_list)
+
+    Raises:
+        ValueError: if both revoke=True and approve_max=True are passed
+                    (defense-in-depth; argparse prevents this at the CLI layer).
     """
+    # Defense-in-depth: argparse already rejects --revoke + --approve-max
+    # via the three-way mutex, but direct callers must be guarded too.
+    if revoke and approve_max:
+        raise ValueError("--revoke and --approve-max are mutually exclusive")
     warnings = []
     # Step 1: Resolve network.
     chain_id, url = _core.network_config(network)
     # Steps 2–3: Fetch decimals (FATAL) and symbol (best-effort).
+    # Both are still fetched on every branch including revoke (ADR-006 symmetry
+    # with approve_max=True; the summary always shows decimals for operator review).
     decimals = fetch_decimals(rpc, url, token)
     symbol = fetch_symbol(rpc, url, token)
-    # Step 4: Resolve amount.
-    if approve_max:
+    # Step 4: Resolve amount and operation label.
+    if revoke:
+        # Revocation: set allowance to 0 without converting a human amount.
+        amount_base = 0
+        op_label = "revoke"
+        warnings.append(("approve_revoke", {
+            "symbol": symbol,
+            "token": token,
+            "spender": spender,
+        }))
+    elif approve_max:
         amount_base = MAX_UINT256
+        op_label = "approve"
         warnings.append(("approve_max", {
             "symbol": symbol,
             "token": token,
@@ -808,11 +869,13 @@ def do_approve(network, token, spender, amount, sender, *,
         }))
     else:
         amount_base = human_to_base_units(amount, decimals)
+        op_label = "approve"
     # Step 5: Build calldata.
     calldata = encode_approve(spender, amount_base)
     # Step 5a: Approve-race soft check — only on bounded, non-zero approvals.
-    # Revocations (amount==0) and --approve-max have no race window to warn about.
-    if not approve_max and amount_base != 0:
+    # Revocations (revoke=True or amount==0) and --approve-max have no race
+    # window to warn about.
+    if not approve_max and not revoke and amount_base != 0:
         warnings.extend(_soft_check_allowance(
             rpc, url, token, holder=sender, spender=spender,
             requested=amount_base,
@@ -832,17 +895,25 @@ def do_approve(network, token, spender, amount, sender, *,
     # Step 8: Assemble tx dict.
     tx_dict = _build_eip1559_envelope(chain_id, nonce, token, calldata, gas, base_fee, tip)
     # Build summary context.
+    # human_amount for revoke is "0" (base-unit); for approve_max it's "MAX UINT256".
+    if revoke:
+        human_amount_display = "0"
+    elif approve_max:
+        human_amount_display = "MAX UINT256"
+    else:
+        human_amount_display = amount
     summary_ctx = {
-        "operation":      "approve",
+        "op_label":       op_label,
+        "operation":      op_label,     # legacy alias; op_label is authoritative
         "network":        network,
         "chain_id":       chain_id,
         "token":          token,
         "symbol":         symbol,
         "decimals":       decimals,
-        "human_amount":   "MAX UINT256" if approve_max else amount,
+        "human_amount":   human_amount_display,
         "base_amount":    amount_base,
         "is_max_uint":    approve_max,
-        "from_":          sender,       # holder == sender for approve
+        "from_":          sender,       # holder == sender for approve / revoke
         "holder":         sender,
         "spender":        spender,
         "nonce":          nonce,
@@ -905,7 +976,8 @@ def do_transfer_from(network, token, from_, to, amount, sender, *, rpc=_core.rpc
     tx_dict = _build_eip1559_envelope(chain_id, nonce, token, calldata, gas, base_fee, tip)
     # Build summary context.
     summary_ctx = {
-        "operation":        "transfer-from",
+        "op_label":         "transfer-from",
+        "operation":        "transfer-from",  # legacy alias; op_label is authoritative
         "network":          network,
         "chain_id":         chain_id,
         "token":            token,
@@ -977,13 +1049,17 @@ def _build_parser():
                            help="spender address (0x + 40 hex)")
     p_approve.add_argument("--sender", required=True,
                            help="signing account address (0x + 40 hex)")
-    # --amount XOR --approve-max (architecture Assumption 13 / A14; PRD §7)
+    # --amount XOR --approve-max XOR --revoke (ADR-012; three-way mutex via
+    # argparse add_mutually_exclusive_group — natively handles 3+ entries)
     amt_group = p_approve.add_mutually_exclusive_group(required=True)
     amt_group.add_argument("--amount", default=None,
                            help="human-readable token amount to approve (e.g. 1.5)")
     amt_group.add_argument("--approve-max", action="store_true",
                            dest="approve_max",
                            help="approve MAX_UINT256 (unlimited); prints loud WARNING:")
+    amt_group.add_argument("--revoke", action="store_true",
+                           dest="revoke",
+                           help="Revoke approval (sets allowance to 0 for spender).")
     p_approve.add_argument("--summary-only", action="store_true",
                            dest="summary_only",
                            help="print the stderr summary + warnings only; do NOT print the TxRequest JSON on stdout")
@@ -1054,6 +1130,7 @@ def main(argv=None):
                 args.network, args.token, args.spender, args.amount,
                 args.sender,
                 approve_max=args.approve_max,
+                revoke=args.revoke,
             )
         elif args.op == "transfer-from":
             tx, ctx, warns = do_transfer_from(

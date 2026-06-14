@@ -1034,6 +1034,182 @@ class TestSummary(unittest.TestCase):
         self.assertIn("rpc down", output)
 
 
+    # -----------------------------------------------------------------------
+    # Issue 3.2 Sub-step 0: byte-identical Phase-1 regression pins for op_label
+    # These verify that adding op_label to summary_ctx and reading it in
+    # render_summary produces output byte-identical to what Phase 1 produced.
+    # -----------------------------------------------------------------------
+
+    def test_render_summary_transfer_byte_identical_with_op_label(self):
+        """render_summary with op_label='transfer' is byte-identical to Phase 1 output.
+
+        Phase 1 set ctx['operation']='transfer'; now both 'op_label' and
+        'operation' are set to 'transfer'. The rendered text must be identical
+        character-for-character.
+        """
+        ctx = dict(self._TRANSFER_CTX, op_label="transfer")
+        text = b.render_summary(ctx)
+        # Pin the exact operation line.
+        self.assertIn("operation         : transfer", text)
+        # Ensure no OTHER op label leaks in via the op_label path.
+        self.assertNotIn("operation         : approve", text)
+        self.assertNotIn("operation         : revoke", text)
+        self.assertNotIn("operation         : transfer-from", text)
+
+    def test_render_summary_approve_byte_identical_with_op_label(self):
+        """render_summary with op_label='approve' is byte-identical to Phase 1 output."""
+        ctx = {
+            "op_label":       "approve",
+            "operation":      "approve",
+            "network":        "mainnet",
+            "chain_id":       1,
+            "token":          "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+            "symbol":         "USDC",
+            "decimals":       6,
+            "human_amount":   "1.5",
+            "base_amount":    1_500_000,
+            "is_max_uint":    False,
+            "from_":          "0xSender0000000000000000000000000000000000",
+            "holder":         "0xSender0000000000000000000000000000000000",
+            "spender":        "0xSpender000000000000000000000000000000000",
+            "nonce":          42,
+            "gas":            78066,
+            "max_fee":        25_000_000_000,
+            "max_priority_fee": 1_500_000_000,
+        }
+        text = b.render_summary(ctx)
+        self.assertIn("operation         : approve", text)
+        self.assertIn("spender", text)
+        self.assertNotIn("operation         : revoke", text)
+
+    def test_render_summary_transfer_from_byte_identical_with_op_label(self):
+        """render_summary with op_label='transfer-from' is byte-identical to Phase 1 output."""
+        ctx = {
+            "op_label":         "transfer-from",
+            "operation":        "transfer-from",
+            "network":          "mainnet",
+            "chain_id":         1,
+            "token":            "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+            "symbol":           "USDC",
+            "decimals":         6,
+            "human_amount":     "1.5",
+            "base_amount":      1_500_000,
+            "is_max_uint":      False,
+            "from_":            "0xHolder0000000000000000000000000000000000",
+            "to":               "0xRecipient00000000000000000000000000000000",
+            "sender":           "0xSender0000000000000000000000000000000000",
+            "signer_spender":   "0xSender0000000000000000000000000000000000",
+            "nonce":            42,
+            "gas":              78066,
+            "max_fee":          25_000_000_000,
+            "max_priority_fee": 1_500_000_000,
+        }
+        text = b.render_summary(ctx)
+        self.assertIn("operation         : transfer-from", text)
+        self.assertIn("signer / spender", text)
+        self.assertNotIn("operation         : revoke", text)
+
+    # -----------------------------------------------------------------------
+    # Issue 3.2: render_summary with op_label="revoke"
+    # -----------------------------------------------------------------------
+
+    def test_render_summary_revoke_op_label(self):
+        """render_summary with op_label='revoke' must show 'operation: revoke'."""
+        ctx = {
+            "op_label":       "revoke",
+            "operation":      "revoke",
+            "network":        "mainnet",
+            "chain_id":       1,
+            "token":          "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+            "symbol":         "USDC",
+            "decimals":       6,
+            "human_amount":   "0",
+            "base_amount":    0,
+            "is_max_uint":    False,
+            "from_":          "0xSender0000000000000000000000000000000000",
+            "holder":         "0xSender0000000000000000000000000000000000",
+            "spender":        "0xSpender000000000000000000000000000000000",
+            "nonce":          7,
+            "gas":            78066,
+            "max_fee":        25_000_000_000,
+            "max_priority_fee": 1_500_000_000,
+        }
+        text = b.render_summary(ctx)
+        self.assertIn("operation         : revoke", text)
+        # Address layout: holder + spender (same as approve)
+        self.assertIn("spender", text)
+        # Must NOT say 'operation: approve'
+        self.assertNotIn("operation         : approve", text)
+
+    # -----------------------------------------------------------------------
+    # Issue 3.2: warn_approve_revoke
+    # -----------------------------------------------------------------------
+
+    def test_warn_approve_revoke_writes_to_stderr(self):
+        """warn_approve_revoke writes a multi-line confirmation block to stderr."""
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+            b.warn_approve_revoke(
+                symbol="USDC",
+                token="0x" + "a" * 40,
+                spender="0x" + "b" * 40,
+            )
+            output = fake_err.getvalue()
+        self.assertGreater(len(output), 0)
+        # Names symbol
+        self.assertIn("USDC", output)
+        # Names token
+        self.assertIn("0x" + "a" * 40, output)
+        # Names spender
+        self.assertIn("0x" + "b" * 40, output)
+
+    def test_warn_approve_revoke_no_warning_prefix(self):
+        """warn_approve_revoke must NOT start with 'WARNING:' (informational, not alarming)."""
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+            b.warn_approve_revoke(
+                symbol="USDC",
+                token="0x" + "a" * 40,
+                spender="0x" + "b" * 40,
+            )
+            output = fake_err.getvalue()
+        self.assertNotIn("WARNING:", output)
+
+    def test_warn_approve_revoke_unknown_symbol(self):
+        """warn_approve_revoke with symbol=None renders '<unknown>'."""
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+            b.warn_approve_revoke(
+                symbol=None,
+                token="0x" + "a" * 40,
+                spender="0x" + "b" * 40,
+            )
+            output = fake_err.getvalue()
+        self.assertIn("<unknown>", output)
+
+    def test_warn_approve_revoke_writes_to_stderr_not_stdout(self):
+        """warn_approve_revoke must write to stderr only (not stdout)."""
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+                b.warn_approve_revoke(
+                    symbol="USDC",
+                    token="0x" + "a" * 40,
+                    spender="0x" + "b" * 40,
+                )
+        self.assertGreater(len(fake_err.getvalue()), 0)
+        self.assertEqual(fake_out.getvalue(), "")
+
+    def test_emit_warning_approve_revoke_dispatches(self):
+        """emit_warning('approve_revoke', {...}) must dispatch to warn_approve_revoke."""
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+            b.emit_warning("approve_revoke", {
+                "symbol": "USDC",
+                "token": "0x" + "a" * 40,
+                "spender": "0x" + "b" * 40,
+            })
+            output = fake_err.getvalue()
+        self.assertGreater(len(output), 0)
+        self.assertIn("USDC", output)
+        self.assertIn("0x" + "b" * 40, output)
+
+
 class TestTxAssembly(unittest.TestCase):
     """Tests for the Layer 3 tx_assembly section.
 
@@ -1568,6 +1744,143 @@ class TestTxAssembly(unittest.TestCase):
             )
 
     # -----------------------------------------------------------------------
+    # do_approve — revoke=True (Issue 3.2)
+    # -----------------------------------------------------------------------
+
+    def test_do_approve_revoke_calldata_amount_word_all_zeros(self):
+        """revoke=True: the 32-byte amount word in calldata must be all-zeros.
+
+        Bit-pattern golden vector: the last 64 hex chars of tx['data'] (the
+        uint256 amount word) must be '0' * 64. This is the highest-leverage
+        regression guard — catches accidental use of MAX_UINT256 (approve_max)
+        or any other non-zero amount on the revoke path.
+        """
+        rpc = self._make_rpc_for_transfer()
+        tx, ctx, warns = b.do_approve(
+            network="mainnet", token=self.TOKEN, spender=self.SPENDER,
+            amount=None, sender=self.SENDER, revoke=True, rpc=rpc,
+        )
+        # The last 64 hex chars of tx["data"] are the uint256 encoding of 0.
+        self.assertTrue(tx["data"].endswith("0" * 64),
+                        msg="amount word must be all-zeros for revoke; got: %r"
+                            % tx["data"][-64:])
+
+    def test_do_approve_revoke_op_label_is_revoke(self):
+        """revoke=True: summary_ctx['op_label'] must be 'revoke'."""
+        rpc = self._make_rpc_for_transfer()
+        _, ctx, _ = b.do_approve(
+            network="mainnet", token=self.TOKEN, spender=self.SPENDER,
+            amount=None, sender=self.SENDER, revoke=True, rpc=rpc,
+        )
+        self.assertEqual(ctx["op_label"], "revoke")
+        self.assertEqual(ctx["operation"], "revoke")
+
+    def test_do_approve_revoke_queues_approve_revoke_warning(self):
+        """revoke=True: warnings_list must contain exactly one ('approve_revoke', {...}) entry."""
+        rpc = self._make_rpc_for_transfer()
+        _, _, warns = b.do_approve(
+            network="mainnet", token=self.TOKEN, spender=self.SPENDER,
+            amount=None, sender=self.SENDER, revoke=True, rpc=rpc,
+        )
+        revoke_warns = [w for w in warns if w[0] == "approve_revoke"]
+        self.assertEqual(len(revoke_warns), 1,
+                         msg="Expected exactly one approve_revoke warning; got: %r" % warns)
+        kind, payload = revoke_warns[0]
+        self.assertIn("symbol", payload)
+        self.assertIn("token", payload)
+        self.assertIn("spender", payload)
+
+    def test_do_approve_revoke_human_to_base_units_not_called(self):
+        """revoke=True: human_to_base_units must NOT be called (amount is hardcoded 0)."""
+        rpc = self._make_rpc_for_transfer()
+        with mock.patch("build_erc20.human_to_base_units") as mock_h2b:
+            b.do_approve(
+                network="mainnet", token=self.TOKEN, spender=self.SPENDER,
+                amount=None, sender=self.SENDER, revoke=True, rpc=rpc,
+            )
+        mock_h2b.assert_not_called()
+
+    def test_do_approve_revoke_fetch_decimals_still_called(self):
+        """revoke=True: fetch_decimals must still be called (preserves ADR-006 contract).
+
+        Even though decimals is not needed for amount conversion on the revoke
+        path, it is still fetched so the summary block shows decimals for the
+        operator's review and symmetry with approve_max=True is preserved.
+        """
+        decimals_called = []
+
+        def _rpc_track_decimals(url, method, params):
+            if method == "eth_call":
+                data = params[0].get("data", "")
+                if data.startswith(b.SEL_DECIMALS):
+                    decimals_called.append(True)
+            return self._make_rpc_for_transfer()(url, method, params)
+
+        b.do_approve(
+            network="mainnet", token=self.TOKEN, spender=self.SPENDER,
+            amount=None, sender=self.SENDER, revoke=True, rpc=_rpc_track_decimals,
+        )
+        self.assertTrue(decimals_called, msg="fetch_decimals must be called on the revoke path")
+
+    def test_do_approve_revoke_fetch_decimals_rpc_error_propagates(self):
+        """revoke=True: RPCError from fetch_decimals must propagate (FATAL — ADR-006)."""
+        def _rpc_no_decimals(url, method, params):
+            if method == "eth_call":
+                data = params[0].get("data", "")
+                if data.startswith(b.SEL_DECIMALS):
+                    raise b._core.RPCError("decimals rpc down")
+            return self._make_rpc_for_transfer()(url, method, params)
+
+        with self.assertRaises(b._core.RPCError):
+            b.do_approve(
+                network="mainnet", token=self.TOKEN, spender=self.SPENDER,
+                amount=None, sender=self.SENDER, revoke=True, rpc=_rpc_no_decimals,
+            )
+
+    def test_do_approve_revoke_and_approve_max_raises_value_error(self):
+        """revoke=True + approve_max=True: ValueError raised (defense-in-depth for direct callers).
+
+        Argparse prevents this at the CLI layer via the three-way mutex;
+        this check guards callers that invoke do_approve directly (ADR-012).
+        """
+        rpc = self._make_rpc_for_transfer()
+        with self.assertRaises(ValueError) as cm:
+            b.do_approve(
+                network="mainnet", token=self.TOKEN, spender=self.SPENDER,
+                amount=None, sender=self.SENDER,
+                revoke=True, approve_max=True, rpc=rpc,
+            )
+        self.assertIn("mutually exclusive", str(cm.exception))
+
+    def test_do_approve_revoke_no_approve_race_check(self):
+        """revoke=True: the approve-race soft-check must NOT be performed.
+
+        Revocations (amount=0) have no race window; the soft-check is
+        explicitly skipped for revoke just as it is for amount==0 and
+        approve_max paths (Issue 3.2 implementation note).
+        """
+        rpc = self._make_rpc_for_transfer(
+            allowance_hex="0x" + format(5_000_000, "064x")  # non-zero allowance
+        )
+        _, _, warns = b.do_approve(
+            network="mainnet", token=self.TOKEN, spender=self.SPENDER,
+            amount=None, sender=self.SENDER, revoke=True, rpc=rpc,
+        )
+        race_warns = [w for w in warns if w[0] in ("approve_race", "approve_race_check_skipped")]
+        self.assertEqual(race_warns, [],
+                         msg="revoke must not trigger approve_race check; warns=%r" % warns)
+
+    def test_do_approve_revoke_tx_uses_approve_selector(self):
+        """revoke=True: calldata must start with SEL_APPROVE (no new selector — ADR-005)."""
+        rpc = self._make_rpc_for_transfer()
+        tx, _, _ = b.do_approve(
+            network="mainnet", token=self.TOKEN, spender=self.SPENDER,
+            amount=None, sender=self.SENDER, revoke=True, rpc=rpc,
+        )
+        self.assertTrue(tx["data"].startswith(b.SEL_APPROVE),
+                        msg="revoke must use SEL_APPROVE selector; got: %r" % tx["data"][:10])
+
+    # -----------------------------------------------------------------------
     # do_transfer_from — happy path (sufficient allowance)
     # -----------------------------------------------------------------------
 
@@ -1792,6 +2105,97 @@ class TestCliDispatch(unittest.TestCase):
         with self.assertRaises(SystemExit) as cm:
             b.main(args)
         self.assertNotEqual(cm.exception.code, 0)
+
+    # -----------------------------------------------------------------------
+    # Issue 3.2: --revoke CLI tests
+    # -----------------------------------------------------------------------
+
+    def test_approve_revoke_help_shows_revoke_flag(self):
+        """approve --help must list --revoke in the mutex group."""
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+            with self.assertRaises(SystemExit) as cm:
+                b.main(["approve", "--help"])
+        self.assertEqual(cm.exception.code, 0)
+        self.assertIn("--revoke", fake_out.getvalue())
+
+    def test_approve_revoke_happy_path_exit_0(self):
+        """approve --revoke: exit 0, JSON on stdout, summary on stderr with 'operation: revoke'."""
+        revoke_ctx = {
+            "op_label":       "revoke",
+            "operation":      "revoke",
+            "network":        "mainnet",
+            "chain_id":       1,
+            "token":          self.TOKEN,
+            "symbol":         "USDC",
+            "decimals":       6,
+            "human_amount":   "0",
+            "base_amount":    0,
+            "is_max_uint":    False,
+            "from_":          self.SENDER,
+            "holder":         self.SENDER,
+            "spender":        self.SPENDER,
+            "nonce":          5,
+            "gas":            78066,
+            "max_fee":        21_000_000_000,
+            "max_priority_fee": 1_000_000_000,
+        }
+        warns = [("approve_revoke", {
+            "symbol": "USDC",
+            "token": self.TOKEN,
+            "spender": self.SPENDER,
+        })]
+        with mock.patch("build_erc20.do_approve",
+                        return_value=(self.FAKE_TX, revoke_ctx, warns)):
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+                with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+                    result = b.main([
+                        "approve", "--network", "mainnet",
+                        "--token", self.TOKEN, "--spender", self.SPENDER,
+                        "--revoke", "--sender", self.SENDER,
+                    ])
+        self.assertEqual(result, 0)
+        # JSON on stdout
+        parsed = json.loads(fake_out.getvalue())
+        self.assertEqual(parsed, self.FAKE_TX)
+        # Summary on stderr contains 'operation: revoke'
+        stderr = fake_err.getvalue()
+        self.assertIn("operation", stderr)
+        self.assertIn("revoke", stderr)
+        # Revoke confirmation block on stderr
+        self.assertIn("USDC", stderr)
+
+    def test_approve_revoke_and_amount_rejected_by_argparse(self):
+        """--revoke and --amount together: argparse exits 2 (mutex violation)."""
+        args = self._approve_base_args() + ["--amount", "1.5", "--revoke"]
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+            with self.assertRaises(SystemExit) as cm:
+                b.main(args)
+        self.assertEqual(cm.exception.code, 2)
+        # argparse default mutex error message contains 'not allowed with'
+        self.assertIn("not allowed with", fake_err.getvalue())
+
+    def test_approve_revoke_and_approve_max_rejected_by_argparse(self):
+        """--revoke and --approve-max together: argparse exits 2 (mutex violation)."""
+        args = self._approve_base_args() + ["--approve-max", "--revoke"]
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+            with self.assertRaises(SystemExit) as cm:
+                b.main(args)
+        self.assertEqual(cm.exception.code, 2)
+        self.assertIn("not allowed with", fake_err.getvalue())
+
+    def test_approve_none_of_three_rejected_by_argparse(self):
+        """No --amount / --approve-max / --revoke: argparse exits 2 (required mutex)."""
+        args = self._approve_base_args()  # no mutex argument
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+            with self.assertRaises(SystemExit) as cm:
+                b.main(args)
+        self.assertEqual(cm.exception.code, 2)
+        # argparse's "one of the arguments ... is required" message
+        stderr = fake_err.getvalue()
+        self.assertTrue(
+            "one of the arguments" in stderr or "required" in stderr,
+            msg="expected 'required' error message; got: %r" % stderr,
+        )
 
     # -----------------------------------------------------------------------
     # Address validation failure → exit 1, error: on stderr, empty stdout
