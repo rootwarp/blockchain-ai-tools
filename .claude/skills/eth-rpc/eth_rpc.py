@@ -292,6 +292,8 @@ def _check_method_policy(method, *, allow_write=False, allowlist=None):
     allow_write=True bypasses all checks (denylist + allowlist).
     allowlist=None means no allowlist is enforced (Phase 2 Task 2.3 contract).
     """
+    if not isinstance(method, str) or not method:
+        raise ValueError("method must be a non-empty string")
     if allow_write:
         return None
     if method in _DENY_METHODS:

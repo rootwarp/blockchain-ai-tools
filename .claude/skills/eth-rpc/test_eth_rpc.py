@@ -812,6 +812,20 @@ class TestCheckMethodPolicy(unittest.TestCase):
         )
         self.assertIsNone(result)
 
+    def test_empty_string_method_rejected(self):
+        # _check_method_policy must reject "" as a non-empty-str guard.
+        with self.assertRaises(ValueError) as ctx:
+            r._check_method_policy("")
+        self.assertIn("non-empty", str(ctx.exception))
+
+    def test_none_method_rejected_by_policy(self):
+        with self.assertRaises(ValueError):
+            r._check_method_policy(None)
+
+    def test_int_method_rejected_by_policy(self):
+        with self.assertRaises(ValueError):
+            r._check_method_policy(42)
+
 
 def make_fake_rpc_call(result=None, raises=None):
     """Return a fake rpc(url, method, params, timeout, max_body_bytes=None) for do_call injection."""
