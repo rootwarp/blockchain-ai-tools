@@ -19,6 +19,100 @@ def make_fake_rpc(results, errors=()):
     return _rpc
 
 
+class TestAmountCodec(unittest.TestCase):
+    # --- MAX_UINT256 ---
+
+    def test_max_uint256_value(self):
+        self.assertEqual(b.MAX_UINT256, (1 << 256) - 1)
+
+    # --- human_to_base_units positive vectors ---
+
+    def test_zero_6_decimals(self):
+        self.assertEqual(b.human_to_base_units("0", 6), 0)
+
+    def test_zero_point_zero_6_decimals(self):
+        self.assertEqual(b.human_to_base_units("0.0", 6), 0)
+
+    def test_one_18_decimals(self):
+        self.assertEqual(b.human_to_base_units("1", 18), 10 ** 18)
+
+    def test_one_point_five_6_decimals(self):
+        self.assertEqual(b.human_to_base_units("1.5", 6), 1_500_000)
+
+    def test_small_fractional_18_decimals(self):
+        self.assertEqual(b.human_to_base_units("0.000001", 18), 10 ** 12)
+
+    def test_large_with_fraction_6_decimals(self):
+        self.assertEqual(b.human_to_base_units("1000000.5", 6), 1_000_000_500_000)
+
+    def test_high_precision_18_decimals(self):
+        self.assertEqual(
+            b.human_to_base_units("0.123456789012345678", 18),
+            123_456_789_012_345_678,
+        )
+
+    def test_zero_decimals(self):
+        self.assertEqual(b.human_to_base_units("42", 0), 42)
+
+    # --- human_to_base_units rejection vectors ---
+
+    def test_empty_string_raises(self):
+        with self.assertRaises(ValueError):
+            b.human_to_base_units("", 6)
+
+    def test_negative_raises(self):
+        with self.assertRaises(ValueError):
+            b.human_to_base_units("-1", 6)
+
+    def test_multi_dot_two_dots_raises(self):
+        with self.assertRaises(ValueError):
+            b.human_to_base_units("1..5", 6)
+
+    def test_multi_dot_three_parts_raises(self):
+        with self.assertRaises(ValueError):
+            b.human_to_base_units("1.5.0", 6)
+
+    def test_non_digit_raises(self):
+        with self.assertRaises(ValueError):
+            b.human_to_base_units("abc", 6)
+
+    def test_too_many_fractional_digits_raises(self):
+        # "1.0000001" has 7 fractional digits but decimals=6
+        with self.assertRaises(ValueError):
+            b.human_to_base_units("1.0000001", 6)
+
+    def test_dot_only_raises(self):
+        with self.assertRaises(ValueError):
+            b.human_to_base_units(".", 6)
+
+    # --- base_units_to_human round-trip ---
+
+    def test_round_trip_zero_6_decimals(self):
+        self.assertEqual(b.base_units_to_human(0, 6), "0")
+
+    def test_round_trip_one_point_five(self):
+        self.assertEqual(b.base_units_to_human(1_500_000, 6), "1.5")
+
+    def test_round_trip_18_decimals(self):
+        self.assertEqual(b.base_units_to_human(10 ** 18, 18), "1")
+
+    def test_round_trip_small_fractional(self):
+        self.assertEqual(b.base_units_to_human(10 ** 12, 18), "0.000001")
+
+    def test_round_trip_large_with_fraction(self):
+        self.assertEqual(b.base_units_to_human(1_000_000_500_000, 6), "1000000.5")
+
+    def test_round_trip_zero_decimals(self):
+        self.assertEqual(b.base_units_to_human(42, 0), "42")
+
+    # --- No-float invariant (ADR-008) ---
+
+    def test_no_float_in_human_to_base_units(self):
+        """The substring 'float(' must not appear in human_to_base_units source."""
+        src = inspect.getsource(b.human_to_base_units)
+        self.assertNotIn("float(", src)
+
+
 class TestAbiCodec(unittest.TestCase):
     # --- Selector constants ---
 

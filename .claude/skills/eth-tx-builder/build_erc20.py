@@ -24,6 +24,7 @@ with a clear AttributeError, caught by CI and attributable to the v1 change.
 
 import argparse
 import json
+import re
 import sys
 
 import build_send_eth as _core
@@ -157,6 +158,71 @@ def decode_allowance(hex_result):
 # === end Layer 1: abi_codec ===
 
 # === Layer 1: amount_codec ===
+
+MAX_UINT256 = (1 << 256) - 1  # for --approve-max
+
+
+def human_to_base_units(amount_str, decimals):
+    """Convert a human-readable decimal string to base units (integer).
+
+    Conversion path is str -> str -> int. No floating-point arithmetic,
+    no decimal.Decimal, no fractions.Fraction (architecture ADR-008).
+
+    Rules:
+    - amount_str must be a non-empty string.
+    - Negatives are rejected.
+    - At most one decimal point is allowed.
+    - All characters must be digits (except the optional single dot).
+    - The fractional part may not have more digits than `decimals`.
+    - Returns 0 for zero-value inputs ("0", "0.0", etc.) — PRD §6 allows this.
+    """
+    if not isinstance(amount_str, str) or amount_str == "":
+        raise ValueError("amount must be a non-empty string, got %r" % (amount_str,))
+    if amount_str.startswith("-"):
+        raise ValueError("negative amounts are not allowed: %r" % (amount_str,))
+    parts = amount_str.split(".")
+    if len(parts) > 2:
+        raise ValueError("amount has multiple decimal points: %r" % (amount_str,))
+    int_part = parts[0]
+    frac_part = parts[1] if len(parts) == 2 else ""
+    # Validate that both halves contain only digits
+    if not re.fullmatch(r"\d*", int_part):
+        raise ValueError("non-digit characters in integer part of amount: %r" % (amount_str,))
+    if not re.fullmatch(r"\d*", frac_part):
+        raise ValueError("non-digit characters in fractional part of amount: %r" % (amount_str,))
+    # At least one of int_part / frac_part must be non-empty
+    if int_part == "" and frac_part == "":
+        raise ValueError("amount has no digits: %r" % (amount_str,))
+    if len(frac_part) > decimals:
+        raise ValueError(
+            "amount has more fractional digits (%d) than token decimals (%d)"
+            % (len(frac_part), decimals)
+        )
+    # Right-pad fractional part to exactly `decimals` digits
+    frac_padded = frac_part.ljust(decimals, "0")
+    # Concatenate integer and padded fractional parts and parse as base-10 integer
+    int_part_normalized = int_part if int_part != "" else "0"
+    combined = int_part_normalized + frac_padded
+    return int(combined, 10)
+
+
+def base_units_to_human(amount, decimals):
+    """Render a base-unit integer as a human-readable decimal string.
+
+    Uses string manipulation only; no float arithmetic.
+    decimals == 0 returns str(amount).
+    """
+    if decimals == 0:
+        return str(amount)
+    # Left-zero-pad to at least decimals+1 chars so we can insert the dot
+    s = str(amount).zfill(decimals + 1)
+    # Insert decimal point decimals places from the right
+    int_portion = s[:-decimals]
+    frac_portion = s[-decimals:]
+    # Strip trailing zeros and trailing dot
+    result = int_portion + "." + frac_portion
+    result = result.rstrip("0").rstrip(".")
+    return result
 
 # === end Layer 1: amount_codec ===
 
