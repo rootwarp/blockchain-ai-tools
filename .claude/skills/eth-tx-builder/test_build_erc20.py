@@ -1991,6 +1991,83 @@ class TestCliDispatch(unittest.TestCase):
         self.assertEqual(parsed, self.FAKE_TX)
 
     # -----------------------------------------------------------------------
+    # Issue 2.6: verify ERC-20 helper picks up new networks (test-only)
+    # -----------------------------------------------------------------------
+
+    def test_network_choices_includes_all_four(self):
+        """--network choices on each subparser == ['holesky','hoodi','mainnet','sepolia']."""
+        parser = b._build_parser()
+        expected = ["holesky", "hoodi", "mainnet", "sepolia"]
+        for sp_name in ("transfer", "approve", "transfer-from"):
+            # Walk the subparser actions to find the --network argument
+            subparsers_action = None
+            for action in parser._actions:
+                if hasattr(action, "_name_parser_map"):
+                    subparsers_action = action
+                    break
+            sp = subparsers_action._name_parser_map[sp_name]
+            network_action = next(
+                a for a in sp._actions if "--network" in getattr(a, "option_strings", [])
+            )
+            self.assertEqual(sorted(network_action.choices), expected,
+                             msg="subparser '%s' choices mismatch" % sp_name)
+
+    def test_main_transfer_sepolia(self):
+        """transfer --network sepolia with mocked do_transfer → exit 0, chainId=='11155111'."""
+        sepolia_tx = dict(self.FAKE_TX, chainId="11155111")
+        captured = {}
+
+        def fake_do_transfer(network, token, to, amount, sender, **kw):
+            captured["network"] = network
+            return (sepolia_tx, self.FAKE_CTX, [])
+
+        with mock.patch("build_erc20.do_transfer", side_effect=fake_do_transfer):
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+                with mock.patch("sys.stderr", new_callable=io.StringIO):
+                    result = b.main([
+                        "transfer", "--network", "sepolia",
+                        "--token", self.TOKEN, "--to", self.TO,
+                        "--amount", "1.0", "--sender", self.SENDER,
+                    ])
+        self.assertEqual(result, 0)
+        self.assertEqual(captured["network"], "sepolia")
+        tx = json.loads(fake_out.getvalue())
+        self.assertEqual(tx["chainId"], "11155111")
+
+    def test_main_transfer_holesky(self):
+        """transfer --network holesky with mocked do_transfer → exit 0, chainId=='17000'."""
+        holesky_tx = dict(self.FAKE_TX, chainId="17000")
+        captured = {}
+
+        def fake_do_transfer(network, token, to, amount, sender, **kw):
+            captured["network"] = network
+            return (holesky_tx, self.FAKE_CTX, [])
+
+        with mock.patch("build_erc20.do_transfer", side_effect=fake_do_transfer):
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+                with mock.patch("sys.stderr", new_callable=io.StringIO):
+                    result = b.main([
+                        "transfer", "--network", "holesky",
+                        "--token", self.TOKEN, "--to", self.TO,
+                        "--amount", "1.0", "--sender", self.SENDER,
+                    ])
+        self.assertEqual(result, 0)
+        self.assertEqual(captured["network"], "holesky")
+        tx = json.loads(fake_out.getvalue())
+        self.assertEqual(tx["chainId"], "17000")
+
+    def test_network_nope_rejected_by_argparse(self):
+        """--network nope is rejected by argparse with exit code 2."""
+        with self.assertRaises(SystemExit) as cm:
+            with mock.patch("sys.stderr", new_callable=io.StringIO):
+                b.main([
+                    "transfer", "--network", "nope",
+                    "--token", self.TOKEN, "--to", self.TO,
+                    "--amount", "1.0", "--sender", self.SENDER,
+                ])
+        self.assertEqual(cm.exception.code, 2)
+
+    # -----------------------------------------------------------------------
     # No-fallback regression at the CLI layer (ADR-007)
     # -----------------------------------------------------------------------
 
