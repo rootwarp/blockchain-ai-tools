@@ -1563,3 +1563,120 @@ confirmable at review or deferrable to follow-up.
   add directory shape without earning the boundary).
 - [x] **`build_send_eth.py` and `test_build_send_eth.py` are bit-for-bit
   unchanged.** Hard constraint; ADR-001 specifies import-only reuse.
+
+---
+
+### ADR-012: `--revoke` argparse mutex shape + summary op naming
+
+- **Status:** Accepted. (2026-06-14)
+- **Context:** PRD §P2.3 names the `approve --revoke` shorthand as a
+  "trivial to add later" convenience that emits `approve(spender, 0)`.
+  Three small design decisions must be resolved before the implementation
+  issue (3.2) proceeds: (1) the argparse mutex shape for a third mutex
+  entry in the `approve` subparser; (2) the summary "operation" line
+  wording when `--revoke` is set; (3) whether argparse's default mutex
+  conflict message is acceptable or a custom message is needed.
+
+  Today the `approve` subparser holds a
+  `add_mutually_exclusive_group(required=True)` with two entries:
+  `--amount` and `--approve-max` (architecture Assumption 13). Adding
+  `--revoke` makes this a three-way mutex: exactly one of
+  `{--amount, --approve-max, --revoke}` must be set.
+
+- **Decision:**
+
+  **(1) Argparse mutex shape:** Add `--revoke` as a third entry into the
+  **existing** `add_mutually_exclusive_group(required=True)` on the
+  `approve` subparser. Argparse's mutual-exclusion group enforces
+  pairwise exclusion across all members regardless of group size; a
+  three-entry group works natively without any manual post-parse check.
+  No new group is created; no extra argument is added outside the group.
+  Implementation: `amt_group.add_argument("--revoke",
+  action="store_true", help="Revoke approval (sets allowance to 0 for
+  spender).")` where `amt_group` is the existing exclusive group.
+
+  **(2) Summary op naming:** When `--revoke` is set, the stderr
+  summary's "operation" line reads **`revoke`** (not `approve`).
+  Rationale: the operator chose the revoke shorthand specifically to
+  signal intent; the summary should echo that intent for clarity. The
+  calldata line in the summary still names the underlying
+  `approve(spender, 0)` so technical accuracy is preserved at a
+  different line in the block. This requires generalising
+  `summary.render_summary` to read the operation label from
+  `summary_ctx["op_label"]` rather than a per-subcommand hard-coded
+  string — a purely additive refactor whose rendered output is
+  byte-identical for every Phase 1 path (see Phase 1 touchpoint in
+  Issue 3.2 implementation notes).
+
+  **(3) Mutex conflict message:** Accept argparse's default error:
+  `argument --revoke: not allowed with argument --amount` (or
+  `--approve-max`). Adding a custom "use exactly one of
+  --amount/--approve-max/--revoke" message would require a manual
+  post-parse check, defeating decision (1)'s goal of argparse-native
+  enforcement. A short SKILL.md note covers the operator-friendly
+  guidance without adding code complexity.
+
+  **(4) `do_approve` signature change:** `do_approve` gains a
+  `revoke=False` keyword-only argument (mirroring `approve_max=False`).
+  When `revoke=True`:
+  - `amount_base = 0`; `human_to_base_units` is NOT called.
+  - `encode_approve(spender, 0)` is used (no new selector; reuses ADR-005).
+  - `op_label = "revoke"` is set in `summary_ctx` (decision 2 above).
+  - A `("approve_revoke", {...})` warning tuple is queued (ADR-004 shape).
+
+  If both `revoke=True` and `approve_max=True` are passed directly to
+  `do_approve` (bypassing argparse), `ValueError("--revoke and
+  --approve-max are mutually exclusive")` is raised as defense-in-depth
+  for direct callers.
+
+  **(5) `decimals()` is still read on the revoke path.** The summary
+  still names the token's decimals for the operator's review, and
+  symmetry with the `approve_max=True` path (which also skips human
+  conversion but still reads `decimals`) is preserved. Skipping the
+  `decimals()` read would create an asymmetric special case and violate
+  the Phase 1 fatal-or-skip contract (architecture ADR-006). The
+  `fetch_symbol` read is also preserved (best-effort; ADR-006).
+
+- **Alternatives Considered:**
+
+  - **Manual post-parse check instead of extending the group.** A
+    manual check (`if args.revoke and args.amount: parser.error(...)`)
+    would produce a fully custom error message. Rejected: adds ~5 lines
+    of branching; duplicates the mutex logic that argparse already
+    enforces; the default error message is adequate for operators.
+
+  - **Summary op label reads "approve" (technically accurate).**
+    Rejected: operators who chose `--revoke` chose it deliberately; the
+    summary echoing "approve" would obscure the intent and make it harder
+    to audit a summary block at a glance. The calldata line (`amount
+    (base units): 0`) preserves the technical accuracy; the op label is
+    the intent summary, not the ABI method name.
+
+  - **Skip `decimals()` on the revoke path.** Rejected for two reasons:
+    symmetry with `approve_max=True` (which also doesn't need the decimal
+    count for amount conversion but still reads it) and the summary block
+    always shows `decimals: N` as an operator sanity check. The micro-
+    optimization is not worth the asymmetric code path.
+
+- **Consequences:**
+
+  - (+) `--revoke` is a zero-new-group, zero-manual-check extension of
+    the existing two-entry mutex. The implementation is mechanical: add
+    one `add_argument` call, one forwarding line in `main`, and one new
+    branch in `do_approve`.
+  - (+) The Phase 1 `render_summary` refactor (reading `op_label` from
+    `summary_ctx`) is additive and byte-identical for existing paths;
+    any regression is caught by the `TestSummary` pinning tests added
+    in Issue 3.2.
+  - (+) `warn_approve_revoke` is informational (no `WARNING:` prefix)
+    rather than alarming — operators chose revoke deliberately.
+  - (+) Defense-in-depth `ValueError` in `do_approve` guards future
+    direct callers without adding CLI-layer complexity.
+  - (-) The `do_approve` function now branches three ways
+    (`revoke` / `approve_max` / human-amount). This is the expected
+    complexity growth for a three-entry mutex; the branch is
+    short-circuiting and independently testable.
+
+  Cross-references: PRD §P2.3 (source requirement); architecture
+  ADR-005 (no new selector — `encode_approve` is reused); architecture
+  Assumption 13 (the existing two-way mutex this ADR extends).
