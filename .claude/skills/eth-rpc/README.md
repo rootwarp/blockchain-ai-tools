@@ -58,7 +58,7 @@ Captured output:
 ```
 
 ```
-"0x2df761"
+"0x2df76a"
 ```
 
 `"0x88bb0"` is hex for 560048 (hoodi `chainId`). `eth_blockNumber` returns the
