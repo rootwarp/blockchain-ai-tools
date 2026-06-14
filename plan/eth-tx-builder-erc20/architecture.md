@@ -1855,3 +1855,186 @@ confirmable at review or deferrable to follow-up.
   (the `Optional[str]` return contract that ADR-013 preserves); project
   plan R10 (scope-bound mitigation — "scope Task 3.2 to a finite list
   (MKR, DGD); stop when the catalog is exhausted").
+
+---
+
+### ADR-014: Optional permit (EIP-2612) sibling helper — go/no-go + EIP-712 signer external-blocker resolution
+
+- **Status:** Deferred. (2026-06-14) — paper-only; implementation under the
+  `eth-tx-builder-erc20-permit` PRD when demand surfaces.
+- **Context:** PRD §P2.2 names EIP-2612 `permit` as a "nice to have" that is
+  out-of-scope by default because `permit` requires signing a typed-data
+  (EIP-712) digest, which would expand the skill's responsibility beyond "build
+  calldata." Project plan DL-10 explicitly defers `permit` to its own future
+  PRD ("fresh PRD before fresh phase plan before code") and Task 3.3 records
+  the deferral cascade. Project plan R11 names "cryptographic complexity" as
+  the specific risk. This ADR resolves five go/no-go questions (Q1–Q5) and
+  records the outcome so any future operator can pick up the thread without
+  re-litigating the analysis.
+
+  The undeclared external blocker (Q4) was surfaced during the adversarial
+  review of Phase 3: `apps/eth-signer-mcp/README.md` §Out-of-scope explicitly
+  states "EIP-191 `personal_sign` and EIP-712 typed-data signing: not
+  supported." A `permit` calldata builder is useless without a way to sign the
+  EIP-712 digest; this is a real external dependency that must be resolved
+  before any `permit` implementation can ship.
+
+- **Decision:**
+
+  **(Q1 — Demand check.)** No real operator workflow requiring `permit` has
+  surfaced as of Phase 3 (no issue filed, no operator pull request, no chat
+  thread naming a specific router that demands EIP-2612). The demand check
+  result is honestly: "no demand surfaced yet." Recommendation: draft the PRD
+  (this spike's primary deliverable) but hold implementation until demand
+  names a concrete workflow. The fresh draft PRD at
+  `plan/eth-tx-builder-erc20-permit/prd.md` is the artifact that captures
+  the full design so a future session does not start from zero. Its Status
+  front-matter reads "Draft — awaiting demand surfacing."
+
+  **(Q2 — Sibling vs. extension.)** Confirmed: `permit` ships as a new
+  sibling helper `build_erc20_permit.py`, NOT as a fourth subcommand inside
+  `build_erc20.py`. This is the project plan DL-10 default.
+
+  Benefits of the sibling approach:
+  - Independent shippability: the sibling can be released, skipped, or
+    reverted without touching the Phase 1 single-file architecture.
+  - No contamination of `build_erc20.py`'s seven-section layout or its
+    ADR-002 "revisit if file exceeds ~800 lines" note.
+  - No expansion of the `_core` import contract — the sibling can import
+    `build_send_eth as _core` independently, keeping the import graph a
+    two-node DAG per module.
+  - Easier rollback: a `permit` bug does not affect `transfer` / `approve`
+    / `transfer-from` operators at all.
+
+  Costs (manageable):
+  - A second SKILL.md routing entry for `build_erc20_permit.py`.
+  - A second test file `test_build_erc20_permit.py`.
+  - Duplicated `_core` plumbing boilerplate (same ~10-symbol import list
+    as `build_erc20.py`). Acceptable under ADR-001's single-underscore
+    convention, and mitigated by the same top-of-file docstring contract.
+
+  **(Q3 — Dependency posture.)** Stdlib-only is viable for EIP-712 hashing
+  via a hand-written keccak256 implementation. The Python stdlib's
+  `hashlib.sha3_256` is SHA-3 (Keccak-f with different domain-separation
+  padding), NOT the keccak256 that Ethereum uses. The two are NOT
+  interchangeable.
+
+  A pure-Python keccak256 is approximately 50–100 lines and is
+  well-trodden territory (the algorithm is simple: state initialization,
+  absorb, squeeze with Ethereum's padding constant `0x01`). The precedent
+  in this codebase — hardcoded ABI selectors rather than a runtime
+  dependency — already demonstrates the pattern. The fresh PRD MUST
+  include a "validate keccak256 against known vectors" test surface (NIST
+  Keccak reference vectors, plus the EIP-712 domain separator hash for a
+  known token such as USDC mainnet) before any EIP-712 hashing code is
+  considered trusted.
+
+  Dependency alternative: accept `pycryptodome` (or `pysha3`) as a single
+  new dep. Rejected for v1 — violates the stdlib-only PRD non-functional
+  requirement and opens the dep conversation before demand justifies it.
+  The fresh PRD may revisit if the hand-write proves error-prone in
+  validation.
+
+  **(Q4 — `eth-signer-mcp` EIP-712 external-blocker resolution.)**
+  This was an undeclared external blocker until this spike.
+
+  Current state (quoted from `apps/eth-signer-mcp/README.md` §Out-of-scope):
+
+  > "EIP-191 `personal_sign` and EIP-712 typed-data signing: not supported."
+
+  This means that `eth-signer-mcp` cannot sign the EIP-712 digest that
+  `permit` requires. A `permit` calldata builder without a compatible signer
+  is operationally incomplete for the `eth-signer-mcp` workflow.
+
+  Two resolution paths:
+
+  **Path A (v2 follow-up):** Spin out a parallel `eth-signer-mcp` enhancement
+  PRD that adds a new `sign_typed_data` MCP tool using go-ethereum's EIP-712
+  utilities. The `permit` PRD would declare this signer enhancement as a hard
+  external dependency in its P0 prerequisites. Path A is the right long-term
+  integration but couples the `permit` PRD timeline to a signer PRD timeline —
+  double the scope before any `permit` code ships.
+
+  **Path B (v1 default — chosen):** The `permit` builder's v1 emits both the
+  `permit(...)` calldata AND the EIP-712 typed-data structure (the structured
+  data the operator must sign) as JSON output. The operator signs the
+  typed-data digest with an external EIP-712 signer of their choice (Frame,
+  MetaMask, a hardware wallet, `cast wallet sign-typed-data`, etc.). The
+  `eth-signer-mcp` EIP-712 integration becomes a v2 follow-up, named
+  explicitly in the fresh PRD under Functional Requirements §P2.
+
+  Integration contract under Path B (v1):
+  - The calldata builder produces the `permit(address,address,uint256,
+    uint256,uint8,bytes32,bytes32)` calldata WITH placeholder `v`, `r`, `s`
+    fields (or emits them as a separate typed-data object for the operator
+    to fill in after signing externally).
+  - The EIP-712 typed-data structure is emitted as a first-class JSON field
+    in the builder's stdout, following EIP-712 canonical form
+    (`domain`, `types`, `primaryType`, `message`). The operator pipes this
+    to their external signer.
+  - The signed `v`, `r`, `s` values are then supplied back to assemble the
+    final calldata. The builder may offer a second invocation mode (e.g.
+    `build_erc20_permit.py assemble --v <n> --r <hex> --s <hex>`) for this
+    composition step — details for the fresh PRD.
+
+  Rationale for choosing Path B: avoids blocking the `permit` PRD on a
+  signer enhancement PRD. Operators who already use Frame or MetaMask can
+  adopt `permit` immediately; `eth-signer-mcp` integration ships when the
+  signer team prioritizes it. The integration contract above makes the v2
+  handoff mechanical rather than a re-design.
+
+  **(Q5 — Full draft PRD skeleton.)** The primary deliverable of this spike.
+  The full draft PRD skeleton for `plan/eth-tx-builder-erc20-permit/prd.md`
+  is created alongside this ADR. It contains real Overview, Problem Statement,
+  Goals, Functional Requirements (P0/P1/P2 with user stories and AC stubs),
+  and Out of Scope sections. It is not a paragraph each — it is a first-pass
+  PRD that a future planning session can iterate on or shelve.
+
+- **Alternatives Considered:**
+
+  - **(Q2) Include `permit` as a fourth subcommand in `build_erc20.py`.**
+    Rejected: violates ADR-002's seven-section design (the sections map 1:1
+    onto the Phase 1 PRD change axes; `permit` is a new PRD, not a Phase 1
+    addendum); contamination risk to the single-file Phase 1 architecture is
+    asymmetric with the demand uncertainty.
+
+  - **(Q3) Accept `pycryptodome` as a dep for keccak256.** Rejected for v1
+    — violates stdlib-only NFR and the "zero new dependencies" success
+    metric. Recorded as an alternative in the fresh PRD for the dep
+    conversation if hand-write proves error-prone.
+
+  - **(Q4) Path A as v1 (block `permit` PRD on a parallel signer PRD).**
+    Rejected: doubles the scope before demand is confirmed; couples two
+    independent release timelines. Named explicitly as the v2 path.
+
+  - **(Q1) Greenlight implementation despite zero demand.** Rejected:
+    project plan DL-10 and PRD §Risks "scope creep" explicitly bound
+    Phase 3 opportunistic features to real operator demand. Building ahead
+    of demand burns bandwidth on the wrong thing. The draft PRD is a zero-
+    cost artifact that preserves the option without committing to the work.
+
+- **Consequences:**
+
+  - (+) The EIP-712 external blocker is now declared and resolved (Path B
+    for v1, Path A named as v2). No future session needs to rediscover this.
+  - (+) The draft PRD at `plan/eth-tx-builder-erc20-permit/prd.md` gives the
+    next operator a reviewable artifact rather than a blank canvas.
+  - (+) The sibling architecture (Q2) preserves the Phase 1 `build_erc20.py`
+    design intact — no ADR-002 boundary violations.
+  - (+) The stdlib-only path (Q3) is viable and its test surface is defined
+    in the fresh PRD — a future implementer can validate keccak256 against
+    known vectors before trusting any EIP-712 hash.
+  - (-) `permit` functionality is not available in Phase 3. Operators who
+    need it must use Frame / MetaMask or wait for the fresh PRD to ship.
+  - (-) The keccak256 hand-write (~50–100 lines) is non-trivial; it must be
+    validated against reference vectors before any EIP-712 digest computation
+    is trusted. This is a material implementation risk, now explicitly
+    captured in the fresh PRD's P0 prerequisites.
+
+  Cross-references: PRD §P2.2 (source requirement; `permit` is "nice to have,"
+  out-of-scope by default); project plan DL-10 ("permit" deferred to its own
+  PRD; Task 3.3 records the cascade); project plan R11 (cryptographic
+  complexity risk); `apps/eth-signer-mcp/README.md` §Out-of-scope (EIP-712
+  typed-data signing: not supported — the undeclared external blocker
+  resolved by this ADR); draft PRD:
+  `plan/eth-tx-builder-erc20-permit/prd.md`.
