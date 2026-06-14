@@ -111,7 +111,13 @@ def decode_decimals(hex_result):
 
     Takes the low byte of the 32-byte word. Raises ValueError if the value
     exceeds MAX_DECIMALS (hostile-value sanity cap from research §1.4).
+    Raises ValueError (not TypeError) when hex_result is not a string so the
+    CLI's except (ValueError, RPCError) handler catches it (Fix 4).
     """
+    if not isinstance(hex_result, str):
+        raise ValueError(
+            "decode_decimals: result is not a hex string: got %s" % type(hex_result).__name__
+        )
     value = int(hex_result, 16) & 0xff
     if value > MAX_DECIMALS:
         raise ValueError(
@@ -139,7 +145,7 @@ def decode_symbol(hex_result):
                 length = int.from_bytes(data[32:64], "big")
                 if len(data) >= 64 + length:
                     text = data[64 : 64 + length].decode("utf-8")
-                    if text.isprintable():
+                    if text and text.isprintable():  # Fix 3: empty string must fall through
                         return text
         # Fallback: bytes32 null-trimmed (MKR pattern)
         if len(data) >= 32:
@@ -152,7 +158,15 @@ def decode_symbol(hex_result):
 
 
 def decode_allowance(hex_result):
-    """Decode the uint256 return from allowance()."""
+    """Decode the uint256 return from allowance().
+
+    Raises ValueError (not TypeError) when hex_result is not a string so the
+    CLI's except (ValueError, RPCError) handler catches it (Fix 4).
+    """
+    if not isinstance(hex_result, str):
+        raise ValueError(
+            "decode_allowance: result is not a hex string: got %s" % type(hex_result).__name__
+        )
     return int(hex_result, 16)
 
 # === end Layer 1: abi_codec ===
@@ -493,6 +507,8 @@ def emit_warning(kind, payload):
     elif kind == "allowance_check_skipped":
         warn_allowance_check_skipped(**payload)
     elif kind == "symbol_unavailable":
+        if payload:  # Fix 5: symbol_unavailable accepts no payload
+            raise ValueError("symbol_unavailable takes no payload, got: %r" % payload)
         warn_symbol_unavailable()
     else:
         raise ValueError("unknown warning kind: %r" % (kind,))

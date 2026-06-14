@@ -213,28 +213,33 @@ class TestAbiCodec(unittest.TestCase):
     # --- encode_approve ---
 
     def test_encode_approve_bit_pattern(self):
+        # Independent expected: selector || zero-pad addr || zero-pad uint256
+        # Uses format(int(addr,16),"064x") — a different code path from the
+        # production string-slicing _encode_address helper (Fix 1).
         spender = "0xa49053f705a560f0717bc2e96dddcfe7edb7f98a"
         amount = 1_000_000  # 1 USDC at 6 decimals
         result = b.encode_approve(spender, amount)
         expected = (
             "0x095ea7b3"
-            + b._encode_address(spender)
-            + b._encode_uint256(amount)
+            + format(int(spender, 16), "064x")
+            + format(amount, "064x")
         )
         self.assertEqual(result, expected)
 
     # --- encode_transfer_from ---
 
     def test_encode_transfer_from_bit_pattern(self):
+        # Independent expected: selector || addr || addr || uint256
+        # Uses format(int(addr,16),"064x") — differs from production helper (Fix 1).
         from_ = "0x890e560a6012bfa5d0d71a4a107dba4aed698f38"
         to = "0xa49053f705a560f0717bc2e96dddcfe7edb7f98a"
         amount = 500_000
         result = b.encode_transfer_from(from_, to, amount)
         expected = (
             "0x23b872dd"
-            + b._encode_address(from_)
-            + b._encode_address(to)
-            + b._encode_uint256(amount)
+            + format(int(from_, 16), "064x")
+            + format(int(to, 16), "064x")
+            + format(amount, "064x")
         )
         self.assertEqual(result, expected)
 
@@ -249,13 +254,15 @@ class TestAbiCodec(unittest.TestCase):
     # --- encode_allowance_call ---
 
     def test_encode_allowance_call_bit_pattern(self):
+        # Independent expected: selector || addr || addr
+        # Uses format(int(addr,16),"064x") — different code path from production (Fix 1).
         holder = "0x890e560a6012bfa5d0d71a4a107dba4aed698f38"
         spender = "0xa49053f705a560f0717bc2e96dddcfe7edb7f98a"
         result = b.encode_allowance_call(holder, spender)
         expected = (
             "0xdd62ed3e"
-            + b._encode_address(holder)
-            + b._encode_address(spender)
+            + format(int(holder, 16), "064x")
+            + format(int(spender, 16), "064x")
         )
         self.assertEqual(result, expected)
 
@@ -314,6 +321,33 @@ class TestAbiCodec(unittest.TestCase):
         result = b.decode_symbol("0x")
         self.assertIsNone(result)
 
+    # --- decode_decimals non-str guard (Fix 4) ---
+
+    def test_decode_decimals_non_str_int_raises_value_error(self):
+        """Non-string input must raise ValueError, not TypeError (Fix 4)."""
+        with self.assertRaises(ValueError):
+            b.decode_decimals(6)
+
+    def test_decode_decimals_non_str_dict_raises_value_error(self):
+        """Dict input must raise ValueError, not TypeError (Fix 4)."""
+        with self.assertRaises(ValueError):
+            b.decode_decimals({"result": "0x06"})
+
+    # --- decode_symbol empty ABI string -> None (Fix 3) ---
+
+    def test_decode_symbol_empty_abi_string_returns_none(self):
+        """Valid ABI string with length=0 must return None, not '' (Fix 3).
+
+        ''.isprintable() is True, so without the `text and` guard the standard-ABI
+        path would return '' instead of falling through to None.
+        """
+        offset_word = "0020".zfill(64)
+        length_word = "0000".zfill(64)  # length = 0
+        padding = "00" * 32             # minimum one word of padding
+        data_hex = offset_word + length_word + padding
+        result = b.decode_symbol("0x" + data_hex)
+        self.assertIsNone(result)
+
     # --- decode_allowance ---
 
     def test_decode_allowance_zero(self):
@@ -321,6 +355,18 @@ class TestAbiCodec(unittest.TestCase):
 
     def test_decode_allowance_max_uint256(self):
         self.assertEqual(b.decode_allowance("0x" + "f" * 64), (1 << 256) - 1)
+
+    # --- decode_allowance non-str guard (Fix 4) ---
+
+    def test_decode_allowance_non_str_int_raises_value_error(self):
+        """Non-string input must raise ValueError, not TypeError (Fix 4)."""
+        with self.assertRaises(ValueError):
+            b.decode_allowance(42)
+
+    def test_decode_allowance_non_str_dict_raises_value_error(self):
+        """Dict input must raise ValueError, not TypeError (Fix 4)."""
+        with self.assertRaises(ValueError):
+            b.decode_allowance({"result": "0x0a"})
 
     # --- MAX_DECIMALS constant ---
 
@@ -333,6 +379,33 @@ class TestContractReads(unittest.TestCase):
 
     All network I/O is mocked via the injected `rpc` kwarg.
     """
+
+    # --- make_fake_rpc integration (Fix 2: make helper non-dead, A14 comment) ---
+
+    def test_fetch_decimals_via_make_fake_rpc(self):
+        """fetch_decimals works correctly when driven through make_fake_rpc."""
+        hex_6 = "0x" + "0" * 62 + "06"
+        rpc = make_fake_rpc({"eth_call": hex_6})
+        result = b.fetch_decimals(rpc=rpc, url="https://x",
+                                  token="0x" + "a" * 40)
+        self.assertEqual(result, 6)
+
+    def test_fetch_allowance_via_make_fake_rpc(self):
+        """fetch_allowance works correctly when driven through make_fake_rpc."""
+        hex_10 = "0x" + "0" * 62 + "0a"
+        rpc = make_fake_rpc({"eth_call": hex_10})
+        result = b.fetch_allowance(rpc=rpc, url="https://x",
+                                   token="0x" + "a" * 40,
+                                   holder="0x" + "1" * 40,
+                                   spender="0x" + "2" * 40)
+        self.assertEqual(result, 10)
+
+    def test_fetch_decimals_via_make_fake_rpc_propagates_rpc_error(self):
+        """make_fake_rpc `errors` set causes RPCError to propagate from fetch_decimals."""
+        rpc = make_fake_rpc({}, errors=("eth_call",))
+        with self.assertRaises(b._core.RPCError):
+            b.fetch_decimals(rpc=rpc, url="https://x",
+                             token="0x" + "a" * 40)
 
     # --- fetch_decimals ---
 
@@ -711,13 +784,28 @@ class TestSummary(unittest.TestCase):
         with self.assertRaises(ValueError):
             b.emit_warning("unknown_kind", {})
 
+    # --- emit_warning symbol_unavailable payload guard (Fix 5) ---
+
+    def test_emit_warning_symbol_unavailable_with_payload_raises_value_error(self):
+        """symbol_unavailable must raise ValueError when a non-empty payload is passed (Fix 5)."""
+        with self.assertRaises(ValueError):
+            b.emit_warning("symbol_unavailable", {"x": 1})
+
+    def test_emit_warning_symbol_unavailable_empty_payload_succeeds(self):
+        """symbol_unavailable with an empty payload must succeed (Fix 5)."""
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+            b.emit_warning("symbol_unavailable", {})
+            output = fake_err.getvalue()
+        self.assertIn("WARNING:", output)
+
 
 class TestTxAssembly(unittest.TestCase):
     """Tests for the Layer 3 tx_assembly section.
 
-    Uses make_fake_rpc (defined at module level, A14 comment) to mock all RPC
-    calls. Tests cover happy paths, approve_max, transfer-from soft-checks, and
-    no-fallback regressions (ADR-007).
+    Uses _make_rpc_for_transfer (an instance helper), a selector-aware
+    dispatcher that distinguishes decimals/symbol/allowance eth_call reads
+    by their 4-byte selector prefix. Tests cover happy paths, approve_max,
+    transfer-from soft-checks, and no-fallback regressions (ADR-007).
     """
 
     # Addresses reused across tests — 0x-prefixed, 40 hex chars each.
