@@ -298,17 +298,51 @@ def main(argv=None):
     p_bc.add_argument("--wait-timeout", type=int, default=DEFAULT_WAIT_TIMEOUT,
                       help="seconds to wait for a receipt with --wait (default %(default)s)")
 
+    p_call = sub.add_parser("call", help="generic eth_* JSON-RPC read passthrough")
+    p_call.add_argument("--network", choices=sorted(NETWORKS))
+    p_call.add_argument("--rpc-url")
+    p_call.add_argument("--chain-id", type=int)
+    p_call.add_argument("--method", required=True)
+    p_call.add_argument(
+        "--params",
+        required=True,
+        help="JSON array; pass '-' to read from stdin",
+    )
+    p_call.add_argument("--allow-write", action="store_true")
+    p_call.add_argument("--timeout", type=int, default=15)
+
     args = parser.parse_args(argv)
 
     try:
         if args.command == "balance":
             result = do_balance(args.network, args.address)
-        else:
+        elif args.command == "broadcast":
             if args.wait_timeout < 0:
                 raise ValueError("--wait-timeout must be non-negative")
             result = do_broadcast(
                 args.network, args.raw_tx, wait=args.wait, wait_timeout=args.wait_timeout
             )
+        else:
+            params = _parse_params(args.params, stdin=sys.stdin)
+            chain_id, url = _resolve_endpoint(
+                network=args.network,
+                rpc_url=args.rpc_url,
+                chain_id=args.chain_id,
+            )
+            if args.allow_write:
+                print(
+                    "warning: --allow-write bypasses the call denylist",
+                    file=sys.stderr,
+                )
+            result = do_call(
+                url,
+                method=args.method,
+                params=params,
+                allow_write=args.allow_write,
+                timeout=args.timeout,
+            )
+            print(json.dumps(result, indent=2))
+            return 0
     except (ValueError, RPCError) as e:
         print("error: %s" % e, file=sys.stderr)
         return 1

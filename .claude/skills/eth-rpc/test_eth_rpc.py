@@ -260,6 +260,20 @@ class TestMain(unittest.TestCase):
         with self.assertRaises(SystemExit):
             r.main([])
 
+    def test_call_dispatch_reaches_do_call(self):
+        out = io.StringIO()
+        with mock.patch("eth_rpc.do_call", return_value="0x88bb0") as mock_do_call, \
+             mock.patch("sys.stdout", out):
+            rc = r.main([
+                "call", "--network", "hoodi",
+                "--method", "eth_chainId", "--params", "[]",
+            ])
+        self.assertEqual(rc, 0)
+        mock_do_call.assert_called_once()
+        kwargs = mock_do_call.call_args[1]
+        self.assertEqual(kwargs["method"], "eth_chainId")
+        self.assertEqual(kwargs["params"], [])
+
 
 class TestDoBroadcastWait(unittest.TestCase):
     RAW = "0x02f8ab83088bb0"
@@ -661,6 +675,128 @@ class TestParseParams(unittest.TestCase):
             r._parse_params("-", stdin=io.StringIO("not json"))
 
 
+class TestCallCli(unittest.TestCase):
+    """Tests for the `call` subcommand driven through main(argv=[...])."""
+
+    URL = "https://ethereum-hoodi-rpc.publicnode.com"
+
+    def _run(self, argv):
+        """Run main(argv) capturing stdout/stderr; return (rc, stdout, stderr)."""
+        import contextlib
+        out = io.StringIO()
+        err = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = r.main(argv)
+        return rc, out.getvalue(), err.getvalue()
+
+    def test_happy_path_named_network(self):
+        with mock.patch("eth_rpc.rpc_call", return_value="0x88bb0"):
+            rc, out, err = self._run([
+                "call", "--network", "hoodi",
+                "--method", "eth_chainId", "--params", "[]",
+            ])
+        self.assertEqual(rc, 0)
+        self.assertEqual(json.loads(out), "0x88bb0")
+        self.assertEqual(err, "")
+
+    def test_happy_path_custom_endpoint(self):
+        with mock.patch("eth_rpc.do_call", return_value="0x1") as mock_dc:
+            rc, out, err = self._run([
+                "call",
+                "--rpc-url", "http://127.0.0.1:8545",
+                "--chain-id", "31337",
+                "--method", "eth_blockNumber", "--params", "[]",
+            ])
+        self.assertEqual(rc, 0)
+        self.assertEqual(json.loads(out), "0x1")
+        kwargs = mock_dc.call_args[1]
+        self.assertEqual(kwargs["method"], "eth_blockNumber")
+
+    def test_mutual_exclusion_error(self):
+        rc, out, err = self._run([
+            "call",
+            "--network", "hoodi",
+            "--rpc-url", "http://127.0.0.1:8545",
+            "--chain-id", "31337",
+            "--method", "eth_blockNumber", "--params", "[]",
+        ])
+        self.assertEqual(rc, 1)
+        self.assertIn("error:", err)
+        self.assertTrue(
+            "not both" in err or "both" in err,
+            "expected 'both' in error message, got: %r" % err,
+        )
+
+    def test_missing_pair_error(self):
+        rc, out, err = self._run([
+            "call",
+            "--rpc-url", "http://127.0.0.1:8545",
+            "--method", "eth_blockNumber", "--params", "[]",
+        ])
+        self.assertEqual(rc, 1)
+        self.assertIn("required together", err)
+
+    def test_allow_write_warning_on_stderr(self):
+        with mock.patch("eth_rpc.rpc_call", return_value="0xhash"):
+            rc, out, err = self._run([
+                "call", "--network", "hoodi",
+                "--method", "eth_blockNumber", "--params", "[]",
+                "--allow-write",
+            ])
+        self.assertEqual(rc, 0)
+        self.assertIn("warning: --allow-write bypasses the call denylist", err)
+        self.assertNotEqual(out.strip(), "")
+
+    def test_allow_write_warning_prints_even_when_do_call_raises(self):
+        with mock.patch(
+            "eth_rpc.do_call", side_effect=r.RPCError("node down")
+        ):
+            rc, out, err = self._run([
+                "call", "--network", "hoodi",
+                "--method", "eth_blockNumber", "--params", "[]",
+                "--allow-write",
+            ])
+        self.assertEqual(rc, 1)
+        self.assertIn("warning: --allow-write bypasses the call denylist", err)
+        self.assertIn("error:", err)
+
+    def test_denied_method_without_allow_write(self):
+        rc, out, err = self._run([
+            "call", "--network", "hoodi",
+            "--method", "eth_sendRawTransaction",
+            "--params", '["0x02ab"]',
+        ])
+        self.assertEqual(rc, 1)
+        self.assertIn("eth_sendRawTransaction", err)
+        self.assertTrue(
+            "broadcast" in err or "--allow-write" in err,
+            "expected guidance in error message, got: %r" % err,
+        )
+
+    def test_malformed_params(self):
+        rc, out, err = self._run([
+            "call", "--network", "hoodi",
+            "--method", "eth_blockNumber",
+            "--params", "not json",
+        ])
+        self.assertEqual(rc, 1)
+        self.assertIn("--params must be a JSON array", err)
+
+    def test_stdin_params(self):
+        with mock.patch("eth_rpc.do_call", return_value="0x5") as mock_dc, \
+             mock.patch("eth_rpc.sys.stdin", io.StringIO('["latest"]')):
+            rc, out, err = self._run([
+                "call", "--network", "hoodi",
+                "--method", "eth_getBlockByNumber",
+                "--params", "-",
+            ])
+        self.assertEqual(rc, 0)
+        self.assertEqual(json.loads(out), "0x5")
+        # confirm the parsed list was passed to do_call
+        kwargs = mock_dc.call_args[1]
+        self.assertEqual(kwargs["params"], ["latest"])
+
+
 class TestCliSmoke(unittest.TestCase):
     def test_help_runs(self):
         # Executes the module directly (not import) — catches definition-order bugs.
@@ -671,6 +807,7 @@ class TestCliSmoke(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("balance", proc.stdout)
         self.assertIn("broadcast", proc.stdout)
+        self.assertIn("call", proc.stdout)
 
     def test_balance_bad_address_exits_one(self):
         # Drives the balance path through main() in a real process. Bad address
