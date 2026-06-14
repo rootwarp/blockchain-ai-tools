@@ -374,6 +374,224 @@ class TestAbiCodec(unittest.TestCase):
         self.assertEqual(b.MAX_DECIMALS, 36)
 
 
+class TestDecodeSymbolPolished(unittest.TestCase):
+    """Issue 3.4: Per-variant decode_symbol tests (ADR-013 bounded catalog).
+
+    Fixtures are lifted verbatim from ADR-013's worked examples. Each variant
+    has a happy-path fixture + a malformed-input fixture that returns None.
+    The Phase 1 regression tests (USDC + MKR) are pinned here to confirm the
+    refactor does not break existing behaviour. The "outside-the-catalog"
+    test guards against scope creep.
+    """
+
+    # -----------------------------------------------------------------------
+    # Regression: Phase 1 helpers still work via decode_symbol (after refactor)
+    # -----------------------------------------------------------------------
+
+    def test_phase1_usdc_standard_abi_string(self):
+        """Phase 1 regression: standard ABI 'string' for USDC still decodes to 'USDC'."""
+        # Standard ABI encoding of "USDC": offset=32, length=4, payload right-padded
+        offset_word = "0020".zfill(64)
+        length_word = "0004".zfill(64)
+        payload = b"USDC" + b"\x00" * 28
+        hex_result = "0x" + offset_word + length_word + payload.hex()
+        self.assertEqual(b.decode_symbol(hex_result), "USDC")
+
+    def test_phase1_mkr_null_trimmed_bytes32(self):
+        """Phase 1 regression: null-padded bytes32 for MKR still decodes to 'MKR'."""
+        # MKR: 3 bytes "MKR" + 29 null bytes (ADR-013 Format A example)
+        data = b"MKR" + b"\x00" * 29
+        hex_result = "0x" + data.hex()
+        self.assertEqual(b.decode_symbol(hex_result), "MKR")
+
+    # -----------------------------------------------------------------------
+    # _try_decode_abi_string helper (extracted Phase 1 logic)
+    # -----------------------------------------------------------------------
+
+    def test_try_decode_abi_string_usdc_happy(self):
+        """_try_decode_abi_string decodes a standard ABI string correctly."""
+        offset_word = "0020".zfill(64)
+        length_word = "0004".zfill(64)
+        payload = b"USDC" + b"\x00" * 28
+        hex_result = "0x" + offset_word + length_word + payload.hex()
+        self.assertEqual(b._try_decode_abi_string(hex_result), "USDC")
+
+    def test_try_decode_abi_string_empty_returns_none(self):
+        """_try_decode_abi_string: ABI string with length=0 returns None (not '')."""
+        offset_word = "0020".zfill(64)
+        length_word = "0000".zfill(64)
+        padding = "00" * 32
+        hex_result = "0x" + offset_word + length_word + padding
+        self.assertIsNone(b._try_decode_abi_string(hex_result))
+
+    def test_try_decode_abi_string_malformed_wrong_offset_returns_none(self):
+        """_try_decode_abi_string: wrong offset word (not 0x20) returns None."""
+        # offset = 0x40 (64) instead of 0x20 (32) — not standard ABI string
+        offset_word = "0040".zfill(64)
+        length_word = "0004".zfill(64)
+        payload = b"USDC" + b"\x00" * 28
+        hex_result = "0x" + offset_word + length_word + payload.hex()
+        self.assertIsNone(b._try_decode_abi_string(hex_result))
+
+    def test_try_decode_abi_string_truncated_returns_none(self):
+        """_try_decode_abi_string: truncated response (no length word) returns None."""
+        # Only 32 bytes — too short for offset + length + data
+        data = b"\x00" * 31 + b"\x20"  # just the offset word
+        self.assertIsNone(b._try_decode_abi_string("0x" + data.hex()))
+
+    def test_try_decode_abi_string_empty_hex_returns_none(self):
+        """_try_decode_abi_string: '0x' (empty) returns None."""
+        self.assertIsNone(b._try_decode_abi_string("0x"))
+
+    # -----------------------------------------------------------------------
+    # _try_decode_bytes32_null_trimmed helper (extracted Phase 1 logic)
+    # -----------------------------------------------------------------------
+
+    def test_try_decode_bytes32_null_trimmed_mkr_happy(self):
+        """_try_decode_bytes32_null_trimmed decodes MKR (Format A) correctly."""
+        # ADR-013 Format A: MKR = 4d4b52 + 29 null bytes
+        data = b"MKR" + b"\x00" * 29
+        self.assertEqual(b._try_decode_bytes32_null_trimmed("0x" + data.hex()), "MKR")
+
+    def test_try_decode_bytes32_null_trimmed_short_returns_none(self):
+        """_try_decode_bytes32_null_trimmed: response < 32 bytes returns None."""
+        # Only 4 bytes — too short for a bytes32 word
+        data = b"MKR\x00"
+        self.assertIsNone(b._try_decode_bytes32_null_trimmed("0x" + data.hex()))
+
+    def test_try_decode_bytes32_null_trimmed_nonprintable_tail_returns_none(self):
+        """_try_decode_bytes32_null_trimmed: non-printable bytes after ticker -> None."""
+        # Ticker "MKR" followed by a non-printable non-null byte (not a clean null-pad)
+        data = b"MKR" + b"\x01" + b"\x00" * 28
+        self.assertIsNone(b._try_decode_bytes32_null_trimmed("0x" + data.hex()))
+
+    def test_try_decode_bytes32_null_trimmed_all_zeros_returns_none(self):
+        """_try_decode_bytes32_null_trimmed: all-zero bytes32 returns None (empty ticker)."""
+        data = b"\x00" * 32
+        self.assertIsNone(b._try_decode_bytes32_null_trimmed("0x" + data.hex()))
+
+    # -----------------------------------------------------------------------
+    # _try_decode_bytes32_length_prefixed helper (NEW — ADR-013 Format B / DGD-style)
+    # -----------------------------------------------------------------------
+
+    def test_try_decode_bytes32_length_prefixed_dgd_happy(self):
+        """_try_decode_bytes32_length_prefixed decodes DGD (Format B) correctly.
+
+        ADR-013 Format B hex example:
+        0344474400000000000000000000000000000000000000000000000000000000
+        byte 0 = 0x03 (length 3), bytes 1-3 = 444744 = 'DGD', rest = nulls.
+        Expected ticker: 'DGD'.
+        """
+        # DGD: length=3, ticker=b"DGD" + 28 null bytes
+        raw = bytes([3]) + b"DGD" + b"\x00" * 28
+        self.assertEqual(len(raw), 32)
+        hex_result = "0x" + raw.hex()
+        self.assertEqual(b._try_decode_bytes32_length_prefixed(hex_result), "DGD")
+
+    def test_try_decode_bytes32_length_prefixed_single_char_happy(self):
+        """_try_decode_bytes32_length_prefixed handles a 1-char ticker."""
+        raw = bytes([1]) + b"X" + b"\x00" * 30
+        self.assertEqual(len(raw), 32)
+        self.assertEqual(b._try_decode_bytes32_length_prefixed("0x" + raw.hex()), "X")
+
+    def test_try_decode_bytes32_length_prefixed_max_len_happy(self):
+        """_try_decode_bytes32_length_prefixed handles length=31 (max valid)."""
+        ticker = b"A" * 31
+        raw = bytes([31]) + ticker
+        self.assertEqual(len(raw), 32)
+        self.assertEqual(b._try_decode_bytes32_length_prefixed("0x" + raw.hex()), "A" * 31)
+
+    def test_try_decode_bytes32_length_prefixed_zero_length_returns_none(self):
+        """_try_decode_bytes32_length_prefixed: length byte = 0 returns None (empty ticker)."""
+        raw = bytes([0]) + b"\x00" * 31
+        self.assertIsNone(b._try_decode_bytes32_length_prefixed("0x" + raw.hex()))
+
+    def test_try_decode_bytes32_length_prefixed_length_overflow_returns_none(self):
+        """_try_decode_bytes32_length_prefixed: length byte >= 32 returns None (overflow)."""
+        # length byte = 32 means the ticker would need 32 bytes, overflowing the word
+        raw = bytes([32]) + b"A" * 31
+        self.assertIsNone(b._try_decode_bytes32_length_prefixed("0x" + raw.hex()))
+
+    def test_try_decode_bytes32_length_prefixed_length_exceeds_data_returns_none(self):
+        """_try_decode_bytes32_length_prefixed: length byte claims more data than available."""
+        # A 4-byte response where byte 0 claims length=10
+        raw = bytes([10]) + b"DGD"
+        self.assertIsNone(b._try_decode_bytes32_length_prefixed("0x" + raw.hex()))
+
+    def test_try_decode_bytes32_length_prefixed_nonprintable_ticker_returns_none(self):
+        """_try_decode_bytes32_length_prefixed: non-printable ticker bytes return None."""
+        # length=3, ticker=b"\x01\x02\x03" (non-printable)
+        raw = bytes([3]) + b"\x01\x02\x03" + b"\x00" * 28
+        self.assertIsNone(b._try_decode_bytes32_length_prefixed("0x" + raw.hex()))
+
+    def test_try_decode_bytes32_length_prefixed_empty_hex_returns_none(self):
+        """_try_decode_bytes32_length_prefixed: '0x' (empty) returns None."""
+        self.assertIsNone(b._try_decode_bytes32_length_prefixed("0x"))
+
+    def test_try_decode_bytes32_length_prefixed_short_response_returns_none(self):
+        """_try_decode_bytes32_length_prefixed: response < 1 byte returns None."""
+        # Less than 32 bytes but also less than 1 byte — empty after strip
+        self.assertIsNone(b._try_decode_bytes32_length_prefixed("0x"))
+
+    # -----------------------------------------------------------------------
+    # decode_symbol integration: DGD-style via the full ladder
+    # -----------------------------------------------------------------------
+
+    def test_decode_symbol_dgd_via_ladder(self):
+        """decode_symbol correctly decodes a DGD-style length-prefixed response."""
+        raw = bytes([3]) + b"DGD" + b"\x00" * 28
+        hex_result = "0x" + raw.hex()
+        self.assertEqual(b.decode_symbol(hex_result), "DGD")
+
+    # -----------------------------------------------------------------------
+    # "Outside the catalog" scope-creep guard
+    # -----------------------------------------------------------------------
+
+    def test_decode_symbol_outside_catalog_returns_none(self):
+        """A hex response that matches no variant in the bounded catalog returns None.
+
+        This is the scope-creep guard (ADR-013): without it, future contributors
+        could silently add variants without updating the ADR.
+
+        Crafted hex: 32 bytes where byte 0 = 0x00 (null-prefixed, not DGD-style),
+        rest are non-printable non-null bytes — cannot be decoded by any variant.
+        """
+        # All non-null non-printable bytes; none of the three variants matches
+        raw = b"\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f" * 2
+        self.assertIsNone(b.decode_symbol("0x" + raw.hex()))
+
+    # -----------------------------------------------------------------------
+    # never-raises guarantee (ADR-006)
+    # -----------------------------------------------------------------------
+
+    def test_decode_symbol_never_raises_on_junk(self):
+        """decode_symbol must never raise, even on bizarre/malformed input."""
+        # Various junk inputs
+        for junk in ("0xzzzz", "0x", "", "not hex at all", "0x" + "ff" * 100):
+            try:
+                result = b.decode_symbol(junk)
+                # May return None or a string — both are acceptable
+                self.assertTrue(result is None or isinstance(result, str),
+                                msg="Expected None or str for input %r; got %r" % (junk, result))
+            except Exception as exc:
+                self.fail("decode_symbol raised %r on input %r" % (exc, junk))
+
+    def test_decode_symbol_never_raises_on_empty(self):
+        """decode_symbol('0x') must return None, not raise."""
+        self.assertIsNone(b.decode_symbol("0x"))
+
+    def test_decode_symbol_never_raises_on_non_string(self):
+        """decode_symbol with a non-string input must return None, not raise."""
+        # Non-string input — should be absorbed by the outer try/except
+        for junk in (None, 42, b"\x00", [], {}):
+            try:
+                result = b.decode_symbol(junk)
+                self.assertTrue(result is None or isinstance(result, str),
+                                msg="Expected None or str for input %r; got %r" % (junk, result))
+            except Exception as exc:
+                self.fail("decode_symbol raised %r on non-string input %r" % (exc, junk))
+
+
 class TestContractReads(unittest.TestCase):
     """Tests for the Layer 2 contract_reads section.
 

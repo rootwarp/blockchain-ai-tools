@@ -132,32 +132,130 @@ def decode_decimals(hex_result):
     return value
 
 
-def decode_symbol(hex_result):
-    """Decode the string return from symbol(). Returns Optional[str].
+def _try_decode_abi_string(hex_result):
+    """Try to decode a standard ABI dynamic-string symbol() response.
 
-    Tries standard ABI dynamic-string layout (offset word + length word + UTF-8 bytes).
-    Falls back to null-trimmed first-32-byte read (legacy bytes32, e.g. MKR).
-    Returns None on any failure rather than raising (architecture ADR-006).
+    Standard ABI layout: word 0 = offset (must be exactly 0x20 = 32),
+    word 1 = byte length of the string, then the UTF-8 bytes of the string.
+
+    Returns the decoded string if successful and non-empty + printable,
+    or None if the response does not match this format or the ticker is
+    empty / non-printable.
+
+    Catches only UnicodeDecodeError, ValueError, IndexError.
     """
     try:
         raw = hex_result
-        if raw.startswith("0x"):
+        if isinstance(raw, str) and raw.startswith("0x"):
             raw = raw[2:]
         data = bytes.fromhex(raw)
-        # Standard ABI: word 0 = offset (should be 0x20 = 32), word 1 = length, then bytes
-        if len(data) >= 64:
-            offset = int.from_bytes(data[0:32], "big")
-            if offset == 32:
-                length = int.from_bytes(data[32:64], "big")
-                if len(data) >= 64 + length:
-                    text = data[64 : 64 + length].decode("utf-8")
-                    if text and text.isprintable():  # Fix 3: empty string must fall through
-                        return text
-        # Fallback: bytes32 null-trimmed (MKR pattern)
-        if len(data) >= 32:
-            text = data[:32].rstrip(b"\x00").decode("utf-8", errors="replace")
-            if text and text.isprintable():
-                return text
+        if len(data) < 64:
+            return None
+        offset = int.from_bytes(data[0:32], "big")
+        if offset != 32:
+            return None
+        length = int.from_bytes(data[32:64], "big")
+        if len(data) < 64 + length:
+            return None
+        text = data[64:64 + length].decode("utf-8")
+        if text and text.isprintable():  # Fix 3: empty string must fall through
+            return text
+        return None
+    except (UnicodeDecodeError, ValueError, IndexError):
+        return None
+
+
+def _try_decode_bytes32_null_trimmed(hex_result):
+    """Try to decode a null-padded ASCII bytes32 symbol() response (MKR style).
+
+    The raw 32-byte response is the ASCII ticker right-padded with null bytes.
+    Example: MKR = b'MKR' + b'\x00' * 29.
+
+    Returns the decoded ticker if successful and non-empty + printable,
+    or None if the response is too short, all-null, or contains non-printable
+    bytes after null-stripping.
+
+    Catches only UnicodeDecodeError, ValueError, IndexError.
+    """
+    try:
+        raw = hex_result
+        if isinstance(raw, str) and raw.startswith("0x"):
+            raw = raw[2:]
+        data = bytes.fromhex(raw)
+        if len(data) < 32:
+            return None
+        text = data[:32].rstrip(b"\x00").decode("utf-8", errors="replace")
+        if text and text.isprintable():
+            return text
+        return None
+    except (UnicodeDecodeError, ValueError, IndexError):
+        return None
+
+
+def _try_decode_bytes32_length_prefixed(hex_result):
+    """Try to decode a length-prefixed bytes32 symbol() response (DGD style).
+
+    ADR-013 Format B: the raw 32-byte response encodes a length-prefixed
+    string. Byte 0 is the byte length of the ticker; bytes 1..length are
+    the ASCII ticker. The remaining bytes are null padding.
+
+    Example: DGD = b'\x03DGD' + b'\x00' * 28.
+
+    Validation rules (bounds-checked; no raw byte arithmetic):
+    - Response must be at least 1 byte (to read the length prefix).
+    - length = raw[0]; must satisfy 1 <= length <= 31.
+    - Response must have at least 1 + length bytes.
+    - Ticker bytes must decode to printable ASCII.
+
+    Returns the decoded ticker on success, or None if the response does
+    not match this format.
+
+    Catches only UnicodeDecodeError, ValueError, IndexError.
+    """
+    try:
+        raw = hex_result
+        if isinstance(raw, str) and raw.startswith("0x"):
+            raw = raw[2:]
+        data = bytes.fromhex(raw)
+        if len(data) < 1:
+            return None
+        length = data[0]
+        # Reject zero-length (empty ticker) and lengths >= 32 (overflow).
+        if length < 1 or length >= 32:
+            return None
+        if len(data) < 1 + length:
+            return None
+        ticker_bytes = data[1:1 + length]
+        text = ticker_bytes.decode("ascii")
+        if text and text.isprintable():
+            return text
+        return None
+    except (UnicodeDecodeError, ValueError, IndexError):
+        return None
+
+
+def decode_symbol(hex_result):
+    """Decode the string return from symbol(). Returns Optional[str].
+
+    Implements the bounded fallback ladder from ADR-013:
+    1. Standard ABI dynamic-string layout (most common modern format).
+    2. Null-trimmed bytes32 ASCII (MKR-style legacy format, Phase 1).
+    3. Length-prefixed bytes32 ASCII (DGD-style legacy format, ADR-013 new).
+    4. None — unknown/unsupported format (best-effort posture preserved).
+
+    Short-circuits at the first non-None result.
+    Returns None on any failure rather than raising (architecture ADR-006).
+    """
+    try:
+        decoded = _try_decode_abi_string(hex_result)
+        if decoded is not None:
+            return decoded
+        decoded = _try_decode_bytes32_null_trimmed(hex_result)
+        if decoded is not None:
+            return decoded
+        decoded = _try_decode_bytes32_length_prefixed(hex_result)
+        if decoded is not None:
+            return decoded
         return None
     except Exception:
         return None
