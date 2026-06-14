@@ -501,6 +501,235 @@ def emit_warning(kind, payload):
 
 # === Layer 3: tx_assembly ===
 
+
+def _build_eip1559_envelope(chain_id, nonce, to, data, gas, base_fee, tip):
+    """Assemble the v1-shape TxRequest dict with all numeric fields as decimal strings.
+
+    Args:
+        chain_id: int network chain id.
+        nonce:    int account nonce.
+        to:       str token contract address (0x-prefixed).
+        data:     str ABI-encoded calldata (0x-prefixed).
+        gas:      int gas limit (buffered + capped).
+        base_fee: int base fee in wei (from latest block).
+        tip:      int max priority fee in wei.
+
+    Returns:
+        dict: TxRequest JSON-ready dict matching the eth-signer-mcp contract.
+    """
+    return {
+        "type": "eip1559",
+        "chainId": str(chain_id),
+        "nonce": str(nonce),
+        "to": to,
+        "value": "0",
+        "data": data,
+        "gas": str(gas),
+        "maxFeePerGas": str(_core.compute_max_fee(base_fee, tip)),
+        "maxPriorityFeePerGas": str(tip),
+    }
+
+
+def do_transfer(network, token, to, amount, sender, *, rpc=_core.rpc_call):
+    """Build an ERC-20 transfer(to, amount) TxRequest.
+
+    Follows the architecture eight-step skeleton (ADR-004). Returns
+    (tx_dict, summary_ctx, warnings_list). Never writes to stdout/stderr.
+
+    Args:
+        network: str network name (e.g. "mainnet", "hoodi").
+        token:   str ERC-20 contract address (0x + 40 hex, pre-validated).
+        to:      str recipient address (0x + 40 hex, pre-validated).
+        amount:  str human-readable amount string (e.g. "1.5").
+        sender:  str signing account address (0x + 40 hex, pre-validated).
+        rpc:     callable rpc(url, method, params) — injected for testing.
+
+    Returns:
+        tuple: (tx_dict, summary_ctx, warnings_list)
+    """
+    # Step 1: Resolve network.
+    chain_id, url = _core.network_config(network)
+    # Steps 2–3: Fetch decimals (FATAL) and symbol (best-effort).
+    decimals = fetch_decimals(rpc, url, token)
+    symbol = fetch_symbol(rpc, url, token)
+    # Step 4: Convert human amount to base units.
+    amount_base = human_to_base_units(amount, decimals)
+    # Step 5: Build calldata.
+    calldata = encode_transfer(to, amount_base)
+    # Step 6: Estimate gas — FATAL; RPCError propagates (ADR-007, no try/except).
+    gas = estimate_gas(rpc, url, sender, token, calldata)
+    # Step 7: Fetch nonce and fees.
+    nonce    = _core.fetch_nonce(rpc, url, sender)
+    base_fee = _core.fetch_base_fee(rpc, url)
+    tip      = _core.fetch_tip(rpc, url)
+    max_fee  = _core.compute_max_fee(base_fee, tip)
+    # Step 8: Assemble tx dict.
+    tx_dict = _build_eip1559_envelope(chain_id, nonce, token, calldata, gas, base_fee, tip)
+    # Build summary context with stable keys.
+    summary_ctx = {
+        "operation":      "transfer",
+        "network":        network,
+        "chain_id":       chain_id,
+        "token":          token,
+        "symbol":         symbol,
+        "decimals":       decimals,
+        "human_amount":   amount,
+        "base_amount":    amount_base,
+        "is_max_uint":    False,
+        "from_":          sender,
+        "to":             to,
+        "nonce":          nonce,
+        "gas":            gas,
+        "max_fee":        max_fee,
+        "max_priority_fee": tip,
+    }
+    return (tx_dict, summary_ctx, [])
+
+
+def do_approve(network, token, spender, amount, sender, *,
+               approve_max=False, rpc=_core.rpc_call):
+    """Build an ERC-20 approve(spender, amount) TxRequest.
+
+    When approve_max=True, amount must be None; MAX_UINT256 is used and an
+    "approve_max" warning is queued. Returns (tx_dict, summary_ctx, warnings_list).
+
+    Args:
+        network:     str network name.
+        token:       str ERC-20 contract address (pre-validated).
+        spender:     str spender address (pre-validated).
+        amount:      str human-readable amount, or None when approve_max=True.
+        sender:      str signing account address (pre-validated).
+        approve_max: bool — if True, approve MAX_UINT256 and queue a warning.
+        rpc:         callable — injected for testing.
+
+    Returns:
+        tuple: (tx_dict, summary_ctx, warnings_list)
+    """
+    warnings = []
+    # Step 1: Resolve network.
+    chain_id, url = _core.network_config(network)
+    # Steps 2–3: Fetch decimals (FATAL) and symbol (best-effort).
+    decimals = fetch_decimals(rpc, url, token)
+    symbol = fetch_symbol(rpc, url, token)
+    # Step 4: Resolve amount.
+    if approve_max:
+        amount_base = MAX_UINT256
+        warnings.append(("approve_max", {
+            "symbol": symbol,
+            "token": token,
+            "spender": spender,
+        }))
+    else:
+        amount_base = human_to_base_units(amount, decimals)
+    # Step 5: Build calldata.
+    calldata = encode_approve(spender, amount_base)
+    # Step 6: Estimate gas — FATAL; RPCError propagates (ADR-007).
+    gas = estimate_gas(rpc, url, sender, token, calldata)
+    # Step 7: Fetch nonce and fees.
+    nonce    = _core.fetch_nonce(rpc, url, sender)
+    base_fee = _core.fetch_base_fee(rpc, url)
+    tip      = _core.fetch_tip(rpc, url)
+    max_fee  = _core.compute_max_fee(base_fee, tip)
+    # Step 8: Assemble tx dict.
+    tx_dict = _build_eip1559_envelope(chain_id, nonce, token, calldata, gas, base_fee, tip)
+    # Build summary context.
+    summary_ctx = {
+        "operation":      "approve",
+        "network":        network,
+        "chain_id":       chain_id,
+        "token":          token,
+        "symbol":         symbol,
+        "decimals":       decimals,
+        "human_amount":   "MAX UINT256" if approve_max else amount,
+        "base_amount":    amount_base,
+        "is_max_uint":    approve_max,
+        "from_":          sender,       # holder == sender for approve
+        "holder":         sender,
+        "spender":        spender,
+        "nonce":          nonce,
+        "gas":            gas,
+        "max_fee":        max_fee,
+        "max_priority_fee": tip,
+    }
+    return (tx_dict, summary_ctx, warnings)
+
+
+def do_transfer_from(network, token, from_, to, amount, sender, *, rpc=_core.rpc_call):
+    """Build an ERC-20 transferFrom(from, to, amount) TxRequest.
+
+    Performs a soft allowance check: if fetch_allowance raises RPCError the
+    check is skipped (warning queued); if allowance < amount_base a low-
+    allowance warning is queued. In both cases the tx is still built and
+    returned. This is the ONLY try/except _core.RPCError outside cli_dispatch
+    (architecture ADR-007). Returns (tx_dict, summary_ctx, warnings_list).
+
+    Args:
+        network: str network name.
+        token:   str ERC-20 contract address (pre-validated).
+        from_:   str token holder address (pre-validated).
+        to:      str recipient address (pre-validated).
+        amount:  str human-readable amount string.
+        sender:  str signer / spender address (pre-validated).
+        rpc:     callable — injected for testing.
+
+    Returns:
+        tuple: (tx_dict, summary_ctx, warnings_list)
+    """
+    warnings = []
+    # Step 1: Resolve network.
+    chain_id, url = _core.network_config(network)
+    # Steps 2–3: Fetch decimals (FATAL) and symbol (best-effort).
+    decimals = fetch_decimals(rpc, url, token)
+    symbol = fetch_symbol(rpc, url, token)
+    # Step 4: Convert human amount to base units.
+    amount_base = human_to_base_units(amount, decimals)
+    # Step 5: Build calldata.
+    calldata = encode_transfer_from(from_, to, amount_base)
+    # Step 6a: Soft allowance check (the ONE try/except RPCError outside main).
+    try:
+        current = fetch_allowance(rpc, url, token, from_, sender)
+    except _core.RPCError as e:
+        warnings.append(("allowance_check_skipped", {"reason": str(e)}))
+    else:
+        if current < amount_base:
+            warnings.append(("low_allowance", {
+                "holder":    from_,
+                "spender":   sender,
+                "current":   current,
+                "requested": amount_base,
+                "decimals":  decimals,
+            }))
+    # Step 6b: Estimate gas — FATAL; RPCError propagates (ADR-007, no try/except).
+    gas = estimate_gas(rpc, url, sender, token, calldata)
+    # Step 7: Fetch nonce and fees.
+    nonce    = _core.fetch_nonce(rpc, url, sender)
+    base_fee = _core.fetch_base_fee(rpc, url)
+    tip      = _core.fetch_tip(rpc, url)
+    max_fee  = _core.compute_max_fee(base_fee, tip)
+    # Step 8: Assemble tx dict.
+    tx_dict = _build_eip1559_envelope(chain_id, nonce, token, calldata, gas, base_fee, tip)
+    # Build summary context.
+    summary_ctx = {
+        "operation":        "transfer-from",
+        "network":          network,
+        "chain_id":         chain_id,
+        "token":            token,
+        "symbol":           symbol,
+        "decimals":         decimals,
+        "human_amount":     amount,
+        "base_amount":      amount_base,
+        "is_max_uint":      False,
+        "from_":            from_,
+        "to":               to,
+        "sender":           sender,
+        "signer_spender":   sender,
+        "nonce":            nonce,
+        "gas":              gas,
+        "max_fee":          max_fee,
+        "max_priority_fee": tip,
+    }
+    return (tx_dict, summary_ctx, warnings)
+
 # === end Layer 3: tx_assembly ===
 
 # === Layer 4: cli_dispatch ===

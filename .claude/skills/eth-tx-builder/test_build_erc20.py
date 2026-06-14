@@ -712,5 +712,309 @@ class TestSummary(unittest.TestCase):
             b.emit_warning("unknown_kind", {})
 
 
+class TestTxAssembly(unittest.TestCase):
+    """Tests for the Layer 3 tx_assembly section.
+
+    Uses make_fake_rpc (defined at module level, A14 comment) to mock all RPC
+    calls. Tests cover happy paths, approve_max, transfer-from soft-checks, and
+    no-fallback regressions (ADR-007).
+    """
+
+    # Addresses reused across tests — 0x-prefixed, 40 hex chars each.
+    TOKEN   = "0x" + "a" * 40
+    TO      = "0x" + "b" * 40
+    SENDER  = "0x" + "c" * 40
+    FROM_   = "0x" + "d" * 40
+    SPENDER = "0x" + "e" * 40
+
+    # Hex constants returned by the fake RPC.
+    HEX_DECIMALS_6   = "0x" + "0" * 62 + "06"
+    # Standard ABI encoding of "USDC" symbol.
+    _offset = "0020".zfill(64)
+    _length = "0004".zfill(64)
+    _payload = "55534443" + "00" * 28  # "USDC" + 28 zero bytes
+    HEX_SYMBOL_USDC  = "0x" + _offset + _length + _payload
+    HEX_GAS          = "0xfe1f"   # 65055 -> buffered: 78066
+    HEX_NONCE        = "0x05"     # nonce=5
+    HEX_BASE_FEE     = "0x2540be400"  # 10_000_000_000 (10 gwei)
+    HEX_TIP          = "0x3b9aca00"   # 1_000_000_000 (1 gwei)
+    # Allowance >= requested (10 USDC worth in base units 10_000_000)
+    HEX_ALLOWANCE_HIGH = "0x" + format(10_000_000, "064x")
+    # Allowance < requested (1 base unit)
+    HEX_ALLOWANCE_LOW  = "0x" + format(1, "064x")
+
+    def _make_block(self):
+        """Return a minimal fake eth_getBlockByNumber result."""
+        return {"baseFeePerGas": self.HEX_BASE_FEE}
+
+    def _make_rpc_for_transfer(self, *, gas_hex=None, allowance_hex=None):
+        """Build a make_fake_rpc that supplies correct responses for do_transfer.
+
+        The fake RPC dispatches eth_call responses by inspecting the selector
+        in the data field to distinguish decimals / symbol / allowance reads
+        (architecture A14 comment).
+        """
+        gas_hex = gas_hex or self.HEX_GAS
+
+        def _rpc(url, method, params):
+            if method == "eth_estimateGas":
+                return gas_hex
+            if method == "eth_getTransactionCount":
+                return self.HEX_NONCE
+            if method == "eth_getBlockByNumber":
+                return self._make_block()
+            if method == "eth_maxPriorityFeePerGas":
+                return self.HEX_TIP
+            if method == "eth_call":
+                call_obj = params[0]
+                data = call_obj.get("data", "")
+                # Distinguish by 4-byte selector prefix
+                if data.startswith(b.SEL_DECIMALS):
+                    return self.HEX_DECIMALS_6
+                if data.startswith(b.SEL_SYMBOL):
+                    return self.HEX_SYMBOL_USDC
+                if data.startswith(b.SEL_ALLOWANCE):
+                    return allowance_hex or self.HEX_ALLOWANCE_HIGH
+                raise AssertionError("unexpected eth_call data: %r" % data)
+            raise AssertionError("unexpected RPC method: %r" % method)
+
+        return _rpc
+
+    # -----------------------------------------------------------------------
+    # _build_eip1559_envelope
+    # -----------------------------------------------------------------------
+
+    def test_build_envelope_shape(self):
+        """_build_eip1559_envelope returns the v1 TxRequest shape with decimal strings."""
+        base_fee = 10_000_000_000
+        tip      = 1_000_000_000
+        tx = b._build_eip1559_envelope(
+            chain_id=1,
+            nonce=5,
+            to=self.TOKEN,
+            data="0xdeadbeef",
+            gas=78066,
+            base_fee=base_fee,
+            tip=tip,
+        )
+        self.assertEqual(tx["type"], "eip1559")
+        self.assertEqual(tx["chainId"], "1")
+        self.assertEqual(tx["nonce"], "5")
+        self.assertEqual(tx["to"], self.TOKEN)
+        self.assertEqual(tx["value"], "0")
+        self.assertEqual(tx["data"], "0xdeadbeef")
+        self.assertEqual(tx["gas"], "78066")
+        # maxFeePerGas = compute_max_fee(base_fee, tip) = base_fee*2 + tip
+        expected_max_fee = str(b._core.compute_max_fee(base_fee, tip))
+        self.assertEqual(tx["maxFeePerGas"], expected_max_fee)
+        self.assertEqual(tx["maxPriorityFeePerGas"], str(tip))
+
+    def test_build_envelope_all_numeric_fields_are_strings(self):
+        """All numeric tx fields must be decimal strings, not ints."""
+        tx = b._build_eip1559_envelope(1, 0, self.TOKEN, "0x", 21000,
+                                       10_000_000_000, 1_000_000_000)
+        for key in ("chainId", "nonce", "gas", "maxFeePerGas", "maxPriorityFeePerGas"):
+            self.assertIsInstance(tx[key], str, msg="field %r should be str" % key)
+
+    # -----------------------------------------------------------------------
+    # do_transfer — happy path
+    # -----------------------------------------------------------------------
+
+    def test_do_transfer_happy_path_tx_shape(self):
+        rpc = self._make_rpc_for_transfer()
+        tx, ctx, warns = b.do_transfer(
+            network="mainnet",
+            token=self.TOKEN,
+            to=self.TO,
+            amount="1.5",
+            sender=self.SENDER,
+            rpc=rpc,
+        )
+        # tx is the token contract address (not the recipient)
+        self.assertEqual(tx["to"], self.TOKEN)
+        self.assertEqual(tx["value"], "0")
+        self.assertTrue(tx["data"].startswith(b.SEL_TRANSFER))
+        self.assertEqual(tx["type"], "eip1559")
+        # All numeric fields are strings
+        for key in ("chainId", "nonce", "gas", "maxFeePerGas", "maxPriorityFeePerGas"):
+            self.assertIsInstance(tx[key], str)
+
+    def test_do_transfer_happy_path_warnings_empty(self):
+        rpc = self._make_rpc_for_transfer()
+        _, _, warns = b.do_transfer(
+            network="mainnet", token=self.TOKEN, to=self.TO,
+            amount="1.5", sender=self.SENDER, rpc=rpc,
+        )
+        self.assertEqual(warns, [])
+
+    def test_do_transfer_happy_path_summary_ctx(self):
+        rpc = self._make_rpc_for_transfer()
+        _, ctx, _ = b.do_transfer(
+            network="mainnet", token=self.TOKEN, to=self.TO,
+            amount="1.5", sender=self.SENDER, rpc=rpc,
+        )
+        self.assertEqual(ctx["operation"], "transfer")
+        self.assertEqual(ctx["network"], "mainnet")
+        self.assertEqual(ctx["token"], self.TOKEN)
+        self.assertEqual(ctx["symbol"], "USDC")
+        self.assertEqual(ctx["decimals"], 6)
+        self.assertEqual(ctx["human_amount"], "1.5")
+        self.assertEqual(ctx["base_amount"], 1_500_000)
+        self.assertFalse(ctx["is_max_uint"])
+        self.assertIn("nonce", ctx)
+        self.assertIn("gas", ctx)
+        self.assertIn("max_fee", ctx)
+        self.assertIn("max_priority_fee", ctx)
+
+    # -----------------------------------------------------------------------
+    # do_approve — bounded amount
+    # -----------------------------------------------------------------------
+
+    def test_do_approve_happy_path_tx_shape(self):
+        rpc = self._make_rpc_for_transfer()
+        tx, ctx, warns = b.do_approve(
+            network="mainnet", token=self.TOKEN, spender=self.SPENDER,
+            amount="1.5", sender=self.SENDER, rpc=rpc,
+        )
+        self.assertEqual(tx["to"], self.TOKEN)
+        self.assertEqual(tx["value"], "0")
+        self.assertTrue(tx["data"].startswith(b.SEL_APPROVE))
+        self.assertEqual(warns, [])
+        self.assertEqual(ctx["operation"], "approve")
+        self.assertFalse(ctx["is_max_uint"])
+
+    # -----------------------------------------------------------------------
+    # do_approve — approve_max=True
+    # -----------------------------------------------------------------------
+
+    def test_do_approve_max_data_ends_with_all_fs(self):
+        """When approve_max=True, the calldata amount word must be all-F's."""
+        rpc = self._make_rpc_for_transfer()
+        tx, ctx, warns = b.do_approve(
+            network="mainnet", token=self.TOKEN, spender=self.SPENDER,
+            amount=None, sender=self.SENDER, approve_max=True, rpc=rpc,
+        )
+        # The last 64 hex chars of tx["data"] are the uint256 encoding of MAX_UINT256
+        self.assertTrue(tx["data"].endswith("f" * 64))
+        self.assertTrue(ctx["is_max_uint"])
+
+    def test_do_approve_max_queues_approve_max_warning(self):
+        rpc = self._make_rpc_for_transfer()
+        _, _, warns = b.do_approve(
+            network="mainnet", token=self.TOKEN, spender=self.SPENDER,
+            amount=None, sender=self.SENDER, approve_max=True, rpc=rpc,
+        )
+        self.assertEqual(len(warns), 1)
+        kind, payload = warns[0]
+        self.assertEqual(kind, "approve_max")
+        self.assertIn("token", payload)
+        self.assertIn("spender", payload)
+
+    # -----------------------------------------------------------------------
+    # do_transfer_from — happy path (sufficient allowance)
+    # -----------------------------------------------------------------------
+
+    def test_do_transfer_from_happy_path_no_warnings(self):
+        # Allowance HIGH (10_000_000 >= 1_500_000 requested)
+        rpc = self._make_rpc_for_transfer(allowance_hex=self.HEX_ALLOWANCE_HIGH)
+        _, _, warns = b.do_transfer_from(
+            network="mainnet", token=self.TOKEN,
+            from_=self.FROM_, to=self.TO, amount="1.5",
+            sender=self.SENDER, rpc=rpc,
+        )
+        self.assertEqual(warns, [])
+
+    def test_do_transfer_from_happy_path_tx_shape(self):
+        rpc = self._make_rpc_for_transfer(allowance_hex=self.HEX_ALLOWANCE_HIGH)
+        tx, ctx, _ = b.do_transfer_from(
+            network="mainnet", token=self.TOKEN,
+            from_=self.FROM_, to=self.TO, amount="1.5",
+            sender=self.SENDER, rpc=rpc,
+        )
+        self.assertEqual(tx["to"], self.TOKEN)
+        self.assertTrue(tx["data"].startswith(b.SEL_TRANSFER_FROM))
+        self.assertEqual(ctx["operation"], "transfer-from")
+
+    # -----------------------------------------------------------------------
+    # do_transfer_from — low allowance (soft-check warns, tx still built)
+    # -----------------------------------------------------------------------
+
+    def test_do_transfer_from_low_allowance_queues_warning(self):
+        rpc = self._make_rpc_for_transfer(allowance_hex=self.HEX_ALLOWANCE_LOW)
+        tx, ctx, warns = b.do_transfer_from(
+            network="mainnet", token=self.TOKEN,
+            from_=self.FROM_, to=self.TO, amount="1.5",
+            sender=self.SENDER, rpc=rpc,
+        )
+        self.assertEqual(len(warns), 1)
+        kind, payload = warns[0]
+        self.assertEqual(kind, "low_allowance")
+        self.assertIn("current", payload)
+        self.assertIn("requested", payload)
+        # tx is still built despite the low allowance
+        self.assertIn("data", tx)
+
+    # -----------------------------------------------------------------------
+    # do_transfer_from — allowance RPC error (soft-check skipped, tx still built)
+    # -----------------------------------------------------------------------
+
+    def test_do_transfer_from_allowance_rpc_error_queues_skipped_warning(self):
+        """When fetch_allowance raises RPCError the soft-check is skipped; tx is still built."""
+        base_rpc = self._make_rpc_for_transfer()
+
+        def _rpc_allowance_fails(url, method, params):
+            if method == "eth_call":
+                call_obj = params[0]
+                data = call_obj.get("data", "")
+                if data.startswith(b.SEL_ALLOWANCE):
+                    raise b._core.RPCError("allowance rpc down")
+            return base_rpc(url, method, params)
+
+        tx, _, warns = b.do_transfer_from(
+            network="mainnet", token=self.TOKEN,
+            from_=self.FROM_, to=self.TO, amount="1.5",
+            sender=self.SENDER, rpc=_rpc_allowance_fails,
+        )
+        self.assertEqual(len(warns), 1)
+        kind, payload = warns[0]
+        self.assertEqual(kind, "allowance_check_skipped")
+        self.assertIn("reason", payload)
+        # tx was still built
+        self.assertIn("data", tx)
+
+    # -----------------------------------------------------------------------
+    # No-fallback regressions (ADR-007)
+    # -----------------------------------------------------------------------
+
+    def test_do_transfer_fetch_decimals_raises_propagates(self):
+        """When fetch_decimals raises RPCError, do_transfer must propagate it (no tx)."""
+        def _rpc_no_decimals(url, method, params):
+            if method == "eth_call":
+                call_obj = params[0]
+                data = call_obj.get("data", "")
+                if data.startswith(b.SEL_DECIMALS):
+                    raise b._core.RPCError("decimals rpc down")
+            return self._make_rpc_for_transfer()(url, method, params)
+
+        with self.assertRaises(b._core.RPCError):
+            b.do_transfer(
+                network="mainnet", token=self.TOKEN, to=self.TO,
+                amount="1.5", sender=self.SENDER, rpc=_rpc_no_decimals,
+            )
+
+    def test_do_transfer_estimate_gas_raises_propagates(self):
+        """When estimate_gas raises RPCError, do_transfer must propagate it (ADR-007)."""
+        def _rpc_no_gas(url, method, params):
+            if method == "eth_estimateGas":
+                raise b._core.RPCError("execution reverted")
+            return self._make_rpc_for_transfer()(url, method, params)
+
+        with self.assertRaises(b._core.RPCError):
+            b.do_transfer(
+                network="mainnet", token=self.TOKEN, to=self.TO,
+                amount="1.5", sender=self.SENDER, rpc=_rpc_no_gas,
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
