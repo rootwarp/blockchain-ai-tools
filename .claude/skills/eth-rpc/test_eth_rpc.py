@@ -165,7 +165,7 @@ class TestDoBalance(unittest.TestCase):
 
     def test_normal_balance(self):
         rpc = make_fake_rpc({"eth_getBalance": "0x0c7d713b49da0000"})  # 0.9 ETH
-        out = r.do_balance("hoodi", self.ADDR, rpc=rpc)
+        out = r.do_balance(network="hoodi", address=self.ADDR, rpc=rpc)
         self.assertEqual(
             out,
             {
@@ -180,14 +180,14 @@ class TestDoBalance(unittest.TestCase):
 
     def test_zero_balance(self):
         rpc = make_fake_rpc({"eth_getBalance": "0x0"})
-        out = r.do_balance("mainnet", self.ADDR, rpc=rpc)
+        out = r.do_balance(network="mainnet", address=self.ADDR, rpc=rpc)
         self.assertEqual(out["chainId"], "1")
         self.assertEqual(out["balanceWei"], "0")
         self.assertEqual(out["balanceEth"], "0")
 
     def test_one_eth(self):
         rpc = make_fake_rpc({"eth_getBalance": "0x0de0b6b3a7640000"})  # 1 ETH
-        out = r.do_balance("hoodi", self.ADDR, rpc=rpc)
+        out = r.do_balance(network="hoodi", address=self.ADDR, rpc=rpc)
         self.assertEqual(out["balanceWei"], "1000000000000000000")
         self.assertEqual(out["balanceEth"], "1")
 
@@ -198,12 +198,41 @@ class TestDoBalance(unittest.TestCase):
             seen["params"] = params
             return "0x0"
 
-        r.do_balance("hoodi", self.ADDR, rpc=rpc)
+        r.do_balance(network="hoodi", address=self.ADDR, rpc=rpc)
         self.assertEqual(seen["params"], [self.ADDR, "latest"])
 
     def test_malformed_address_raises(self):
         with self.assertRaises(ValueError):
-            r.do_balance("hoodi", "0xnope", rpc=make_fake_rpc({"eth_getBalance": "0x0"}))
+            r.do_balance(network="hoodi", address="0xnope",
+                         rpc=make_fake_rpc({"eth_getBalance": "0x0"}))
+
+    def test_custom_endpoint_returns_balance(self):
+        # Issue 2.9: rpc_url + chain_id path via _resolve_endpoint
+        rpc = make_fake_rpc({"eth_getBalance": "0x0de0b6b3a7640000"})  # 1 ETH
+        out = r.do_balance(
+            rpc_url="http://127.0.0.1:8545", chain_id=31337, address=self.ADDR, rpc=rpc
+        )
+        self.assertEqual(out["chainId"], "31337")
+        self.assertEqual(out["balanceEth"], "1")
+        # "network" key must be absent when using custom endpoint (network=None)
+        self.assertNotIn("network", out)
+
+    def test_custom_endpoint_no_network_key(self):
+        # Confirm that named-network tests still have the "network" key
+        rpc = make_fake_rpc({"eth_getBalance": "0x0"})
+        named = r.do_balance(network="hoodi", address=self.ADDR, rpc=rpc)
+        self.assertIn("network", named)
+        self.assertEqual(named["network"], "hoodi")
+
+    def test_mutual_exclusion_raises(self):
+        # network + rpc_url together must raise ValueError
+        rpc = make_fake_rpc({"eth_getBalance": "0x0"})
+        with self.assertRaises(ValueError) as ctx:
+            r.do_balance(
+                network="hoodi", rpc_url="http://127.0.0.1:8545", chain_id=31337,
+                address=self.ADDR, rpc=rpc,
+            )
+        self.assertIn("not both", str(ctx.exception))
 
 
 class TestMain(unittest.TestCase):
@@ -220,6 +249,38 @@ class TestMain(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(json.loads(out.getvalue())["balanceEth"], "1")
 
+    def test_balance_kwargs_forwarded(self):
+        # Issue 2.9: main must call do_balance with keyword args incl. rpc_url/chain_id.
+        out = io.StringIO()
+        with mock.patch(
+            "eth_rpc.do_balance",
+            return_value={"network": "hoodi", "balanceEth": "1"},
+        ) as do_bal, mock.patch("sys.stdout", out):
+            r.main(["balance", "--network", "hoodi", "--address", self.ADDR])
+        _, kwargs = do_bal.call_args
+        self.assertEqual(kwargs["network"], "hoodi")
+        self.assertEqual(kwargs["address"], self.ADDR)
+        self.assertIsNone(kwargs.get("rpc_url"))
+        self.assertIsNone(kwargs.get("chain_id"))
+
+    def test_balance_custom_endpoint_kwargs_forwarded(self):
+        # Issue 2.9: --rpc-url + --chain-id forwarded to do_balance as kwargs.
+        out = io.StringIO()
+        with mock.patch(
+            "eth_rpc.do_balance",
+            return_value={"chainId": "31337", "balanceEth": "0"},
+        ) as do_bal, mock.patch("sys.stdout", out):
+            r.main([
+                "balance",
+                "--rpc-url", "http://127.0.0.1:8545",
+                "--chain-id", "31337",
+                "--address", self.ADDR,
+            ])
+        _, kwargs = do_bal.call_args
+        self.assertEqual(kwargs["rpc_url"], "http://127.0.0.1:8545")
+        self.assertEqual(kwargs["chain_id"], 31337)
+        self.assertIsNone(kwargs.get("network"))
+
     def test_broadcast_prints_json_returns_zero(self):
         out = io.StringIO()
         with mock.patch(
@@ -232,6 +293,38 @@ class TestMain(unittest.TestCase):
         # default: wait is False
         _, kwargs = do_bc.call_args
         self.assertFalse(kwargs["wait"])
+
+    def test_broadcast_kwargs_forwarded(self):
+        # Issue 2.9: main must call do_broadcast with keyword args incl. rpc_url/chain_id.
+        out = io.StringIO()
+        with mock.patch(
+            "eth_rpc.do_broadcast",
+            return_value={"txHash": "0xabc", "status": "submitted"},
+        ) as do_bc, mock.patch("sys.stdout", out):
+            r.main(["broadcast", "--network", "hoodi", "--raw-tx", self.RAW])
+        _, kwargs = do_bc.call_args
+        self.assertEqual(kwargs["network"], "hoodi")
+        self.assertEqual(kwargs["raw_tx"], self.RAW)
+        self.assertIsNone(kwargs.get("rpc_url"))
+        self.assertIsNone(kwargs.get("chain_id"))
+
+    def test_broadcast_custom_endpoint_kwargs_forwarded(self):
+        # Issue 2.9: --rpc-url + --chain-id forwarded to do_broadcast as kwargs.
+        out = io.StringIO()
+        with mock.patch(
+            "eth_rpc.do_broadcast",
+            return_value={"txHash": "0xabc", "status": "submitted"},
+        ) as do_bc, mock.patch("sys.stdout", out):
+            r.main([
+                "broadcast",
+                "--rpc-url", "http://127.0.0.1:8545",
+                "--chain-id", "31337",
+                "--raw-tx", self.RAW,
+            ])
+        _, kwargs = do_bc.call_args
+        self.assertEqual(kwargs["rpc_url"], "http://127.0.0.1:8545")
+        self.assertEqual(kwargs["chain_id"], 31337)
+        self.assertIsNone(kwargs.get("network"))
 
     def test_broadcast_wait_flag_forwarded(self):
         out = io.StringIO()
@@ -284,6 +377,36 @@ class TestMain(unittest.TestCase):
         self.assertEqual(kwargs["method"], "eth_chainId")
         self.assertEqual(kwargs["params"], [])
 
+    def test_balance_mutual_exclusion_via_main(self):
+        # Issue 2.9: balance with --network + --rpc-url + --chain-id must error
+        import contextlib
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            rc = r.main([
+                "balance",
+                "--network", "hoodi",
+                "--rpc-url", "http://127.0.0.1:8545",
+                "--chain-id", "31337",
+                "--address", self.ADDR,
+            ])
+        self.assertEqual(rc, 1)
+        self.assertIn("error:", err.getvalue())
+
+    def test_broadcast_mutual_exclusion_via_main(self):
+        # Issue 2.9: broadcast with --network + --rpc-url + --chain-id must error
+        import contextlib
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            rc = r.main([
+                "broadcast",
+                "--network", "hoodi",
+                "--rpc-url", "http://127.0.0.1:8545",
+                "--chain-id", "31337",
+                "--raw-tx", self.RAW,
+            ])
+        self.assertEqual(rc, 1)
+        self.assertIn("error:", err.getvalue())
+
 
 class TestDoBroadcastWait(unittest.TestCase):
     RAW = "0x02f8ab83088bb0"
@@ -314,7 +437,7 @@ class TestDoBroadcastWait(unittest.TestCase):
         ]
         slept = []
         out = r.do_broadcast(
-            "hoodi", self.RAW, wait=True, wait_timeout=120, poll_interval=4,
+            network="hoodi", raw_tx=self.RAW, wait=True, wait_timeout=120, poll_interval=4,
             rpc=self._seq_rpc(receipts), sleep=lambda s: slept.append(s), now=lambda: 0.0,
         )
         self.assertEqual(out["txHash"], self.HASH)
@@ -328,7 +451,7 @@ class TestDoBroadcastWait(unittest.TestCase):
     def test_reverted_is_failed(self):
         receipts = [{"status": "0x0", "blockNumber": "0x10", "gasUsed": "0x5208"}]
         out = r.do_broadcast(
-            "hoodi", self.RAW, wait=True, wait_timeout=120, poll_interval=4,
+            network="hoodi", raw_tx=self.RAW, wait=True, wait_timeout=120, poll_interval=4,
             rpc=self._seq_rpc(receipts), sleep=lambda s: None, now=lambda: 0.0,
         )
         self.assertEqual(out["status"], "failed")
@@ -351,7 +474,7 @@ class TestDoBroadcastWait(unittest.TestCase):
             return None  # receipt never appears
 
         out = r.do_broadcast(
-            "hoodi", self.RAW, wait=True, wait_timeout=10, poll_interval=4,
+            network="hoodi", raw_tx=self.RAW, wait=True, wait_timeout=10, poll_interval=4,
             rpc=rpc, sleep=sleep, now=now,
         )
         self.assertEqual(out["status"], "pending")
@@ -365,7 +488,7 @@ class TestDoBroadcastWait(unittest.TestCase):
                 return self.HASH
             raise AssertionError("should not poll when wait=False")
 
-        out = r.do_broadcast("hoodi", self.RAW, wait=False, rpc=rpc)
+        out = r.do_broadcast(network="hoodi", raw_tx=self.RAW, wait=False, rpc=rpc)
         self.assertEqual(out["status"], "submitted")
 
     def test_receipt_poll_error_preserves_hash(self):
@@ -376,7 +499,7 @@ class TestDoBroadcastWait(unittest.TestCase):
 
         with self.assertRaises(r.RPCError) as ctx:
             r.do_broadcast(
-                "hoodi", self.RAW, wait=True, wait_timeout=120, poll_interval=4,
+                network="hoodi", raw_tx=self.RAW, wait=True, wait_timeout=120, poll_interval=4,
                 rpc=rpc, sleep=lambda s: None, now=lambda: 0.0,
             )
         self.assertIn(self.HASH, str(ctx.exception))
@@ -402,7 +525,7 @@ class TestDoBroadcastSubmit(unittest.TestCase):
             seen["params"] = params
             return self.HASH
 
-        out = r.do_broadcast("hoodi", self.RAW, rpc=rpc)
+        out = r.do_broadcast(network="hoodi", raw_tx=self.RAW, rpc=rpc)
         self.assertEqual(seen["method"], "eth_sendRawTransaction")
         self.assertEqual(seen["params"], [self.RAW])
         self.assertEqual(
@@ -417,12 +540,36 @@ class TestDoBroadcastSubmit(unittest.TestCase):
 
     def test_malformed_raw_raises(self):
         with self.assertRaises(ValueError):
-            r.do_broadcast("hoodi", "not-hex", rpc=make_fake_rpc({"eth_sendRawTransaction": self.HASH}))
+            r.do_broadcast(network="hoodi", raw_tx="not-hex",
+                           rpc=make_fake_rpc({"eth_sendRawTransaction": self.HASH}))
 
     def test_submit_rpc_error_propagates(self):
         rpc = make_fake_rpc({}, errors={"eth_sendRawTransaction"})
         with self.assertRaises(r.RPCError):
-            r.do_broadcast("hoodi", self.RAW, rpc=rpc)
+            r.do_broadcast(network="hoodi", raw_tx=self.RAW, rpc=rpc)
+
+    def test_custom_endpoint_submit_returns_hash(self):
+        # Issue 2.9: rpc_url + chain_id path for broadcast
+        def rpc(url, method, params):
+            return self.HASH
+
+        out = r.do_broadcast(
+            rpc_url="http://127.0.0.1:8545", chain_id=31337, raw_tx=self.RAW, rpc=rpc
+        )
+        self.assertEqual(out["txHash"], self.HASH)
+        self.assertEqual(out["chainId"], "31337")
+        self.assertEqual(out["status"], "submitted")
+        # "network" key must be absent when using custom endpoint
+        self.assertNotIn("network", out)
+
+    def test_named_network_has_network_key(self):
+        # Regression: named-network path still includes "network" key
+        def rpc(url, method, params):
+            return self.HASH
+
+        out = r.do_broadcast(network="hoodi", raw_tx=self.RAW, rpc=rpc)
+        self.assertIn("network", out)
+        self.assertEqual(out["network"], "hoodi")
 
 
 class TestWeiToEthStr(unittest.TestCase):

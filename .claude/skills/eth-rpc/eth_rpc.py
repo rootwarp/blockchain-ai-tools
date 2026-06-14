@@ -250,19 +250,26 @@ def rpc_batch(url, payload, timeout=15, max_body_bytes=None):
     return body
 
 
-def do_balance(network, address, rpc=rpc_call):
-    """Build the balance result dict. `rpc` is injected for testing."""
-    chain_id, url = network_config(network)
+def do_balance(*, network=None, rpc_url=None, chain_id=None, address, rpc=rpc_call):
+    """Build the balance result dict. `rpc` is injected for testing.
+
+    Exactly one of the two modes must be used:
+      - Named network: pass network=<name>; rpc_url and chain_id must be None.
+      - Custom endpoint: pass rpc_url + chain_id; network must be None.
+    """
+    chain_id, url = _resolve_endpoint(network=network, rpc_url=rpc_url, chain_id=chain_id)
     address = validate_hex_address(address)
     wei = parse_hex_int(rpc(url, "eth_getBalance", [address, "latest"]))
-    return {
-        "network": network,
+    out = {
         "chainId": str(chain_id),
         "address": address,
         "blockTag": "latest",
         "balanceWei": str(wei),
         "balanceEth": wei_to_eth_str(wei),
     }
+    if network is not None:
+        out = {"network": network, **out}
+    return out
 
 
 def _receipt_summary(receipt):
@@ -279,7 +286,8 @@ def _receipt_summary(receipt):
     return out
 
 
-def do_broadcast(network, raw_tx, wait=False, wait_timeout=DEFAULT_WAIT_TIMEOUT,
+def do_broadcast(*, network=None, rpc_url=None, chain_id=None, raw_tx,
+                 wait=False, wait_timeout=DEFAULT_WAIT_TIMEOUT,
                  poll_interval=DEFAULT_POLL_INTERVAL, rpc=rpc_call,
                  sleep=time.sleep, now=time.monotonic):
     """Submit a signed raw transaction; optionally poll for the receipt.
@@ -287,17 +295,22 @@ def do_broadcast(network, raw_tx, wait=False, wait_timeout=DEFAULT_WAIT_TIMEOUT,
     `rpc`, `sleep`, and `now` are injected for testing. A submit-time RPC error
     raises RPCError; a successful submit always returns the result dict, even on
     wait timeout (status 'pending').
+
+    Exactly one of the two modes must be used:
+      - Named network: pass network=<name>; rpc_url and chain_id must be None.
+      - Custom endpoint: pass rpc_url + chain_id; network must be None.
     """
-    chain_id, url = network_config(network)
+    chain_id, url = _resolve_endpoint(network=network, rpc_url=rpc_url, chain_id=chain_id)
     raw_tx = validate_raw_tx(raw_tx)
     tx_hash = rpc(url, "eth_sendRawTransaction", [raw_tx])
 
     result = {
-        "network": network,
         "chainId": str(chain_id),
         "txHash": tx_hash,
         "status": "submitted",
     }
+    if network is not None:
+        result = {"network": network, **result}
     if not wait:
         return result
 
@@ -915,11 +928,17 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_bal = sub.add_parser("balance", help="query the ETH balance of an EOA")
-    p_bal.add_argument("--network", required=True, choices=sorted(NETWORKS))
+    p_bal.add_argument("--network", choices=sorted(NETWORKS),
+                       help="named network (use --network OR --rpc-url + --chain-id)")
+    p_bal.add_argument("--rpc-url", help="custom RPC endpoint URL")
+    p_bal.add_argument("--chain-id", type=int, help="chain ID for custom endpoint")
     p_bal.add_argument("--address", required=True, help="EOA to query (0x + 40 hex)")
 
     p_bc = sub.add_parser("broadcast", help="submit a signed raw transaction")
-    p_bc.add_argument("--network", required=True, choices=sorted(NETWORKS))
+    p_bc.add_argument("--network", choices=sorted(NETWORKS),
+                      help="named network (use --network OR --rpc-url + --chain-id)")
+    p_bc.add_argument("--rpc-url", help="custom RPC endpoint URL")
+    p_bc.add_argument("--chain-id", type=int, help="chain ID for custom endpoint")
     p_bc.add_argument("--raw-tx", required=True, help="0x-prefixed signed raw tx hex")
     p_bc.add_argument("--wait", action="store_true", help="poll for the receipt after submit")
     p_bc.add_argument("--wait-timeout", type=int, default=DEFAULT_WAIT_TIMEOUT,
@@ -990,12 +1009,22 @@ def main(argv=None):
 
     try:
         if args.command == "balance":
-            result = do_balance(args.network, args.address)
+            result = do_balance(
+                network=args.network,
+                rpc_url=args.rpc_url,
+                chain_id=args.chain_id,
+                address=args.address,
+            )
         elif args.command == "broadcast":
             if args.wait_timeout < 0:
                 raise ValueError("--wait-timeout must be non-negative")
             result = do_broadcast(
-                args.network, args.raw_tx, wait=args.wait, wait_timeout=args.wait_timeout
+                network=args.network,
+                rpc_url=args.rpc_url,
+                chain_id=args.chain_id,
+                raw_tx=args.raw_tx,
+                wait=args.wait,
+                wait_timeout=args.wait_timeout,
             )
         elif args.command == "batch":
             calls = _parse_params(args.calls, stdin=sys.stdin)
