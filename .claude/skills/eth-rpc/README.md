@@ -1,19 +1,24 @@
 # eth-rpc
 
 A Claude Code skill that acts as the read/write RPC companion to the
-[`eth-signer-mcp`](../../../apps/eth-signer-mcp/README.md) signer. Two operations:
+[`eth-signer-mcp`](../../../apps/eth-signer-mcp/README.md) signer. Three operations:
 
 - **balance** — query the ETH balance of an EOA (`eth_getBalance`).
 - **broadcast** — propagate an already-signed raw transaction
   (`eth_sendRawTransaction`), optionally waiting for the receipt.
+- **call** — generic `eth_*` JSON-RPC read passthrough for any method on the
+  documented read surface.
 
 It makes outbound RPC calls; the signer itself stays offline. It does **not** sign
 and does **not** build transactions (see `eth-tx-builder` for building).
 
+Prefer `balance` / `broadcast` for those flows; use `call` for everything else —
+see `SKILL.md` for the full method list.
+
 ## Files
 
 - `SKILL.md` — the skill Claude follows (operation → optional `get_address` → helper → present).
-- `eth_rpc.py` — stdlib-only helper: network map, validation, RPC, balance + broadcast.
+- `eth_rpc.py` — stdlib-only helper: network map, validation, RPC, balance + broadcast + call.
 - `test_eth_rpc.py` — unit tests (mocked RPC; no live network).
 
 ## Prerequisites
@@ -36,7 +41,30 @@ uses an injected clock/sleep.
 
 ## Manual end-to-end (use hoodi — testnet, no real funds)
 
-Query a balance:
+### call
+
+Two cheap read calls to confirm the `call` op and verify hoodi `chainId`:
+
+```bash
+cd .claude/skills/eth-rpc
+python3 eth_rpc.py call --network hoodi --method eth_chainId    --params '[]'
+python3 eth_rpc.py call --network hoodi --method eth_blockNumber --params '[]'
+```
+
+Captured output:
+
+```
+"0x88bb0"
+```
+
+```
+"0x2df761"
+```
+
+`"0x88bb0"` is hex for 560048 (hoodi `chainId`). `eth_blockNumber` returns the
+current chain head as a hex quantity.
+
+### balance
 
 ```bash
 cd .claude/skills/eth-rpc
@@ -69,8 +97,9 @@ Expect JSON with `txHash` and, once mined, `status: mined` plus `blockNumber`,
 
 ## Future operations (not yet implemented)
 
-- ERC-20 balance / `balanceOf` via `eth_call`.
-- Block-tag selection (`latest` is currently fixed).
-- Event/log queries.
+- ERC-20 balance / `balanceOf` via `call --method eth_call` with decoded output.
+- Block-tag selection for `balance` (currently fixed at `latest`; `call` accepts
+  any block tag the operator passes in `--params`).
+- `--params @file` for large `eth_getLogs` filter objects (deferred to P1).
 
 Each reuses the network table and RPC plumbing here.
