@@ -45,6 +45,7 @@ No live RPC calls are made — the transport is mocked in both test files.
 | `--sender` | all | Signing account address (from `get_address`) |
 | `--amount` | `transfer`, `approve`, `transfer-from` | Human-readable amount (e.g. `1.5`) |
 | `--approve-max` | `approve` | Grant unlimited (`MAX_UINT256`) authority; mutually exclusive with `--amount` |
+| `--revoke` | `approve` | Revoke approval (sets allowance to 0 for spender); mutually exclusive with `--amount` and `--approve-max` |
 | `--summary-only` | all | Print stderr summary + warnings; suppress stdout JSON (dry-run preview) |
 
 ## Manual end-to-end (use hoodi — testnet, no real funds)
@@ -207,6 +208,30 @@ maxFeePerGas      : 3000000000 wei
 maxPriorityFeePerGas: 1000000000 wei
 ----------------------------------
 ```
+
+### Phase 3 — `approve --revoke` and legacy-token symbol coverage
+
+**Revoking an approval (sets allowance to 0):**
+
+```bash
+# Revoke approval (sets allowance to 0)
+python3 build_erc20.py approve \
+  --network mainnet \
+  --token 0x... \
+  --spender 0xRouter... \
+  --revoke \
+  --sender 0x...
+```
+
+`--revoke` is mutually exclusive with `--amount` and `--approve-max`. The resulting
+calldata is `approve(spender, 0)`. The stderr summary shows `operation: revoke`; a
+confirmation block names the token and spender. Live hoodi e2e transcript will be
+filled in by Issue 3.8.
+
+**Legacy-token `symbol()` coverage:** `build_erc20.py` now decodes additional
+historical `symbol()` return formats beyond standard ABI `string`, including
+DGD-style length-prefixed bytes32. See **ADR-013** in
+`plan/eth-tx-builder-erc20/architecture.md` for the bounded format catalog.
 
 ## Supported networks
 

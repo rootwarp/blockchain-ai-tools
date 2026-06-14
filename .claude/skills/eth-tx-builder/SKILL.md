@@ -36,8 +36,11 @@ If any are missing, ask for them before proceeding.
 3. **sender** — signing account address (`0x` + 40 hex); obtained from `get_address`.
 4. **subcommand-specific addresses and amount:**
    - `transfer`: `--to` (recipient address); `--amount` (human-readable, e.g. `1.5`).
-   - `approve`: `--spender` (spender address); `--amount` (human-readable) **or**
-     `--approve-max` (grant unlimited authority — mutually exclusive with `--amount`).
+   - `approve`: `--spender` (spender address); then exactly one of:
+     `--amount` (human-readable bounded amount), `--approve-max` (grant unlimited
+     authority), or `--revoke` (set allowance to 0 — revoke a prior approval).
+     Use `--revoke` to set allowance to 0 (revoke a prior approval). Equivalent to
+     `approve(spender, 0)`.
    - `transfer-from`: `--from` (token holder address whose allowance is spent);
      `--to` (recipient address); `--amount` (human-readable).
 
@@ -57,6 +60,7 @@ sender address.
      below).
    - ERC-20 operation (`transfer`, `approve`, `transferFrom`) → use
      `build_erc20.py <subcommand> ...` (follow the ERC-20 steps below).
+   - Operator intent is "remove a previous allowance" → use `approve --revoke`.
    - To preview what the build will do without emitting the full JSON, append
      `--summary-only` to any ERC-20 subcommand invocation (see "Dry-run mode"
      below).
@@ -248,6 +252,16 @@ the calldata reaches your signer or shell history.
 - stderr `WARNING:` output contains on-chain account addresses and balances; treat
   stderr as PII-grade in shared log pipelines (CI transcripts, MCP session logs,
   screen recordings).
+- **`approve(spender, 0)` revocation:** `approve --revoke` is the standard ERC-20
+  mechanism for revoking a prior approval, but it is not universally honoured by
+  every spender. Routers with custom permission systems may ignore an allowance of
+  zero; operators should double-check the spender's own documentation before
+  assuming the grant is fully removed.
+- **Legacy-token `symbol()` coverage:** `build_erc20.py` decodes `symbol()` responses
+  that use historical non-standard formats (null-padded ASCII bytes32, length-prefixed
+  bytes32 as used by DGD, and others). Coverage details and the bounded format catalog
+  are in **ADR-013** (`plan/eth-tx-builder-erc20/architecture.md`). Unknown formats
+  still return `(unavailable)` in the summary; the build continues regardless.
 
 ## Out of scope (v1)
 
