@@ -1939,6 +1939,56 @@ class TestDoCallStrict(unittest.TestCase):
         self.assertEqual(out, "1")
 
 
+class TestDecodeResultWarnsOnException(unittest.TestCase):
+    """Fix 5: _decode_result must print a warning to stderr when the decoder raises,
+    then return the raw result unchanged (stdout/raw result not affected).
+    """
+
+    def test_decode_exception_returns_raw_result(self):
+        # Monkeypatch _decode_block to raise; the outer except must catch it and
+        # return the raw result unchanged.
+        raw = {"number": "0x10"}
+        with mock.patch.object(r, "_decode_block", side_effect=RuntimeError("injected")), \
+             mock.patch("sys.stderr", io.StringIO()):
+            result = r._decode_result("eth_getBlockByNumber", raw)
+        self.assertIs(result, raw)
+
+    def test_decode_exception_emits_stderr_warning(self):
+        # The warning line must go to stderr, not stdout.
+        raw = {"number": "0x10"}
+        fake_err = io.StringIO()
+        with mock.patch.object(r, "_decode_block", side_effect=RuntimeError("boom")), \
+             mock.patch("sys.stderr", fake_err):
+            r._decode_result("eth_getBlockByNumber", raw)
+        warning = fake_err.getvalue()
+        self.assertIn("warning", warning.lower())
+        self.assertIn("--decode", warning)
+        self.assertIn("eth_getBlockByNumber", warning)
+        self.assertIn("boom", warning)
+
+    def test_decode_exception_does_not_affect_stdout(self):
+        # The raw result must be returned so the caller can still json.dumps it.
+        raw = "0xabc"
+        out = io.StringIO()
+        fake_err = io.StringIO()
+        with mock.patch.object(r, "_decode_hex_quantity", side_effect=Exception("oops")), \
+             mock.patch("sys.stderr", fake_err), \
+             mock.patch("sys.stdout", out):
+            result = r._decode_result("eth_blockNumber", raw)
+        # stdout untouched
+        self.assertEqual(out.getvalue(), "")
+        # result is the original raw value
+        self.assertEqual(result, raw)
+
+    def test_normal_decode_emits_no_warning(self):
+        # When decoding succeeds, no warning must appear on stderr.
+        fake_err = io.StringIO()
+        with mock.patch("sys.stderr", fake_err):
+            result = r._decode_result("eth_blockNumber", "0x10")
+        self.assertEqual(fake_err.getvalue(), "")
+        self.assertIn("decimal", result)
+
+
 class TestDecodeOversizedHex(unittest.TestCase):
     """Fix 1: _decode_hex_quantity must not parse hex values > 66 chars (uint256 cap).
 

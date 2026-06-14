@@ -687,6 +687,8 @@ def _decode_result(method, result):
 
     Returns decoded representation, or result unchanged if not recognised.
     NEVER raises — decode must not break passthrough.
+    On unexpected decode failure, prints a one-line warning to stderr so the
+    operator knows decode was skipped, then returns the raw result.
     """
     try:
         if method in _HEX_QUANTITY_METHODS:
@@ -701,9 +703,13 @@ def _decode_result(method, result):
             if not isinstance(result, list):
                 return result
             return [_decode_log_entry(entry) for entry in result]
-    except Exception:
+    except Exception as _exc:
         # Defensive: any unexpected error must not break passthrough.
-        pass
+        # Emit a one-line warning so the operator knows decode was skipped.
+        print(
+            "warning: --decode failed for %s (%s); returning raw result" % (method, _exc),
+            file=sys.stderr,
+        )
     return result
 
 # === END MODULE: decode ===
