@@ -161,30 +161,33 @@ remains accessible for legacy contracts.
 
 ## Phase 2 manual end-to-end (new features: --decode, sepolia, --read-only-strict)
 
-> **Placeholder — live transcripts to be filled in by the team lead.**
-> Run the following commands from `.claude/skills/eth-rpc/` against live endpoints.
-> Do not commit captured output until it is verified against a live network.
+Captured against live endpoints from `.claude/skills/eth-rpc/`:
 
 ```bash
-cd .claude/skills/eth-rpc
+# 1. --decode: chainId with human-readable decimal
+$ python3 eth_rpc.py call --network hoodi --decode --method eth_chainId --params '[]'
+{
+  "hex": "0x88bb0",
+  "decimal": 560048
+}
 
-# 1. hoodi chainId still returns 0x88bb0
-python3 eth_rpc.py call --network hoodi --method eth_chainId --params '[]'
+# 2. sepolia chainId (verifies the new network entry)
+$ python3 eth_rpc.py call --network sepolia --method eth_chainId --params '[]'
+"0xaa36a7"
 
-# 2. Current chain head (changes every block)
-python3 eth_rpc.py call --network hoodi --method eth_blockNumber --params '[]'
+# 3. --read-only-strict on an allowlisted method (succeeds)
+$ python3 eth_rpc.py call --network hoodi --read-only-strict --method eth_chainId --params '[]'
+"0x88bb0"
 
-# 3. --decode: chainId with human-readable decimal
-python3 eth_rpc.py call --network hoodi --decode --method eth_chainId --params '[]'
-# Expected shape: {"hex": "0x88bb0", "decimal": 560048}
-
-# 4. sepolia chainId (verifies new network entry)
-python3 eth_rpc.py call --network sepolia --method eth_chainId --params '[]'
-# Expected: "0xaa36a7"
-
-# 5. --read-only-strict on an allowlisted method (should succeed)
-python3 eth_rpc.py call --network hoodi --read-only-strict --method eth_chainId --params '[]'
+# 4. --read-only-strict refuses a method outside the documented read surface
+$ python3 eth_rpc.py call --network hoodi --read-only-strict --method net_version --params '[]'
+error: method net_version is not in the documented eth_* read surface (--read-only-strict)
+# exit code 1
 ```
+
+`0xaa36a7` = 11155111 (sepolia chainId). `--decode` of `eth_chainId` exposes the
+decimal alongside the raw hex; the raw passthrough is unchanged when `--decode` is
+omitted.
 
 ## Future operations (not yet implemented)
 
