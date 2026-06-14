@@ -582,6 +582,38 @@ def emit_warning(kind, payload):
 # === Layer 3: tx_assembly ===
 
 
+def _soft_check_allowance(rpc, url, token, holder, spender,
+                          requested, skipped_kind, low_kind,
+                          low_payload_extra=None,
+                          trigger=None):
+    """Read allowance; return zero or one (kind, payload) warning tuple.
+
+    - On RPCError → returns [(skipped_kind, {"reason": str(e)})].
+    - On trigger(current, requested) is False → returns [].
+    - On trigger(current, requested) is True → returns [(low_kind, {...})].
+
+    `trigger` is an optional callable `(current: int, requested: int) -> bool`.
+    If None, defaults to `lambda cur, req: cur < req` (Phase 1
+    `transfer-from` posture). Callers may pass a different predicate for
+    different op semantics (e.g. approve-race uses
+    `lambda cur, req: cur != 0 and cur != req`).
+
+    Callers append the returned list to their own warnings_list.
+    """
+    if trigger is None:
+        trigger = lambda cur, req: cur < req  # noqa: E731  (ADR-005: inline default)
+    try:
+        current = fetch_allowance(rpc, url, token, holder, spender)
+    except _core.RPCError as e:
+        return [(skipped_kind, {"reason": str(e)})]
+    if trigger(current, requested):
+        low_payload = {"current": current, "requested": requested}
+        if low_payload_extra:
+            low_payload.update(low_payload_extra)
+        return [(low_kind, low_payload)]
+    return []
+
+
 def _build_eip1559_envelope(chain_id, nonce, to, data, gas, base_fee, tip):
     """Assemble the v1-shape TxRequest dict with all numeric fields as decimal strings.
 
@@ -781,20 +813,16 @@ def do_transfer_from(network, token, from_, to, amount, sender, *, rpc=_core.rpc
     amount_base = human_to_base_units(amount, decimals)
     # Step 5: Build calldata.
     calldata = encode_transfer_from(from_, to, amount_base)
-    # Step 6a: Soft allowance check (the ONE try/except RPCError outside main).
-    try:
-        current = fetch_allowance(rpc, url, token, from_, sender)
-    except _core.RPCError as e:
-        warnings.append(("allowance_check_skipped", {"reason": str(e)}))
-    else:
-        if current < amount_base:
-            warnings.append(("low_allowance", {
-                "holder":    from_,
-                "spender":   sender,
-                "current":   current,
-                "requested": amount_base,
-                "decimals":  decimals,
-            }))
+    # Step 6a: Soft allowance check via helper (default trigger: cur < req).
+    warnings.extend(_soft_check_allowance(
+        rpc, url, token, holder=from_, spender=sender,
+        requested=amount_base,
+        skipped_kind="allowance_check_skipped",
+        low_kind="low_allowance",
+        low_payload_extra={"holder": from_, "spender": sender,
+                           "decimals": decimals, "symbol": symbol},
+        # trigger omitted → defaults to `cur < req` (Phase 1 byte-identical)
+    ))
     # Step 6b: Estimate gas — FATAL; RPCError propagates (ADR-007, no try/except).
     gas = estimate_gas(rpc, url, sender, token, calldata)
     # Step 7: Fetch nonce and fees.

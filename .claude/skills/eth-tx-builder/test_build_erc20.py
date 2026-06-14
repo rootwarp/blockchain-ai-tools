@@ -1019,6 +1019,107 @@ class TestTxAssembly(unittest.TestCase):
         return _rpc
 
     # -----------------------------------------------------------------------
+    # _soft_check_allowance helper (Issue 2.3)
+    # -----------------------------------------------------------------------
+
+    def _make_rpc_allowance(self, value):
+        """Return a mock rpc that returns a hex-encoded allowance value."""
+        hex_val = "0x" + format(value, "064x")
+        return mock.Mock(return_value=hex_val)
+
+    def test_soft_check_allowance_ok_returns_empty(self):
+        """Default trigger: allowance >= requested → returns []."""
+        rpc = self._make_rpc_allowance(10_000_000)  # high allowance
+        result = b._soft_check_allowance(
+            rpc=rpc, url="https://x",
+            token=self.TOKEN, holder=self.FROM_, spender=self.SENDER,
+            requested=1_500_000,
+            skipped_kind="allowance_check_skipped",
+            low_kind="low_allowance",
+        )
+        self.assertEqual(result, [])
+
+    def test_soft_check_allowance_low_returns_warning(self):
+        """Default trigger: allowance < requested → returns [(low_kind, payload)]."""
+        rpc = self._make_rpc_allowance(1)  # low allowance
+        result = b._soft_check_allowance(
+            rpc=rpc, url="https://x",
+            token=self.TOKEN, holder=self.FROM_, spender=self.SENDER,
+            requested=1_500_000,
+            skipped_kind="allowance_check_skipped",
+            low_kind="low_allowance",
+            low_payload_extra={"holder": self.FROM_, "spender": self.SENDER,
+                               "decimals": 6, "symbol": "USDC"},
+        )
+        self.assertEqual(len(result), 1)
+        kind, payload = result[0]
+        self.assertEqual(kind, "low_allowance")
+        self.assertIn("current", payload)
+        self.assertIn("requested", payload)
+        self.assertIn("holder", payload)
+        self.assertIn("spender", payload)
+        self.assertIn("decimals", payload)
+        self.assertIn("symbol", payload)
+
+    def test_soft_check_allowance_skipped_on_rpc_error(self):
+        """RPCError → returns [(skipped_kind, {'reason': str(e)})]."""
+        rpc = mock.Mock(side_effect=b._core.RPCError("timeout"))
+        result = b._soft_check_allowance(
+            rpc=rpc, url="https://x",
+            token=self.TOKEN, holder=self.FROM_, spender=self.SENDER,
+            requested=1_500_000,
+            skipped_kind="allowance_check_skipped",
+            low_kind="low_allowance",
+        )
+        self.assertEqual(len(result), 1)
+        kind, payload = result[0]
+        self.assertEqual(kind, "allowance_check_skipped")
+        self.assertIn("reason", payload)
+        self.assertIn("timeout", payload["reason"])
+
+    def test_soft_check_allowance_custom_trigger_fires(self):
+        """Custom trigger lambda cur, req: cur != 0 and cur != req fires for cur=5, req=10."""
+        rpc = self._make_rpc_allowance(5)  # 5 != 0 and 5 != 10 → should fire
+        result = b._soft_check_allowance(
+            rpc=rpc, url="https://x",
+            token=self.TOKEN, holder=self.FROM_, spender=self.SENDER,
+            requested=10,
+            skipped_kind="approve_race_check_skipped",
+            low_kind="approve_race",
+            trigger=lambda cur, req: cur != 0 and cur != req,
+        )
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0][0], "approve_race")
+
+    def test_soft_check_allowance_custom_trigger_zero_skips(self):
+        """Custom trigger: cur=0, req=10 → cur==0, so trigger is False → returns []."""
+        rpc = self._make_rpc_allowance(0)  # 0 != 0 is False → trigger False
+        result = b._soft_check_allowance(
+            rpc=rpc, url="https://x",
+            token=self.TOKEN, holder=self.FROM_, spender=self.SENDER,
+            requested=10,
+            skipped_kind="approve_race_check_skipped",
+            low_kind="approve_race",
+            trigger=lambda cur, req: cur != 0 and cur != req,
+        )
+        self.assertEqual(result, [])
+
+    def test_soft_check_allowance_no_low_payload_extra(self):
+        """With no low_payload_extra, payload has only current+requested keys."""
+        rpc = self._make_rpc_allowance(1)  # trigger fires (1 < 100)
+        result = b._soft_check_allowance(
+            rpc=rpc, url="https://x",
+            token=self.TOKEN, holder=self.FROM_, spender=self.SENDER,
+            requested=100,
+            skipped_kind="allowance_check_skipped",
+            low_kind="low_allowance",
+        )
+        self.assertEqual(len(result), 1)
+        kind, payload = result[0]
+        self.assertIn("current", payload)
+        self.assertIn("requested", payload)
+
+    # -----------------------------------------------------------------------
     # _build_eip1559_envelope
     # -----------------------------------------------------------------------
 
