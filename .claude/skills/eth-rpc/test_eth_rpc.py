@@ -443,6 +443,97 @@ class TestWeiToEthStr(unittest.TestCase):
 SKILL_DIR = pathlib.Path(__file__).parent
 
 
+class TestRpcCallBoundedBody(unittest.TestCase):
+    """Tests for rpc_call / rpc_batch with max_body_bytes kwarg (ADR-013)."""
+
+    def _fake_urlopen(self, body_bytes):
+        resp = mock.MagicMock()
+        resp.read = mock.MagicMock(side_effect=lambda n=None: body_bytes[:n] if n is not None else body_bytes)
+        resp.__enter__ = mock.MagicMock(return_value=resp)
+        resp.__exit__ = mock.MagicMock(return_value=False)
+        return resp
+
+    def test_unlimited_read_unchanged(self):
+        body = json.dumps({"jsonrpc": "2.0", "id": 1, "result": "0x1"}).encode()
+        with mock.patch("eth_rpc.urllib.request.urlopen", return_value=self._fake_urlopen(body)):
+            result = r.rpc_call("https://x", "eth_blockNumber", [])
+        self.assertEqual(result, "0x1")
+
+    def test_body_under_limit_accepted(self):
+        body = json.dumps({"jsonrpc": "2.0", "id": 1, "result": "0x1"}).encode()
+        limit = len(body) + 100
+        with mock.patch("eth_rpc.urllib.request.urlopen", return_value=self._fake_urlopen(body)):
+            result = r.rpc_call("https://x", "eth_blockNumber", [], max_body_bytes=limit)
+        self.assertEqual(result, "0x1")
+
+    def test_body_exactly_at_limit_accepted(self):
+        body = json.dumps({"jsonrpc": "2.0", "id": 1, "result": "0x1"}).encode()
+        limit = len(body)
+        with mock.patch("eth_rpc.urllib.request.urlopen", return_value=self._fake_urlopen(body)):
+            result = r.rpc_call("https://x", "eth_blockNumber", [], max_body_bytes=limit)
+        self.assertEqual(result, "0x1")
+
+    def test_body_over_limit_raises_rpcerror(self):
+        body = json.dumps({"jsonrpc": "2.0", "id": 1, "result": "0x1"}).encode()
+        limit = len(body) - 1
+        with mock.patch("eth_rpc.urllib.request.urlopen", return_value=self._fake_urlopen(body)):
+            with self.assertRaises(r.RPCError) as ctx:
+                r.rpc_call("https://x", "eth_blockNumber", [], max_body_bytes=limit)
+        self.assertIn("--max-body-bytes", str(ctx.exception))
+        self.assertIn(str(limit), str(ctx.exception))
+
+    def test_do_call_forwards_max_body_bytes(self):
+        # do_call should pass max_body_bytes to the injected rpc
+        calls = []
+
+        def fake_rpc(url, method, params, timeout, max_body_bytes=None):
+            calls.append(max_body_bytes)
+            return "0x1"
+
+        r.do_call("https://x", method="eth_blockNumber", params=[], max_body_bytes=512, rpc=fake_rpc)
+        self.assertEqual(calls, [512])
+
+
+class TestRpcBatchBoundedBody(unittest.TestCase):
+    """Tests for rpc_batch with max_body_bytes kwarg (ADR-013)."""
+
+    def _fake_urlopen(self, body_bytes):
+        resp = mock.MagicMock()
+        resp.read = mock.MagicMock(side_effect=lambda n=None: body_bytes[:n] if n is not None else body_bytes)
+        resp.__enter__ = mock.MagicMock(return_value=resp)
+        resp.__exit__ = mock.MagicMock(return_value=False)
+        return resp
+
+    def test_body_over_limit_raises_rpcerror(self):
+        wire = [{"jsonrpc": "2.0", "id": 0, "result": "0x1"}]
+        body = json.dumps(wire).encode()
+        limit = len(body) - 1
+        with mock.patch("eth_rpc.urllib.request.urlopen", return_value=self._fake_urlopen(body)):
+            with self.assertRaises(r.RPCError) as ctx:
+                r.rpc_batch("https://x", [], max_body_bytes=limit)
+        self.assertIn("--max-body-bytes", str(ctx.exception))
+
+    def test_body_at_limit_accepted(self):
+        wire = [{"jsonrpc": "2.0", "id": 0, "result": "0x1"}]
+        body = json.dumps(wire).encode()
+        limit = len(body)
+        with mock.patch("eth_rpc.urllib.request.urlopen", return_value=self._fake_urlopen(body)):
+            result = r.rpc_batch("https://x", [], max_body_bytes=limit)
+        self.assertEqual(result, wire)
+
+    def test_do_batch_forwards_max_body_bytes(self):
+        calls = []
+
+        def fake_rpc(url, payload, timeout, max_body_bytes=None):
+            calls.append(max_body_bytes)
+            return [{"jsonrpc": "2.0", "id": 0, "result": "0x1"}]
+
+        r.do_batch("https://x",
+                   calls=[{"method": "eth_blockNumber", "params": []}],
+                   max_body_bytes=1024, rpc=fake_rpc)
+        self.assertEqual(calls, [1024])
+
+
 class TestDenylistContents(unittest.TestCase):
     """Drift guard (ADR-011): any intentional change to the denylist constants
     requires updating both the constant and this test in the same commit."""
@@ -621,10 +712,10 @@ class TestCheckMethodPolicy(unittest.TestCase):
 
 
 def make_fake_rpc_call(result=None, raises=None):
-    """Return a fake rpc(url, method, params, timeout) for do_call injection."""
+    """Return a fake rpc(url, method, params, timeout, max_body_bytes=None) for do_call injection."""
     calls = []
 
-    def fake(url, method, params, timeout):
+    def fake(url, method, params, timeout, max_body_bytes=None):
         calls.append((url, method, params, timeout))
         if raises is not None:
             raise raises
@@ -709,10 +800,10 @@ class TestDoCall(unittest.TestCase):
 
 
 def make_fake_rpc_batch(raw_results=None, raises=None):
-    """Return a fake rpc_batch(url, payload, timeout) for do_batch injection."""
+    """Return a fake rpc_batch(url, payload, timeout, max_body_bytes=None) for do_batch injection."""
     calls = []
 
-    def fake(url, payload, timeout):
+    def fake(url, payload, timeout, max_body_bytes=None):
         calls.append((url, payload, timeout))
         if raises is not None:
             raise raises

@@ -143,8 +143,12 @@ class RPCError(Exception):
     """A JSON-RPC transport failure or error response."""
 
 
-def rpc_call(url, method, params, timeout=15):
-    """POST a JSON-RPC request and return its `result`. Raise RPCError on any failure."""
+def rpc_call(url, method, params, timeout=15, max_body_bytes=None):
+    """POST a JSON-RPC request and return its `result`. Raise RPCError on any failure.
+
+    max_body_bytes: when set, read at most max_body_bytes+1 bytes and raise RPCError
+    if the body exceeds the limit (ADR-013). Default None preserves existing behaviour.
+    """
     payload = json.dumps(
         {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
     ).encode("utf-8")
@@ -156,7 +160,17 @@ def rpc_call(url, method, params, timeout=15):
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
+            if max_body_bytes is None:
+                raw = resp.read()
+            else:
+                raw = resp.read(max_body_bytes + 1)
+                if len(raw) > max_body_bytes:
+                    raise RPCError(
+                        "response exceeds --max-body-bytes (limit was %d bytes)" % max_body_bytes
+                    )
+            body = json.loads(raw.decode("utf-8"))
+    except RPCError:
+        raise
     except (OSError, ValueError) as e:  # transport (URLError⊂OSError) / decode (JSON/Unicode⊂ValueError)
         raise RPCError("RPC transport error calling %s: %s" % (method, e))
     if body.get("error") is not None:
@@ -166,12 +180,13 @@ def rpc_call(url, method, params, timeout=15):
     return body["result"]
 
 
-def rpc_batch(url, payload, timeout=15):
+def rpc_batch(url, payload, timeout=15, max_body_bytes=None):
     """POST a JSON-RPC batch request and return the parsed response array.
 
     payload is a list of JSON-RPC request objects (already built by do_batch).
     Raises RPCError on transport failure or if the server returns a non-list
     (e.g. a single error object for the whole batch).
+    max_body_bytes: same ADR-013 bound as rpc_call; default None is unbounded.
     """
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
@@ -182,7 +197,17 @@ def rpc_batch(url, payload, timeout=15):
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
+            if max_body_bytes is None:
+                raw = resp.read()
+            else:
+                raw = resp.read(max_body_bytes + 1)
+                if len(raw) > max_body_bytes:
+                    raise RPCError(
+                        "response exceeds --max-body-bytes (limit was %d bytes)" % max_body_bytes
+                    )
+            body = json.loads(raw.decode("utf-8"))
+    except RPCError:
+        raise
     except (OSError, ValueError) as e:
         raise RPCError("RPC batch transport error: %s" % e)
     if not isinstance(body, list):
@@ -294,14 +319,14 @@ def _check_method_policy(method, *, allow_write=False, allowlist=None):
 #                 timeout=15, rpc=rpc_call) -> Any
 
 def do_call(url, *, method, params, allow_write=False,
-            timeout=15, rpc=rpc_call):
+            timeout=15, max_body_bytes=None, rpc=rpc_call):
     """Generic eth_* read passthrough. Returns raw JSON-RPC result."""
     if not isinstance(method, str) or not method:
         raise ValueError("--method is required")
     if not isinstance(params, list):
         raise ValueError("--params must be a JSON array")
     _check_method_policy(method, allow_write=allow_write)
-    return rpc(url, method, params, timeout=timeout)
+    return rpc(url, method, params, timeout=timeout, max_body_bytes=max_body_bytes)
 
 # === END MODULE: do_call ===
 
@@ -309,7 +334,7 @@ def do_call(url, *, method, params, allow_write=False,
 # === MODULE: do_batch ===
 # Public: do_batch(url, *, calls, allow_write=False, timeout=15, rpc=rpc_batch) -> list
 
-def do_batch(url, *, calls, allow_write=False, timeout=15, rpc=rpc_batch):
+def do_batch(url, *, calls, allow_write=False, timeout=15, max_body_bytes=None, rpc=rpc_batch):
     """JSON-RPC batch passthrough. Returns a list of per-entry result/error envelopes.
 
     calls: list of {"method": str, "params": list} dicts.
@@ -346,7 +371,7 @@ def do_batch(url, *, calls, allow_write=False, timeout=15, rpc=rpc_batch):
 
     # If there are any allowed entries, send the batch.
     if wire_payload:
-        wire_response = rpc(url, wire_payload, timeout)
+        wire_response = rpc(url, wire_payload, timeout, max_body_bytes=max_body_bytes)
         # Re-sort by id (servers may return out of order per JSON-RPC spec).
         by_id = {entry["id"]: entry for entry in wire_response}
         for item in wire_payload:
@@ -413,6 +438,10 @@ def main(argv=None):
     )
     p_call.add_argument("--allow-write", action="store_true")
     p_call.add_argument("--timeout", type=int, default=15)
+    p_call.add_argument(
+        "--max-body-bytes", type=int, default=None,
+        help="cap response body size (bytes); see SKILL.md for eth_getLogs guidance",
+    )
 
     p_batch = sub.add_parser("batch", help="JSON-RPC batch passthrough (ADR-012)")
     p_batch.add_argument("--network", choices=sorted(NETWORKS))
@@ -425,6 +454,10 @@ def main(argv=None):
     )
     p_batch.add_argument("--allow-write", action="store_true")
     p_batch.add_argument("--timeout", type=int, default=15)
+    p_batch.add_argument(
+        "--max-body-bytes", type=int, default=None,
+        help="cap response body size (bytes); see SKILL.md for eth_getLogs guidance",
+    )
 
     args = parser.parse_args(argv)
 
@@ -454,6 +487,7 @@ def main(argv=None):
                 calls=calls,
                 allow_write=args.allow_write,
                 timeout=args.timeout,
+                max_body_bytes=args.max_body_bytes,
             )
             print(json.dumps(result, indent=2))
             return 0
@@ -475,6 +509,7 @@ def main(argv=None):
                 params=params,
                 allow_write=args.allow_write,
                 timeout=args.timeout,
+                max_body_bytes=args.max_body_bytes,
             )
             print(json.dumps(result, indent=2))
             return 0
