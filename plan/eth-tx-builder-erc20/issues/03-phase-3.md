@@ -250,20 +250,20 @@ before Issue 3.2's implementation starts. No code lands in this issue.
 - New files to create: none (ADR is appended to `architecture.md`).
 
 **Acceptance Criteria:**
-- [ ] A new ADR (numbered `ADR-012`, dated, status `Accepted`) is
+- [x] A new ADR (numbered `ADR-012`, dated, status `Accepted`) is
       appended to `plan/eth-tx-builder-erc20/architecture.md` covering
       the three decisions above with explicit "Status / Context /
       Decision / Alternatives / Consequences" sections matching the
       existing ADR house style.
-- [ ] The ADR explicitly records the `do_approve` signature change:
+- [x] The ADR explicitly records the `do_approve` signature change:
       adds `revoke=False` kwarg; when True, `amount_base = 0`;
       `decimals()` is still read (preserves the fatal-or-skip contract).
-- [ ] The ADR cross-references PRD §P2.3, architecture ADR-005 (no
+- [x] The ADR cross-references PRD §P2.3, architecture ADR-005 (no
       runtime Keccak — `encode_approve` is reused, no new selector),
       and architecture Assumption 13 (existing two-way mutex).
-- [ ] The ADR records the summary op label decision ("revoke" vs.
+- [x] The ADR records the summary op label decision ("revoke" vs.
       "approve") and the rationale.
-- [ ] No code changes are committed in this issue.
+- [x] No code changes are committed in this issue.
 
 **Testing Notes:**
 - This is a paper spike; no automated tests. Reviewer-led check is the
@@ -447,13 +447,13 @@ for clarity, while the calldata line still shows the underlying
 - New files to create: none.
 
 **Acceptance Criteria:**
-- [ ] **Phase 1 touchpoint (Sub-step 0):** `do_transfer`,
+- [x] **Phase 1 touchpoint (Sub-step 0):** `do_transfer`,
       `do_transfer_from`, and `do_approve` all set
       `summary_ctx["op_label"]` to a string (`"transfer"` /
       `"transfer-from"` / `"approve"` respectively). The change is
       purely additive — no Phase 1 caller reads `op_label` and no Phase 1
       caller breaks.
-- [ ] **Phase 1 touchpoint regression test:** `TestSummary` includes a
+- [x] **Phase 1 touchpoint regression test:** `TestSummary` includes a
       byte-identical pinning test for each of the three Phase 1
       `render_summary` outputs (`transfer`, `approve --amount`,
       `transfer-from`), proving the refactor does NOT change Phase 1's
@@ -461,49 +461,49 @@ for clarity, while the calldata line still shows the underlying
       both **before** the `--revoke` code lands (validating the additive
       Phase 1 change alone) AND after (validating the full Phase 3
       Issue 3.2 change).
-- [ ] `summary.render_summary` reads the operation line from
+- [x] `summary.render_summary` reads the operation line from
       `summary_ctx["op_label"]` (no hard-coded subcommand-specific
       strings remain).
-- [ ] `cli_dispatch._build_parser` adds `--revoke` to the existing
+- [x] `cli_dispatch._build_parser` adds `--revoke` to the existing
       `approve` mutex group; `add_mutually_exclusive_group(
       required=True)` still has exactly one required choice across
       `{--amount, --approve-max, --revoke}`.
-- [ ] `do_approve` signature is
+- [x] `do_approve` signature is
       `do_approve(network, token, spender, amount, sender, *,
       approve_max=False, revoke=False, rpc=_core.rpc_call)`.
-- [ ] When `revoke=True`, `amount_base = 0`; `human_to_base_units` is
+- [x] When `revoke=True`, `amount_base = 0`; `human_to_base_units` is
       NOT called; `encode_approve(spender, 0)` is used; the resulting
       32-byte amount word is all-zeros.
-- [ ] When `revoke=True`, `fetch_decimals` and `fetch_symbol` are still
+- [x] When `revoke=True`, `fetch_decimals` and `fetch_symbol` are still
       called (preserves the Phase 1 fatal-or-skip contract per ADR-006).
-- [ ] When `revoke=True` AND `approve_max=True` are both passed to
+- [x] When `revoke=True` AND `approve_max=True` are both passed to
       `do_approve` directly (bypassing argparse), `ValueError("--revoke
       and --approve-max are mutually exclusive")` is raised; no JSON is
       emitted.
-- [ ] `summary_ctx["op_label"] == "revoke"` when `revoke=True`,
+- [x] `summary_ctx["op_label"] == "revoke"` when `revoke=True`,
       `"approve"` for the existing two paths, `"transfer"` for
       `do_transfer`, `"transfer-from"` for `do_transfer_from`.
-- [ ] `render_summary(ctx)` reads from `op_label`; the rendered text
+- [x] `render_summary(ctx)` reads from `op_label`; the rendered text
       includes `operation: revoke` when applicable.
-- [ ] `warnings_list` contains `("approve_revoke", {symbol, token,
+- [x] `warnings_list` contains `("approve_revoke", {symbol, token,
       spender})` on the revoke path; `warn_approve_revoke` writes the
       multi-line confirmation to stderr; `emit_warning` dispatches on
       `"approve_revoke"`.
-- [ ] `TestCliDispatch` covers: `--revoke` happy path (exit 0, JSON on
+- [x] `TestCliDispatch` covers: `--revoke` happy path (exit 0, JSON on
       stdout, summary + revoke confirmation on stderr); three argparse
       rejection cases (revoke+amount, revoke+approve-max, none of the
       three).
-- [ ] `TestTxAssembly` covers: revoke happy path with bit-pattern
+- [x] `TestTxAssembly` covers: revoke happy path with bit-pattern
       assertion on the amount word, no `human_to_base_units` call
       verified via mock, `fetch_decimals` still called, defense-in-depth
       `ValueError` on mixed kwargs.
-- [ ] `TestSummary` covers: `render_summary` with `op_label="revoke"`
+- [x] `TestSummary` covers: `render_summary` with `op_label="revoke"`
       and `warn_approve_revoke` stderr capture.
-- [ ] `python3 -m unittest test_build_erc20 -v` passes locally.
-- [ ] The existing `transfer` / `transfer-from` / non-revoke `approve`
+- [x] `python3 -m unittest test_build_erc20 -v` passes locally.
+- [x] The existing `transfer` / `transfer-from` / non-revoke `approve`
       paths are unchanged; their `TestCliDispatch` / `TestTxAssembly`
       cases pass unmodified.
-- [ ] `python3 -m unittest test_build_send_eth -v` still passes — Phase
+- [x] `python3 -m unittest test_build_send_eth -v` still passes — Phase
       3 does not touch `build_send_eth.py`.
 
 **Testing Notes:**
@@ -588,27 +588,27 @@ implementation has a clear "ship list" and a clear "still returns
   long enough to warrant its own file.
 
 **Acceptance Criteria:**
-- [ ] A new ADR (numbered `ADR-013`, dated, status `Accepted`) is
+- [x] A new ADR (numbered `ADR-013`, dated, status `Accepted`) is
       appended to `plan/eth-tx-builder-erc20/architecture.md` covering
       the bounded format catalog with explicit "Status / Context /
       Decision / Alternatives / Consequences" sections matching the
       existing ADR house style.
-- [ ] The ADR records the **exact list** of legacy formats to handle
+- [x] The ADR records the **exact list** of legacy formats to handle
       (e.g. "MKR-style null-padded ASCII; DGD-style length-prefixed
       bytes32; ...") with one literal-hex example per variant pulled
       from a real on-chain response or the `d-xo/weird-erc20` repo.
-- [ ] The ADR records the **fallback ladder order**: standard ABI
+- [x] The ADR records the **fallback ladder order**: standard ABI
       `string` → null-trimmed `bytes32` ASCII → new variant 1 →
       new variant 2 → ... → `None`. Order matters because variants
       may accept the same byte shape with different decodings.
-- [ ] The ADR cross-references PRD §P2.4 (the source requirement),
+- [x] The ADR cross-references PRD §P2.4 (the source requirement),
       architecture ADR-006 (the `Optional[str]` return contract that
       ADR-013 preserves), and project plan R10 (the scope-bound
       mitigation).
-- [ ] The ADR records the "still returns `None`" tail explicitly:
+- [x] The ADR records the "still returns `None`" tail explicitly:
       formats outside the bounded list remain best-effort, not
       promoted to "supported."
-- [ ] No code changes are committed in this issue.
+- [x] No code changes are committed in this issue.
 
 **Testing Notes:**
 - This is a paper spike; no automated tests. Reviewer-led check is
@@ -720,28 +720,28 @@ malformations still return `None` (best-effort posture preserved).
 - New files to create: none.
 
 **Acceptance Criteria:**
-- [ ] `abi_codec.decode_symbol` is refactored to a fallback ladder of
+- [x] `abi_codec.decode_symbol` is refactored to a fallback ladder of
       `_try_decode_*` helpers, one per variant, short-circuiting on
       the first non-`None` return.
-- [ ] Every variant named in ADR-013 has a corresponding
+- [x] Every variant named in ADR-013 has a corresponding
       `_try_decode_*` helper.
-- [ ] Every variant has a unit test in `TestAbiCodec` (or a new
+- [x] Every variant has a unit test in `TestAbiCodec` (or a new
       `TestDecodeSymbolPolished` `TestCase`) with: (a) a happy-path
       fixture from ADR-013's worked examples; (b) a malformed-input
       fixture that returns `None`.
-- [ ] The Phase 1 USDC standard ABI `string` decode still works
+- [x] The Phase 1 USDC standard ABI `string` decode still works
       unchanged.
-- [ ] The Phase 1 legacy null-trimmed bytes32 decode (MKR, etc.) still
+- [x] The Phase 1 legacy null-trimmed bytes32 decode (MKR, etc.) still
       works unchanged.
-- [ ] An "outside the catalog" hex response returns `None`,
+- [x] An "outside the catalog" hex response returns `None`,
       confirming the bounded-catalog property.
-- [ ] `decode_symbol` NEVER raises, regardless of input — even
+- [x] `decode_symbol` NEVER raises, regardless of input — even
       bizarre / malformed / empty bytes. Test this explicitly.
-- [ ] `python3 -m unittest test_build_erc20 -v` passes locally;
+- [x] `python3 -m unittest test_build_erc20 -v` passes locally;
       every Phase 1 `TestAbiCodec` case passes unmodified.
-- [ ] `python3 -m unittest test_build_send_eth -v` still passes
+- [x] `python3 -m unittest test_build_send_eth -v` still passes
       (Phase 3 does not touch `build_send_eth.py`).
-- [ ] No new top-level imports in `build_erc20.py` (architecture
+- [x] No new top-level imports in `build_erc20.py` (architecture
       PA-4: stdlib-only; the polish reuses existing `bytes.fromhex`,
       slicing, and `.decode("utf-8", "ignore")` patterns).
 
@@ -1105,19 +1105,19 @@ outcome** — implementation is owned by the fresh PRD's own phase plan
   `plan/eth-tx-builder-erc20-permit/prd.md`.
 
 **Acceptance Criteria:**
-- [ ] A new ADR (numbered `ADR-014`, dated, status either `Accepted`
+- [x] A new ADR (numbered `ADR-014`, dated, status either `Accepted`
       with greenlight or `Deferred` with no-go) is appended to
       `plan/eth-tx-builder-erc20/architecture.md` covering the five
       questions above with explicit "Status / Context / Decision /
       Alternatives / Consequences" sections matching the existing
       ADR house style.
-- [ ] **(Q1)** The ADR records the demand-check result (concrete
+- [x] **(Q1)** The ADR records the demand-check result (concrete
       workflow named, or "no demand surfaced").
-- [ ] **(Q2)** The ADR records the sibling-vs-extension decision with
+- [x] **(Q2)** The ADR records the sibling-vs-extension decision with
       the concrete benefits / costs analysis.
-- [ ] **(Q3)** The ADR records the stdlib-only viability for EIP-712
+- [x] **(Q3)** The ADR records the stdlib-only viability for EIP-712
       keccak, either confirming or flipping to "dep required."
-- [ ] **(Q4, new external-blocker resolution)** The ADR EXPLICITLY
+- [x] **(Q4, new external-blocker resolution)** The ADR EXPLICITLY
       records the current `eth-signer-mcp` EIP-712 state ("not
       supported today, per `apps/eth-signer-mcp/README.md`
       §Out-of-scope"), AND records the chosen v1 path
@@ -1126,7 +1126,7 @@ outcome** — implementation is owned by the fresh PRD's own phase plan
       reasoning. The ADR explicitly names this as the previously-
       undeclared external blocker; if Path A is chosen, the ADR
       points at the parallel signer-PRD slot.
-- [ ] **(Q5)** The full draft PRD skeleton at
+- [x] **(Q5)** The full draft PRD skeleton at
       `plan/eth-tx-builder-erc20-permit/prd.md` exists with: real
       Overview section (1-2 paragraphs, not a placeholder); real
       Problem Statement section (operator pain framed); real Goals
@@ -1137,18 +1137,18 @@ outcome** — implementation is owned by the fresh PRD's own phase plan
       section (at minimum: ERC-3009; non-EIP-2612 permit variants;
       signer-side EIP-712 if Path B was chosen; EIP-1271 contract
       signatures).
-- [ ] The PRD skeleton exists EVEN IF the demand check concluded
+- [x] The PRD skeleton exists EVEN IF the demand check concluded
       "defer indefinitely" — in that case its Status front-matter
       reads "Draft — awaiting demand surfacing" so Issue 3.7 has
       somewhere concrete to point at. The artifact is the source of
       truth for any future `permit` work.
-- [ ] The ADR cross-references PRD §P2.2, project plan DL-10 and
+- [x] The ADR cross-references PRD §P2.2, project plan DL-10 and
       Task 3.3, project plan R11 (cryptographic complexity), and
       `apps/eth-signer-mcp/README.md` §Out-of-scope.
-- [ ] **No code changes are committed in this issue.** No changes to
+- [x] **No code changes are committed in this issue.** No changes to
       `build_erc20.py`, `test_build_erc20.py`, `build_erc20_permit.py`
       (which does NOT yet exist), or any other code file.
-- [ ] Issue 3.7 (the deferred-placeholder tracking issue) can run
+- [x] Issue 3.7 (the deferred-placeholder tracking issue) can run
       next, regardless of greenlight / defer outcome. Issue 3.6
       always feeds into Issue 3.7.
 
@@ -1233,29 +1233,31 @@ skeleton, and the deferral is intentional per DL-10.
   `architecture.md`).
 
 **Acceptance Criteria:**
-- [ ] The deferral decision is recorded in EXACTLY ONE place: either
+- [x] The deferral decision is recorded in EXACTLY ONE place: either
       the draft PRD at `plan/eth-tx-builder-erc20-permit/prd.md`
       (preferred) or as `ADR-015` appended to
       `plan/eth-tx-builder-erc20/architecture.md`. Not both.
-- [ ] The recorded note explicitly states: "Implementation of
+      → Recorded in `plan/eth-tx-builder-erc20-permit/prd.md`
+      §Status/Lifecycle (PRD location chosen, not ADR-015).
+- [x] The recorded note explicitly states: "Implementation of
       EIP-2612 `permit` is OUT OF SCOPE for `plan/
       eth-tx-builder-erc20` Phase 3, per project plan DL-10. If
       Issue 3.6's ADR-014 greenlit implementation, the actual
       `build_erc20_permit.py` ships under the
       `eth-tx-builder-erc20-permit` PRD's own phase plan as a
       sibling helper, NOT under this PRD."
-- [ ] The recorded note points at: project plan DL-10; ADR-014
+- [x] The recorded note points at: project plan DL-10; ADR-014
       (from Issue 3.6); the draft PRD at
       `plan/eth-tx-builder-erc20-permit/prd.md`.
-- [ ] **No code is committed in this issue.** No changes to
+- [x] **No code is committed in this issue.** No changes to
       `build_erc20.py`, `test_build_erc20.py`, SKILL.md, README.md,
       or any source file. No new file `build_erc20_permit.py` is
       created. No new file `test_build_erc20_permit.py` is created.
-- [ ] Existing test suites still pass (because nothing changed):
+- [x] Existing test suites still pass (because nothing changed):
       `python3 -m unittest test_build_erc20 -v` and
       `python3 -m unittest test_build_send_eth -v` both pass
       unmodified.
-- [ ] Issue 3.8's e2e plan does NOT include a `permit` row (Phase 3
+- [x] Issue 3.8's e2e plan does NOT include a `permit` row (Phase 3
       ships no `permit` code, so there's no e2e).
 
 **Testing Notes:**
