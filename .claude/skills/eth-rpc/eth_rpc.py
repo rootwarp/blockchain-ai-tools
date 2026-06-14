@@ -166,6 +166,30 @@ def rpc_call(url, method, params, timeout=15):
     return body["result"]
 
 
+def rpc_batch(url, payload, timeout=15):
+    """POST a JSON-RPC batch request and return the parsed response array.
+
+    payload is a list of JSON-RPC request objects (already built by do_batch).
+    Raises RPCError on transport failure or if the server returns a non-list
+    (e.g. a single error object for the whole batch).
+    """
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={"Content-Type": "application/json", "User-Agent": USER_AGENT},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+    except (OSError, ValueError) as e:
+        raise RPCError("RPC batch transport error: %s" % e)
+    if not isinstance(body, list):
+        raise RPCError("RPC batch response was not a list (server may have rejected the batch): %s" % body)
+    return body
+
+
 def do_balance(network, address, rpc=rpc_call):
     """Build the balance result dict. `rpc` is injected for testing."""
     chain_id, url = network_config(network)
@@ -282,6 +306,64 @@ def do_call(url, *, method, params, allow_write=False,
 # === END MODULE: do_call ===
 
 
+# === MODULE: do_batch ===
+# Public: do_batch(url, *, calls, allow_write=False, timeout=15, rpc=rpc_batch) -> list
+
+def do_batch(url, *, calls, allow_write=False, timeout=15, rpc=rpc_batch):
+    """JSON-RPC batch passthrough. Returns a list of per-entry result/error envelopes.
+
+    calls: list of {"method": str, "params": list} dicts.
+    Refused entries (denylist) land as synthetic error envelopes at their original index.
+    Transport failures raise RPCError. Partial server-side failures are envelopes, not exceptions.
+    Per ADR-012: ids are positional (0..N-1); server response is re-sorted by id.
+    """
+    if not calls:
+        raise ValueError("--calls must be a non-empty JSON array")
+
+    # Validate all entries up-front before any wire egress.
+    for i, call in enumerate(calls):
+        if not isinstance(call, dict) or not isinstance(call.get("method"), str):
+            raise ValueError(
+                "--calls entry %d must be an object with a 'method' string" % i
+            )
+        if not isinstance(call.get("params"), list):
+            raise ValueError(
+                "--calls entry %d 'params' must be a list" % i
+            )
+
+    # Pre-scan: identify refused entries; build wire payload for the allowed ones.
+    result = [None] * len(calls)
+    wire_payload = []
+    for i, call in enumerate(calls):
+        method = call["method"]
+        params = call["params"]
+        try:
+            _check_method_policy(method, allow_write=allow_write)
+        except ValueError as e:
+            result[i] = {"id": i, "error": {"code": -32601, "message": str(e)}}
+            continue
+        wire_payload.append({"jsonrpc": "2.0", "id": i, "method": method, "params": params})
+
+    # If there are any allowed entries, send the batch.
+    if wire_payload:
+        wire_response = rpc(url, wire_payload, timeout)
+        # Re-sort by id (servers may return out of order per JSON-RPC spec).
+        by_id = {entry["id"]: entry for entry in wire_response}
+        for item in wire_payload:
+            i = item["id"]
+            server_entry = by_id.get(i, {})
+            if "result" in server_entry:
+                result[i] = {"id": i, "result": server_entry["result"]}
+            elif "error" in server_entry:
+                result[i] = {"id": i, "error": server_entry["error"]}
+            else:
+                result[i] = {"id": i, "error": {"code": -32603, "message": "missing result from server"}}
+
+    return result
+
+# === END MODULE: do_batch ===
+
+
 # === MODULE: param_ingest ===
 # Public: _parse_params(raw, *, stdin=sys.stdin) -> list
 
@@ -332,6 +414,18 @@ def main(argv=None):
     p_call.add_argument("--allow-write", action="store_true")
     p_call.add_argument("--timeout", type=int, default=15)
 
+    p_batch = sub.add_parser("batch", help="JSON-RPC batch passthrough (ADR-012)")
+    p_batch.add_argument("--network", choices=sorted(NETWORKS))
+    p_batch.add_argument("--rpc-url")
+    p_batch.add_argument("--chain-id", type=int)
+    p_batch.add_argument(
+        "--calls",
+        required=True,
+        help="JSON array of {method, params} objects; pass '-' to read from stdin",
+    )
+    p_batch.add_argument("--allow-write", action="store_true")
+    p_batch.add_argument("--timeout", type=int, default=15)
+
     args = parser.parse_args(argv)
 
     try:
@@ -343,6 +437,26 @@ def main(argv=None):
             result = do_broadcast(
                 args.network, args.raw_tx, wait=args.wait, wait_timeout=args.wait_timeout
             )
+        elif args.command == "batch":
+            calls = _parse_params(args.calls, stdin=sys.stdin)
+            chain_id, url = _resolve_endpoint(
+                network=args.network,
+                rpc_url=args.rpc_url,
+                chain_id=args.chain_id,
+            )
+            if args.allow_write:
+                print(
+                    "warning: --allow-write bypasses the call denylist",
+                    file=sys.stderr,
+                )
+            result = do_batch(
+                url,
+                calls=calls,
+                allow_write=args.allow_write,
+                timeout=args.timeout,
+            )
+            print(json.dumps(result, indent=2))
+            return 0
         else:
             params = _parse_params(args.params, stdin=sys.stdin)
             chain_id, url = _resolve_endpoint(

@@ -708,6 +708,225 @@ class TestDoCall(unittest.TestCase):
                       rpc=make_fake_rpc_call())
 
 
+def make_fake_rpc_batch(raw_results=None, raises=None):
+    """Return a fake rpc_batch(url, payload, timeout) for do_batch injection."""
+    calls = []
+
+    def fake(url, payload, timeout):
+        calls.append((url, payload, timeout))
+        if raises is not None:
+            raise raises
+        return raw_results
+
+    fake.calls = calls
+    return fake
+
+
+class TestRpcBatch(unittest.TestCase):
+    """Unit tests for the rpc_batch transport helper."""
+
+    def _fake_response(self, payload):
+        body = json.dumps(payload).encode("utf-8")
+        resp = mock.MagicMock()
+        resp.read.return_value = body
+        resp.__enter__.return_value = resp
+        resp.__exit__.return_value = False
+        return resp
+
+    def test_returns_parsed_array(self):
+        wire = [{"jsonrpc": "2.0", "id": 0, "result": "0x1"}]
+        with mock.patch(
+            "eth_rpc.urllib.request.urlopen",
+            return_value=self._fake_response(wire),
+        ):
+            result = r.rpc_batch("https://x", [{"jsonrpc": "2.0", "id": 0,
+                                                 "method": "eth_chainId", "params": []}])
+        self.assertEqual(result, wire)
+
+    def test_transport_error_raises_rpcerror(self):
+        with mock.patch(
+            "eth_rpc.urllib.request.urlopen", side_effect=OSError("down")
+        ):
+            with self.assertRaises(r.RPCError):
+                r.rpc_batch("https://x", [])
+
+    def test_non_list_response_raises_rpcerror(self):
+        with mock.patch(
+            "eth_rpc.urllib.request.urlopen",
+            return_value=self._fake_response({"error": {"code": -32600, "message": "batch too large"}}),
+        ):
+            with self.assertRaises(r.RPCError) as ctx:
+                r.rpc_batch("https://x", [])
+            self.assertIn("batch", str(ctx.exception).lower())
+
+
+class TestDoBatch(unittest.TestCase):
+    URL = "https://ethereum-hoodi-rpc.publicnode.com"
+
+    def _two_calls(self):
+        return [
+            {"method": "eth_chainId", "params": []},
+            {"method": "eth_blockNumber", "params": []},
+        ]
+
+    def test_happy_path_two_calls(self):
+        wire = [
+            {"jsonrpc": "2.0", "id": 0, "result": "0x88bb0"},
+            {"jsonrpc": "2.0", "id": 1, "result": "0x2df761"},
+        ]
+        fake = make_fake_rpc_batch(raw_results=wire)
+        result = r.do_batch(self.URL, calls=self._two_calls(), rpc=fake)
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0], {"id": 0, "result": "0x88bb0"})
+        self.assertEqual(result[1], {"id": 1, "result": "0x2df761"})
+
+    def test_out_of_order_server_response_re_sorted(self):
+        # Server returns entries in reverse id order
+        wire = [
+            {"jsonrpc": "2.0", "id": 1, "result": "0x2df761"},
+            {"jsonrpc": "2.0", "id": 0, "result": "0x88bb0"},
+        ]
+        fake = make_fake_rpc_batch(raw_results=wire)
+        result = r.do_batch(self.URL, calls=self._two_calls(), rpc=fake)
+        self.assertEqual(result[0]["id"], 0)
+        self.assertEqual(result[1]["id"], 1)
+        self.assertEqual(result[0]["result"], "0x88bb0")
+
+    def test_mixed_result_server_side_error_envelope(self):
+        wire = [
+            {"jsonrpc": "2.0", "id": 0, "result": "0x88bb0"},
+            {"jsonrpc": "2.0", "id": 1, "error": {"code": -32602, "message": "invalid params"}},
+        ]
+        fake = make_fake_rpc_batch(raw_results=wire)
+        result = r.do_batch(self.URL, calls=self._two_calls(), rpc=fake)
+        self.assertEqual(result[0], {"id": 0, "result": "0x88bb0"})
+        self.assertIn("error", result[1])
+        self.assertEqual(result[1]["id"], 1)
+
+    def test_per_entry_denylist_refusal_lands_as_error_envelope(self):
+        calls = [
+            {"method": "eth_sendRawTransaction", "params": ["0x02ab"]},  # denied
+            {"method": "eth_blockNumber", "params": []},
+        ]
+        # rpc should only be called for the non-denied entry
+        wire = [{"jsonrpc": "2.0", "id": 1, "result": "0x1"}]
+        fake = make_fake_rpc_batch(raw_results=wire)
+        result = r.do_batch(self.URL, calls=calls, rpc=fake)
+        # id 0 is a synthetic refusal
+        self.assertIn("error", result[0])
+        self.assertEqual(result[0]["id"], 0)
+        self.assertIn("eth_sendRawTransaction", result[0]["error"]["message"])
+        # id 1 is the allowed entry
+        self.assertEqual(result[1], {"id": 1, "result": "0x1"})
+        # rpc was called (for the non-denied entry)
+        self.assertEqual(len(fake.calls), 1)
+
+    def test_allow_write_bypasses_denylist_for_all_entries(self):
+        calls = [
+            {"method": "eth_sendRawTransaction", "params": ["0x02ab"]},
+            {"method": "eth_blockNumber", "params": []},
+        ]
+        wire = [
+            {"jsonrpc": "2.0", "id": 0, "result": "0xhash"},
+            {"jsonrpc": "2.0", "id": 1, "result": "0x1"},
+        ]
+        fake = make_fake_rpc_batch(raw_results=wire)
+        result = r.do_batch(self.URL, calls=calls, allow_write=True, rpc=fake)
+        self.assertEqual(result[0]["result"], "0xhash")
+        self.assertEqual(result[1]["result"], "0x1")
+        # rpc called with all 2 entries
+        payload = fake.calls[0][1]
+        self.assertEqual(len(payload), 2)
+
+    def test_transport_error_raises_rpcerror(self):
+        fake = make_fake_rpc_batch(raises=r.RPCError("node down"))
+        with self.assertRaises(r.RPCError):
+            r.do_batch(self.URL, calls=self._two_calls(), rpc=fake)
+
+    def test_empty_calls_rejected(self):
+        with self.assertRaises(ValueError) as ctx:
+            r.do_batch(self.URL, calls=[], rpc=make_fake_rpc_batch())
+        self.assertIn("non-empty", str(ctx.exception))
+
+    def test_malformed_entry_raises(self):
+        # Entry without 'method' key
+        with self.assertRaises(ValueError):
+            r.do_batch(self.URL, calls=[{"params": []}], rpc=make_fake_rpc_batch())
+
+    def test_entry_params_not_list_raises(self):
+        with self.assertRaises(ValueError):
+            r.do_batch(self.URL,
+                       calls=[{"method": "eth_blockNumber", "params": "[]"}],
+                       rpc=make_fake_rpc_batch())
+
+
+class TestBatchCli(unittest.TestCase):
+    """Tests for the `batch` subcommand driven through main(argv=[...])."""
+
+    URL = "https://ethereum-hoodi-rpc.publicnode.com"
+
+    def _run(self, argv):
+        import contextlib
+        out = io.StringIO()
+        err = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = r.main(argv)
+        return rc, out.getvalue(), err.getvalue()
+
+    def test_happy_path_batch(self):
+        wire = [
+            {"jsonrpc": "2.0", "id": 0, "result": "0x88bb0"},
+            {"jsonrpc": "2.0", "id": 1, "result": "0x1"},
+        ]
+        with mock.patch("eth_rpc.rpc_batch", return_value=wire):
+            rc, out, err = self._run([
+                "batch", "--network", "hoodi",
+                "--calls", '[{"method":"eth_chainId","params":[]},{"method":"eth_blockNumber","params":[]}]',
+            ])
+        self.assertEqual(rc, 0, err)
+        result = json.loads(out)
+        self.assertEqual(len(result), 2)
+
+    def test_mutual_exclusion_error(self):
+        rc, out, err = self._run([
+            "batch", "--network", "hoodi",
+            "--rpc-url", "http://127.0.0.1:8545",
+            "--chain-id", "31337",
+            "--calls", '[{"method":"eth_blockNumber","params":[]}]',
+        ])
+        self.assertEqual(rc, 1)
+        self.assertIn("error:", err)
+
+    def test_allow_write_warning_printed_once(self):
+        wire = [{"jsonrpc": "2.0", "id": 0, "result": "0x1"}]
+        with mock.patch("eth_rpc.rpc_batch", return_value=wire):
+            rc, out, err = self._run([
+                "batch", "--network", "hoodi",
+                "--calls", '[{"method":"eth_blockNumber","params":[]}]',
+                "--allow-write",
+            ])
+        self.assertEqual(rc, 0, err)
+        warning_count = err.count("warning: --allow-write bypasses the call denylist")
+        self.assertEqual(warning_count, 1)
+
+    def test_empty_calls_exit_one(self):
+        rc, out, err = self._run([
+            "batch", "--network", "hoodi",
+            "--calls", "[]",
+        ])
+        self.assertEqual(rc, 1)
+        self.assertIn("error:", err)
+
+    def test_batch_in_help(self):
+        proc = __import__("subprocess").run(
+            [sys.executable,
+             str(__import__("pathlib").Path(__file__).parent / "eth_rpc.py"),
+             "--help"],
+            capture_output=True, text=True,
+        )
+        self.assertIn("batch", proc.stdout)
+
+
 class TestParseParams(unittest.TestCase):
     def test_inline_empty_array(self):
         self.assertEqual(r._parse_params("[]"), [])
