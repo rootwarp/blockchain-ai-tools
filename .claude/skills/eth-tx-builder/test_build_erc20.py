@@ -1016,5 +1016,330 @@ class TestTxAssembly(unittest.TestCase):
             )
 
 
+class TestCliDispatch(unittest.TestCase):
+    """Tests for the Layer 4 cli_dispatch section.
+
+    Tests argparse smoke, address validation, happy paths, warning paths, and
+    the no-fallback regression (ADR-007) at the CLI layer.
+    """
+
+    # Pre-validated 40-hex-char addresses used across all CLI tests.
+    TOKEN   = "0x" + "a" * 40
+    TO      = "0x" + "b" * 40
+    SENDER  = "0x" + "c" * 40
+    FROM_   = "0x" + "d" * 40
+    SPENDER = "0x" + "e" * 40
+
+    # The fake TX dict that mocked do_* functions return.
+    FAKE_TX = {
+        "type": "eip1559",
+        "chainId": "1",
+        "nonce": "5",
+        "to": "0x" + "a" * 40,
+        "value": "0",
+        "data": "0xdeadbeef",
+        "gas": "78066",
+        "maxFeePerGas": "21000000000",
+        "maxPriorityFeePerGas": "1000000000",
+    }
+
+    FAKE_CTX = {
+        "operation": "transfer",
+        "network": "mainnet",
+        "chain_id": 1,
+        "token": "0x" + "a" * 40,
+        "symbol": "USDC",
+        "decimals": 6,
+        "human_amount": "1.5",
+        "base_amount": 1_500_000,
+        "is_max_uint": False,
+        "from_": "0x" + "c" * 40,
+        "to": "0x" + "b" * 40,
+        "nonce": 5,
+        "gas": 78066,
+        "max_fee": 21_000_000_000,
+        "max_priority_fee": 1_000_000_000,
+    }
+
+    # -----------------------------------------------------------------------
+    # Argparse smoke tests
+    # -----------------------------------------------------------------------
+
+    def test_top_level_help_lists_subcommands(self):
+        """main(["--help"]) exits via SystemExit; stdout lists all three subcommands."""
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+            with self.assertRaises(SystemExit) as cm:
+                b.main(["--help"])
+        # argparse exits 0 on --help
+        self.assertEqual(cm.exception.code, 0)
+        output = fake_out.getvalue()
+        self.assertIn("transfer", output)
+        self.assertIn("approve", output)
+        self.assertIn("transfer-from", output)
+
+    def test_transfer_help_lists_required_flags(self):
+        """transfer --help exits 0; stdout mentions required flags."""
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+            with self.assertRaises(SystemExit) as cm:
+                b.main(["transfer", "--help"])
+        self.assertEqual(cm.exception.code, 0)
+        output = fake_out.getvalue()
+        self.assertIn("--token", output)
+        self.assertIn("--to", output)
+        self.assertIn("--amount", output)
+        self.assertIn("--sender", output)
+
+    def test_approve_help_lists_mutex_flags(self):
+        """approve --help exits 0; stdout mentions --amount and --approve-max."""
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+            with self.assertRaises(SystemExit) as cm:
+                b.main(["approve", "--help"])
+        self.assertEqual(cm.exception.code, 0)
+        output = fake_out.getvalue()
+        self.assertIn("--amount", output)
+        self.assertIn("--approve-max", output)
+
+    def test_transfer_from_help_lists_required_flags(self):
+        """transfer-from --help exits 0; stdout mentions --from and required flags."""
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+            with self.assertRaises(SystemExit) as cm:
+                b.main(["transfer-from", "--help"])
+        self.assertEqual(cm.exception.code, 0)
+        output = fake_out.getvalue()
+        self.assertIn("--from", output)
+        self.assertIn("--to", output)
+        self.assertIn("--amount", output)
+
+    # -----------------------------------------------------------------------
+    # Mutex enforcement for approve (--amount XOR --approve-max)
+    # -----------------------------------------------------------------------
+
+    def _approve_base_args(self):
+        return [
+            "approve", "--network", "hoodi",
+            "--token", self.TOKEN,
+            "--spender", self.SPENDER,
+            "--sender", self.SENDER,
+        ]
+
+    def test_approve_both_amount_and_approve_max_raises(self):
+        """argparse must reject both --amount and --approve-max together."""
+        args = self._approve_base_args() + ["--amount", "1", "--approve-max"]
+        with self.assertRaises(SystemExit) as cm:
+            b.main(args)
+        self.assertNotEqual(cm.exception.code, 0)
+
+    def test_approve_neither_amount_nor_approve_max_raises(self):
+        """argparse must reject neither --amount nor --approve-max being set."""
+        args = self._approve_base_args()
+        with self.assertRaises(SystemExit) as cm:
+            b.main(args)
+        self.assertNotEqual(cm.exception.code, 0)
+
+    # -----------------------------------------------------------------------
+    # Address validation failure → exit 1, error: on stderr, empty stdout
+    # -----------------------------------------------------------------------
+
+    def test_address_validation_failure_returns_1(self):
+        """Bad --token address → main returns 1."""
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+            with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+                result = b.main([
+                    "transfer", "--network", "mainnet",
+                    "--token", "not-an-address",
+                    "--to", self.TO,
+                    "--amount", "1.5",
+                    "--sender", self.SENDER,
+                ])
+        self.assertEqual(result, 1)
+        self.assertIn("error:", fake_err.getvalue())
+        self.assertEqual(fake_out.getvalue(), "")
+
+    def test_address_validation_bad_to_returns_1(self):
+        """Bad --to address → main returns 1, error: on stderr."""
+        with mock.patch("sys.stdout", new_callable=io.StringIO):
+            with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+                result = b.main([
+                    "transfer", "--network", "mainnet",
+                    "--token", self.TOKEN,
+                    "--to", "bad",
+                    "--amount", "1.5",
+                    "--sender", self.SENDER,
+                ])
+        self.assertEqual(result, 1)
+        self.assertIn("error:", fake_err.getvalue())
+
+    # -----------------------------------------------------------------------
+    # Happy path — transfer (exit 0, JSON on stdout, summary on stderr)
+    # -----------------------------------------------------------------------
+
+    def test_transfer_happy_path_exit_0(self):
+        """transfer happy path returns 0."""
+        with mock.patch("build_erc20.do_transfer",
+                        return_value=(self.FAKE_TX, self.FAKE_CTX, [])):
+            with mock.patch("sys.stdout", new_callable=io.StringIO):
+                with mock.patch("sys.stderr", new_callable=io.StringIO):
+                    result = b.main([
+                        "transfer", "--network", "mainnet",
+                        "--token", self.TOKEN, "--to", self.TO,
+                        "--amount", "1.5", "--sender", self.SENDER,
+                    ])
+        self.assertEqual(result, 0)
+
+    def test_transfer_happy_path_stdout_is_valid_json(self):
+        """transfer happy path: stdout contains exactly the tx JSON."""
+        with mock.patch("build_erc20.do_transfer",
+                        return_value=(self.FAKE_TX, self.FAKE_CTX, [])):
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+                with mock.patch("sys.stderr", new_callable=io.StringIO):
+                    b.main([
+                        "transfer", "--network", "mainnet",
+                        "--token", self.TOKEN, "--to", self.TO,
+                        "--amount", "1.5", "--sender", self.SENDER,
+                    ])
+        parsed = json.loads(fake_out.getvalue())
+        self.assertEqual(parsed, self.FAKE_TX)
+
+    def test_transfer_happy_path_stderr_contains_summary(self):
+        """transfer happy path: stderr contains summary labels."""
+        with mock.patch("build_erc20.do_transfer",
+                        return_value=(self.FAKE_TX, self.FAKE_CTX, [])):
+            with mock.patch("sys.stdout", new_callable=io.StringIO):
+                with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+                    b.main([
+                        "transfer", "--network", "mainnet",
+                        "--token", self.TOKEN, "--to", self.TO,
+                        "--amount", "1.5", "--sender", self.SENDER,
+                    ])
+        stderr = fake_err.getvalue()
+        self.assertIn("operation", stderr)
+        self.assertIn("transfer", stderr)
+
+    # -----------------------------------------------------------------------
+    # Happy path — approve (bounded amount)
+    # -----------------------------------------------------------------------
+
+    def test_approve_happy_path_exit_0(self):
+        """approve with --amount returns 0 and valid JSON on stdout."""
+        approve_ctx = dict(self.FAKE_CTX, operation="approve",
+                           holder=self.SENDER, spender=self.SPENDER, is_max_uint=False)
+        with mock.patch("build_erc20.do_approve",
+                        return_value=(self.FAKE_TX, approve_ctx, [])):
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+                with mock.patch("sys.stderr", new_callable=io.StringIO):
+                    result = b.main([
+                        "approve", "--network", "mainnet",
+                        "--token", self.TOKEN, "--spender", self.SPENDER,
+                        "--amount", "1.5", "--sender", self.SENDER,
+                    ])
+        self.assertEqual(result, 0)
+        parsed = json.loads(fake_out.getvalue())
+        self.assertEqual(parsed, self.FAKE_TX)
+
+    # -----------------------------------------------------------------------
+    # Happy path — transfer-from (sufficient allowance)
+    # -----------------------------------------------------------------------
+
+    def test_transfer_from_happy_path_exit_0(self):
+        """transfer-from happy path returns 0 and valid JSON on stdout."""
+        tf_ctx = dict(self.FAKE_CTX, operation="transfer-from",
+                      from_=self.FROM_, sender=self.SENDER)
+        with mock.patch("build_erc20.do_transfer_from",
+                        return_value=(self.FAKE_TX, tf_ctx, [])):
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+                with mock.patch("sys.stderr", new_callable=io.StringIO):
+                    result = b.main([
+                        "transfer-from", "--network", "mainnet",
+                        "--token", self.TOKEN,
+                        "--from", self.FROM_,
+                        "--to", self.TO,
+                        "--amount", "1.5",
+                        "--sender", self.SENDER,
+                    ])
+        self.assertEqual(result, 0)
+        parsed = json.loads(fake_out.getvalue())
+        self.assertEqual(parsed, self.FAKE_TX)
+
+    # -----------------------------------------------------------------------
+    # --approve-max warning path
+    # -----------------------------------------------------------------------
+
+    def test_approve_max_path_returns_0_with_warning_on_stderr(self):
+        """--approve-max path: exit 0; WARNING: on stderr; JSON on stdout."""
+        approve_ctx = dict(self.FAKE_CTX, operation="approve",
+                           is_max_uint=True,
+                           holder=self.SENDER, spender=self.SPENDER)
+        warns = [("approve_max", {
+            "symbol": "USDC",
+            "token": self.TOKEN,
+            "spender": self.SPENDER,
+        })]
+        with mock.patch("build_erc20.do_approve",
+                        return_value=(self.FAKE_TX, approve_ctx, warns)):
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+                with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+                    result = b.main([
+                        "approve", "--network", "mainnet",
+                        "--token", self.TOKEN, "--spender", self.SPENDER,
+                        "--approve-max", "--sender", self.SENDER,
+                    ])
+        self.assertEqual(result, 0)
+        self.assertIn("WARNING:", fake_err.getvalue())
+        parsed = json.loads(fake_out.getvalue())
+        self.assertEqual(parsed, self.FAKE_TX)
+
+    # -----------------------------------------------------------------------
+    # transfer-from low-allowance path
+    # -----------------------------------------------------------------------
+
+    def test_transfer_from_low_allowance_returns_0_with_warning(self):
+        """Low allowance warning path: exit 0; WARNING: on stderr; JSON on stdout."""
+        tf_ctx = dict(self.FAKE_CTX, operation="transfer-from",
+                      from_=self.FROM_, sender=self.SENDER)
+        warns = [("low_allowance", {
+            "holder":    self.FROM_,
+            "spender":   self.SENDER,
+            "current":   1,
+            "requested": 1_500_000,
+            "decimals":  6,
+        })]
+        with mock.patch("build_erc20.do_transfer_from",
+                        return_value=(self.FAKE_TX, tf_ctx, warns)):
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+                with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+                    result = b.main([
+                        "transfer-from", "--network", "mainnet",
+                        "--token", self.TOKEN,
+                        "--from", self.FROM_,
+                        "--to", self.TO,
+                        "--amount", "1.5",
+                        "--sender", self.SENDER,
+                    ])
+        self.assertEqual(result, 0)
+        self.assertIn("WARNING:", fake_err.getvalue())
+        parsed = json.loads(fake_out.getvalue())
+        self.assertEqual(parsed, self.FAKE_TX)
+
+    # -----------------------------------------------------------------------
+    # No-fallback regression at the CLI layer (ADR-007)
+    # -----------------------------------------------------------------------
+
+    def test_cli_no_fallback_estimate_gas_rpc_error_returns_1_empty_stdout(self):
+        """When estimate_gas raises RPCError, main returns 1 and stdout is empty (ADR-007)."""
+        with mock.patch("build_erc20.do_transfer",
+                        side_effect=b._core.RPCError("execution reverted")):
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+                with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+                    result = b.main([
+                        "transfer", "--network", "mainnet",
+                        "--token", self.TOKEN, "--to", self.TO,
+                        "--amount", "1.5", "--sender", self.SENDER,
+                    ])
+        self.assertEqual(result, 1)
+        self.assertEqual(fake_out.getvalue(), "")
+        self.assertIn("error:", fake_err.getvalue())
+        self.assertIn("execution reverted", fake_err.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

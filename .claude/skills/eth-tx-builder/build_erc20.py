@@ -735,9 +735,135 @@ def do_transfer_from(network, token, from_, to, amount, sender, *, rpc=_core.rpc
 # === Layer 4: cli_dispatch ===
 
 
+def _build_parser():
+    """Build the top-level argparse parser with three ERC-20 subcommands.
+
+    Subcommands:
+        transfer       — transfer(to, amount)
+        approve        — approve(spender, amount | --approve-max)
+        transfer-from  — transferFrom(from, to, amount)
+
+    Network choices come from sorted(_core.NETWORKS) so Phase 2 additions
+    propagate automatically (architecture Assumption 15).
+
+    Returns:
+        argparse.ArgumentParser
+    """
+    parser = argparse.ArgumentParser(
+        description="Build a ready-to-sign EIP-1559 ERC-20 TxRequest JSON for eth-signer-mcp."
+    )
+    sub = parser.add_subparsers(dest="op", required=True)
+
+    # --- transfer ---
+    p_transfer = sub.add_parser("transfer", help="ERC-20 transfer(to, amount)")
+    p_transfer.add_argument("--network", required=True,
+                            choices=sorted(_core.NETWORKS),
+                            help="network name")
+    p_transfer.add_argument("--token", required=True,
+                            help="ERC-20 contract address (0x + 40 hex)")
+    p_transfer.add_argument("--to", required=True,
+                            help="recipient address (0x + 40 hex)")
+    p_transfer.add_argument("--amount", required=True,
+                            help="human-readable token amount (e.g. 1.5)")
+    p_transfer.add_argument("--sender", required=True,
+                            help="signing account address (0x + 40 hex)")
+
+    # --- approve ---
+    p_approve = sub.add_parser("approve", help="ERC-20 approve(spender, amount)")
+    p_approve.add_argument("--network", required=True,
+                           choices=sorted(_core.NETWORKS),
+                           help="network name")
+    p_approve.add_argument("--token", required=True,
+                           help="ERC-20 contract address (0x + 40 hex)")
+    p_approve.add_argument("--spender", required=True,
+                           help="spender address (0x + 40 hex)")
+    p_approve.add_argument("--sender", required=True,
+                           help="signing account address (0x + 40 hex)")
+    # --amount XOR --approve-max (architecture Assumption 13 / A14; PRD §7)
+    amt_group = p_approve.add_mutually_exclusive_group(required=True)
+    amt_group.add_argument("--amount", default=None,
+                           help="human-readable token amount to approve (e.g. 1.5)")
+    amt_group.add_argument("--approve-max", action="store_true",
+                           dest="approve_max",
+                           help="approve MAX_UINT256 (unlimited); prints loud WARNING:")
+
+    # --- transfer-from ---
+    p_tf = sub.add_parser("transfer-from",
+                           help="ERC-20 transferFrom(from, to, amount)")
+    p_tf.add_argument("--network", required=True,
+                      choices=sorted(_core.NETWORKS),
+                      help="network name")
+    p_tf.add_argument("--token", required=True,
+                      help="ERC-20 contract address (0x + 40 hex)")
+    p_tf.add_argument("--from", dest="from_", required=True,
+                      help="token holder address (0x + 40 hex)")
+    p_tf.add_argument("--to", required=True,
+                      help="recipient address (0x + 40 hex)")
+    p_tf.add_argument("--amount", required=True,
+                      help="human-readable token amount (e.g. 1.5)")
+    p_tf.add_argument("--sender", required=True,
+                      help="signing / spender account address (0x + 40 hex)")
+
+    return parser
+
+
+def _validate_addresses(args):
+    """Validate every address argument present on the parsed args namespace.
+
+    Calls _core.validate_hex_address on each attribute that could hold an
+    address. Raises ValueError (caught by main) on any malformed value.
+    Address validation happens exactly once, here, so do_* can accept
+    pre-validated hex (architecture ADR-010).
+    """
+    for attr in ("token", "to", "spender", "from_", "sender"):
+        value = getattr(args, attr, None)
+        if value is not None:
+            _core.validate_hex_address(value)
+
+
 def main(argv=None):
-    """Stub entry point — returns 0."""
-    return 0
+    """Parse CLI args, dispatch to the appropriate do_* function, print results.
+
+    This is the ONLY try/except (ValueError, _core.RPCError) in build_erc20.py
+    (architecture ADR-007). Lower layers raise; this function catches and
+    formats error: messages to stderr, returning exit code 1.
+
+    Stdout = JSON only (architecture ADR-009).
+    Stderr = summary block + WARNING: lines + error: messages.
+
+    Args:
+        argv: list of str CLI arguments (defaults to sys.argv[1:]).
+
+    Returns:
+        int: 0 on success, 1 on any ValueError or RPCError.
+    """
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    try:
+        _validate_addresses(args)
+        if args.op == "transfer":
+            tx, ctx, warns = do_transfer(
+                args.network, args.token, args.to, args.amount, args.sender,
+            )
+        elif args.op == "approve":
+            tx, ctx, warns = do_approve(
+                args.network, args.token, args.spender, args.amount,
+                args.sender,
+                approve_max=args.approve_max,
+            )
+        elif args.op == "transfer-from":
+            tx, ctx, warns = do_transfer_from(
+                args.network, args.token, args.from_, args.to,
+                args.amount, args.sender,
+            )
+        for w_kind, w_payload in warns:
+            emit_warning(w_kind, w_payload)
+        print_summary(ctx)
+        print(json.dumps(tx, indent=2))
+        return 0
+    except (ValueError, _core.RPCError) as e:
+        print("error: %s" % e, file=sys.stderr)
+        return 1
 
 # === end Layer 4: cli_dispatch ===
 
