@@ -153,13 +153,44 @@ Expect JSON with `txHash` and, once mined, `status: mined` plus `blockNumber`,
 |---|---|---|
 | `mainnet` | 1 | `https://ethereum-rpc.publicnode.com` |
 | `hoodi` | 560048 | `https://ethereum-hoodi-rpc.publicnode.com` |
+| `sepolia` | 11155111 | `https://ethereum-sepolia-rpc.publicnode.com` |
+| `holesky` | 17000 | `https://ethereum-holesky-rpc.publicnode.com` |
+
+**Holesky was deprecated September 2025.** Prefer `hoodi` for new work; holesky
+remains accessible for legacy contracts.
+
+## Phase 2 manual end-to-end (new features: --decode, sepolia, --read-only-strict)
+
+> **Placeholder — live transcripts to be filled in by the team lead.**
+> Run the following commands from `.claude/skills/eth-rpc/` against live endpoints.
+> Do not commit captured output until it is verified against a live network.
+
+```bash
+cd .claude/skills/eth-rpc
+
+# 1. hoodi chainId still returns 0x88bb0
+python3 eth_rpc.py call --network hoodi --method eth_chainId --params '[]'
+
+# 2. Current chain head (changes every block)
+python3 eth_rpc.py call --network hoodi --method eth_blockNumber --params '[]'
+
+# 3. --decode: chainId with human-readable decimal
+python3 eth_rpc.py call --network hoodi --decode --method eth_chainId --params '[]'
+# Expected shape: {"hex": "0x88bb0", "decimal": 560048}
+
+# 4. sepolia chainId (verifies new network entry)
+python3 eth_rpc.py call --network sepolia --method eth_chainId --params '[]'
+# Expected: "0xaa36a7"
+
+# 5. --read-only-strict on an allowlisted method (should succeed)
+python3 eth_rpc.py call --network hoodi --read-only-strict --method eth_chainId --params '[]'
+```
 
 ## Future operations (not yet implemented)
 
 - ERC-20 balance / `balanceOf` via `call --method eth_call` with decoded output.
 - Block-tag selection for `balance` (currently fixed at `latest`; `call` accepts
   any block tag the operator passes in `--params`).
-- `--params @file` for large `eth_getLogs` filter objects (deferred to P1).
-- Decoded output for `eth_feeHistory` / `eth_getProof` (deferred to Phase 2+).
+- Decoded output for `eth_feeHistory` / `eth_getProof`.
 
 Each reuses the network table and RPC plumbing here.

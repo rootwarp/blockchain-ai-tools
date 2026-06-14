@@ -1,6 +1,6 @@
 ---
 name: eth-rpc
-description: Use when the user wants to query an Ethereum account's ETH balance, broadcast a signed transaction, run any eth_* JSON-RPC read method, batch multiple calls, or get diagnostic info (net version, client version). Operations — balance, broadcast, call, batch, net-version, client-version — on mainnet/hoodi or a custom endpoint. Does not sign and does not build transactions.
+description: Use when the user wants to query an Ethereum account's ETH balance, broadcast a signed transaction, run any eth_* JSON-RPC read method, batch multiple calls, or get diagnostic info (net version, client version). Operations — balance, broadcast, call, batch, net-version, client-version — on mainnet/hoodi/sepolia/holesky or a custom endpoint. Does not sign and does not build transactions.
 ---
 
 # eth-rpc
@@ -39,7 +39,8 @@ transactions (that is the `eth-tx-builder` skill).
 ### balance
 
 ```bash
-python3 eth_rpc.py balance --network <mainnet|hoodi> --address 0x<40hex>
+python3 eth_rpc.py balance \
+  --network <mainnet|hoodi|sepolia|holesky> --address 0x<40hex>
 ```
 
 - If the user does **not** specify an address (e.g. "what's my balance",
@@ -53,7 +54,8 @@ python3 eth_rpc.py balance --network <mainnet|hoodi> --address 0x<40hex>
 ### broadcast
 
 ```bash
-python3 eth_rpc.py broadcast --network <mainnet|hoodi> --raw-tx 0x02... [--wait] [--wait-timeout 120]
+python3 eth_rpc.py broadcast \
+  --network <mainnet|hoodi|sepolia|holesky> --raw-tx 0x02... [--wait] [--wait-timeout 120]
 ```
 
 - Take the signer's `rawTransaction` hex as `--raw-tx`.
@@ -74,8 +76,8 @@ and `--wait` receipt semantics. Use **call** for everything else.
 python3 eth_rpc.py call \
   (--network <mainnet|hoodi|sepolia|holesky> | --rpc-url <url> --chain-id <int>) \
   --method <jsonrpc-method-name> \
-  --params <json-array-or-"-"> \
-  [--allow-write] \
+  --params '<json-array>' | '-' | '@<path>' \
+  [--allow-write | --read-only-strict] \
   [--decode] \
   [--timeout <seconds>] \
   [--max-body-bytes <int>]
@@ -270,8 +272,8 @@ Send multiple JSON-RPC calls in a single HTTP request (ADR-012). Each entry is a
 
 ```bash
 python3 eth_rpc.py batch \
-  (--network <mainnet|hoodi> | --rpc-url <url> --chain-id <int>) \
-  --calls <json-array-or-"-"> \
+  (--network <mainnet|hoodi|sepolia|holesky> | --rpc-url <url> --chain-id <int>) \
+  --calls '<json-array>' | '-' \
   [--allow-write] \
   [--timeout <seconds>] \
   [--max-body-bytes <int>]
@@ -329,7 +331,7 @@ Quick diagnostic wrapper around `net_version`. Use `call --method net_version
 
 ```bash
 python3 eth_rpc.py net-version \
-  (--network <mainnet|hoodi> | --rpc-url <url> --chain-id <int>) \
+  (--network <mainnet|hoodi|sepolia|holesky> | --rpc-url <url> --chain-id <int>) \
   [--timeout <seconds>]
 ```
 
@@ -341,7 +343,7 @@ Quick diagnostic wrapper around `web3_clientVersion`.
 
 ```bash
 python3 eth_rpc.py client-version \
-  (--network <mainnet|hoodi> | --rpc-url <url> --chain-id <int>) \
+  (--network <mainnet|hoodi|sepolia|holesky> | --rpc-url <url> --chain-id <int>) \
   [--timeout <seconds>]
 ```
 
