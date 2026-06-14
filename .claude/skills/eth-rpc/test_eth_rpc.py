@@ -1821,6 +1821,82 @@ class TestDoCallStrict(unittest.TestCase):
         self.assertEqual(out, "1")
 
 
+class TestDecodeOversizedHex(unittest.TestCase):
+    """Fix 1: _decode_hex_quantity must not parse hex values > 66 chars (uint256 cap).
+
+    A legitimate uint256 is at most 64 hex chars (66 incl. 0x prefix).
+    An adversarially large value would produce a Python bignum whose
+    str() conversion raises ValueError on Python 3.11+ (int-to-str cap).
+    """
+
+    _HUGE = "0x" + "f" * 9000  # way beyond uint256
+
+    def test_oversized_hex_returned_unchanged(self):
+        # A >66-char hex string must pass through without decoding.
+        result = r._decode_result("eth_blockNumber", self._HUGE)
+        self.assertEqual(result, self._HUGE)
+
+    def test_oversized_hex_is_not_dict(self):
+        # Must return the raw string, never a dict with a bignum value.
+        result = r._decode_result("eth_blockNumber", self._HUGE)
+        self.assertIsInstance(result, str)
+
+    def test_oversized_hex_json_serialisable(self):
+        # json.dumps must NOT raise on the result — this was the actual crash.
+        result = r._decode_result("eth_blockNumber", self._HUGE)
+        # Should not raise ValueError
+        serialised = json.dumps(result)
+        self.assertIsInstance(serialised, str)
+
+    def test_block_with_oversized_field_leaves_field_in_raw_only(self):
+        # An oversized field inside a block must be left in raw only (not decoded).
+        big_val = "0x" + "a" * 200
+        block = {"number": "0x10", "gasUsed": big_val}
+        result = r._decode_result("eth_getBlockByNumber", block)
+        # number is small and should decode
+        self.assertEqual(result["number"], 16)
+        # gasUsed is huge and must NOT appear as a decoded top-level int
+        self.assertNotIn("gasUsed", result)
+        # but it must still be accessible via raw
+        self.assertEqual(result["raw"]["gasUsed"], big_val)
+
+    def test_tx_with_oversized_field_leaves_field_in_raw_only(self):
+        big_val = "0x" + "b" * 200
+        tx = {"blockNumber": "0x5", "nonce": big_val, "value": "0x0",
+              "gas": "0x5208", "type": "0x2"}
+        result = r._decode_result("eth_getTransactionByHash", tx)
+        self.assertEqual(result["blockNumber"], 5)
+        self.assertNotIn("nonce", result)
+
+    def test_receipt_with_oversized_field_leaves_field_in_raw_only(self):
+        big_val = "0x" + "c" * 200
+        receipt = {"blockNumber": "0x10", "gasUsed": big_val, "status": "0x1"}
+        result = r._decode_result("eth_getTransactionReceipt", receipt)
+        self.assertEqual(result["blockNumber"], 16)
+        self.assertNotIn("gasUsed", result)
+
+    def test_log_with_oversized_field_leaves_field_in_raw_only(self):
+        big_val = "0x" + "d" * 200
+        log = {"blockNumber": "0x10", "logIndex": big_val, "transactionIndex": "0x0"}
+        result = r._decode_result("eth_getLogs", [log])
+        self.assertEqual(result[0]["blockNumber"], 16)
+        self.assertNotIn("logIndex", result[0])
+
+    def test_exactly_66_chars_is_decoded(self):
+        # 0x + 64 hex chars = exactly 66 chars: should still decode normally.
+        val = "0x" + "f" * 64  # uint256 max
+        result = r._decode_result("eth_blockNumber", val)
+        self.assertIsInstance(result, dict)
+        self.assertIn("decimal", result)
+
+    def test_67_chars_is_not_decoded(self):
+        # 0x + 65 hex chars = 67 chars: must pass through.
+        val = "0x" + "f" * 65
+        result = r._decode_result("eth_blockNumber", val)
+        self.assertIsInstance(result, str)
+        self.assertEqual(result, val)
+
+
 class TestCallDecodeCli(unittest.TestCase):
     """Tests for the --decode flag on the call subcommand (issue 2.5)."""
 

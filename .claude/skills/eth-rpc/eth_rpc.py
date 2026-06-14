@@ -498,8 +498,13 @@ def _decode_hex_quantity(method, result):
     For all others: {hex, decimal}.
 
     Defensive: if result is not a 0x-prefixed string, return it unchanged.
+    A legitimate uint256 is at most 64 hex chars (66 incl. 0x prefix); any
+    longer value is passed through unchanged to avoid Python 3.11+ bignum
+    int-to-str limits in json.dumps.
     """
     if not isinstance(result, str) or not result.startswith("0x"):
+        return result
+    if len(result) > 66:
         return result
     try:
         value = parse_hex_int(result)
@@ -540,7 +545,8 @@ def _decode_block(result):
     out = {"raw": result}
     for field in _BLOCK_INT_FIELDS:
         raw_val = result.get(field)
-        if raw_val is not None and isinstance(raw_val, str) and raw_val.startswith("0x"):
+        if (raw_val is not None and isinstance(raw_val, str)
+                and raw_val.startswith("0x") and len(raw_val) <= 66):
             try:
                 out[field] = parse_hex_int(raw_val)
             except ValueError:
@@ -566,14 +572,16 @@ def _decode_tx(result):
     out = {"raw": result}
     for field in _TX_INT_FIELDS:
         raw_val = result.get(field)
-        if raw_val is not None and isinstance(raw_val, str) and raw_val.startswith("0x"):
+        if (raw_val is not None and isinstance(raw_val, str)
+                and raw_val.startswith("0x") and len(raw_val) <= 66):
             try:
                 out[field] = parse_hex_int(raw_val)
             except ValueError:
                 pass
     # value: wei + eth
     raw_value = result.get("value")
-    if raw_value is not None and isinstance(raw_value, str) and raw_value.startswith("0x"):
+    if (raw_value is not None and isinstance(raw_value, str)
+            and raw_value.startswith("0x") and len(raw_value) <= 66):
         try:
             wei = parse_hex_int(raw_value)
             out["value"] = {"wei": wei, "eth": wei_to_eth_str(wei)}
@@ -582,7 +590,8 @@ def _decode_tx(result):
     # gas-price-shaped fields
     for field in _TX_GWEI_FIELDS:
         raw_val = result.get(field)
-        if raw_val is not None and isinstance(raw_val, str) and raw_val.startswith("0x"):
+        if (raw_val is not None and isinstance(raw_val, str)
+                and raw_val.startswith("0x") and len(raw_val) <= 66):
             try:
                 wei = parse_hex_int(raw_val)
                 out[field] = {"wei": wei, "gwei": _wei_to_gwei_str(wei)}
@@ -610,7 +619,8 @@ def _decode_receipt(result):
     out = {"raw": result}
     for field in _RECEIPT_INT_FIELDS:
         raw_val = result.get(field)
-        if raw_val is not None and isinstance(raw_val, str) and raw_val.startswith("0x"):
+        if (raw_val is not None and isinstance(raw_val, str)
+                and raw_val.startswith("0x") and len(raw_val) <= 66):
             try:
                 out[field] = parse_hex_int(raw_val)
             except ValueError:
@@ -629,7 +639,8 @@ def _decode_log_entry(entry):
     out = {"raw": entry}
     for field in ("blockNumber", "logIndex", "transactionIndex"):
         raw_val = entry.get(field)
-        if raw_val is not None and isinstance(raw_val, str) and raw_val.startswith("0x"):
+        if (raw_val is not None and isinstance(raw_val, str)
+                and raw_val.startswith("0x") and len(raw_val) <= 66):
             try:
                 out[field] = parse_hex_int(raw_val)
             except ValueError:
