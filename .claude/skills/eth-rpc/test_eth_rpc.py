@@ -1791,6 +1791,109 @@ class TestStrictAllowlistContents(unittest.TestCase):
         )
 
 
+class TestStrictBeforeDenylist(unittest.TestCase):
+    """Fix 2: strict mode must fire before the denylist, with a clear 'read surface' message.
+
+    Spec (issue 2.6): strict is the tighter rule; when strict=True and the method
+    is not in _STRICT_ALLOWLIST, the error must reference the read-surface/strict
+    constraint — NOT the broadcast/denylist message that would appear without strict.
+    """
+
+    URL = "https://ethereum-hoodi-rpc.publicnode.com"
+
+    def test_strict_with_denied_method_gives_strict_message_not_denylist(self):
+        # eth_sendRawTransaction is both in _DENY_METHODS and NOT in _STRICT_ALLOWLIST.
+        # With strict=True, the allowlist check should fire first, giving a
+        # read-surface message — NOT the 'use the broadcast op' denylist message.
+        fake = make_fake_rpc_call(result="0x0")
+        with self.assertRaises(ValueError) as ctx:
+            r.do_call(
+                self.URL,
+                method="eth_sendRawTransaction",
+                params=["0x02ab"],
+                strict=True,
+                allow_write=False,
+                rpc=fake,
+            )
+        msg = str(ctx.exception)
+        # Must reference strict / read-surface, not the broadcast guidance
+        self.assertIn("eth_sendRawTransaction", msg)
+        self.assertNotIn("broadcast", msg)
+        self.assertNotIn("use the 'broadcast' op", msg)
+        # rpc must never be called
+        self.assertEqual(fake.calls, [])
+
+    def test_strict_message_references_read_surface(self):
+        # The error message for a strict miss should mention the read surface.
+        fake = make_fake_rpc_call(result="0x0")
+        with self.assertRaises(ValueError) as ctx:
+            r.do_call(
+                self.URL,
+                method="eth_sendRawTransaction",
+                params=["0x02ab"],
+                strict=True,
+                allow_write=False,
+                rpc=fake,
+            )
+        msg = str(ctx.exception)
+        # Must mention "strict" or "read surface" per spec
+        self.assertTrue(
+            "strict" in msg.lower() or "read surface" in msg.lower(),
+            "expected 'strict' or 'read surface' in error: %r" % msg,
+        )
+
+    def test_allow_write_true_bypasses_both_strict_and_denylist(self):
+        # allow_write=True must bypass everything: both the allowlist and denylist.
+        fake = make_fake_rpc_call(result="0xhash")
+        out = r.do_call(
+            self.URL,
+            method="eth_sendRawTransaction",
+            params=["0x02ab"],
+            strict=True,
+            allow_write=True,
+            rpc=fake,
+        )
+        self.assertEqual(out, "0xhash")
+        self.assertEqual(len(fake.calls), 1)
+
+    def test_non_strict_denylist_message_unchanged(self):
+        # Without strict, the denylist message must be the existing broadcast guidance.
+        fake = make_fake_rpc_call(result="0x0")
+        with self.assertRaises(ValueError) as ctx:
+            r.do_call(
+                self.URL,
+                method="eth_sendRawTransaction",
+                params=["0x02ab"],
+                strict=False,
+                allow_write=False,
+                rpc=fake,
+            )
+        msg = str(ctx.exception)
+        # Normal denylist message must still reference broadcast or --allow-write
+        self.assertTrue(
+            "broadcast" in msg or "--allow-write" in msg,
+            "expected denylist guidance in non-strict error: %r" % msg,
+        )
+
+    def test_strict_miss_not_in_allowlist_fires_before_prefix_denylist(self):
+        # personal_ is in the prefix denylist AND not in _STRICT_ALLOWLIST.
+        # strict should fire first.
+        fake = make_fake_rpc_call(result="0x0")
+        with self.assertRaises(ValueError) as ctx:
+            r.do_call(
+                self.URL,
+                method="personal_unlockAccount",
+                params=[],
+                strict=True,
+                allow_write=False,
+                rpc=fake,
+            )
+        msg = str(ctx.exception)
+        # Must not say "sensitive namespace"
+        self.assertNotIn("sensitive namespace", msg)
+        self.assertEqual(fake.calls, [])
+
+
 class TestDoCallStrict(unittest.TestCase):
     URL = "https://ethereum-hoodi-rpc.publicnode.com"
 

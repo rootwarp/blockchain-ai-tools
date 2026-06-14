@@ -322,7 +322,14 @@ def do_broadcast(network, raw_tx, wait=False, wait_timeout=DEFAULT_WAIT_TIMEOUT,
 # Public: _check_method_policy(method, *, allow_write=False, allowlist=None) -> None
 
 def _check_method_policy(method, *, allow_write=False, allowlist=None):
-    """Check method against the denylist (and optional allowlist). Raise ValueError on refusal.
+    """Check method against the allowlist (if set) and denylist. Raise ValueError on refusal.
+
+    Evaluation order:
+      1. allow_write=True -> return immediately (bypasses allowlist + denylist).
+         Note: allow_write takes precedence even when allowlist is provided.
+      2. allowlist is not None -> method must be in the allowlist; raise if not
+         (this is the tighter rule, so it fires before the denylist).
+      3. denylist -> method must not be in _DENY_METHODS or match _DENY_PREFIXES.
 
     allow_write=True bypasses all checks (denylist + allowlist).
     allowlist=None means no allowlist is enforced (Phase 2 Task 2.3 contract).
@@ -331,6 +338,11 @@ def _check_method_policy(method, *, allow_write=False, allowlist=None):
         raise ValueError("method must be a non-empty string")
     if allow_write:
         return None
+    if allowlist is not None and method not in allowlist:
+        raise ValueError(
+            "method %s is not in the documented eth_* read surface "
+            "(--read-only-strict)" % method
+        )
     if method in _DENY_METHODS:
         raise ValueError(
             "method %s refused (use the 'broadcast' op for sends, "
@@ -340,11 +352,6 @@ def _check_method_policy(method, *, allow_write=False, allowlist=None):
         raise ValueError(
             "method %s in a sensitive namespace; pass --allow-write "
             "to override" % method
-        )
-    if allowlist is not None and method not in allowlist:
-        raise ValueError(
-            "method %s is not in the documented eth_* read surface; "
-            "use --allow-write to override" % method
         )
     return None
 
@@ -359,8 +366,11 @@ def do_call(url, *, method, params, allow_write=False,
             strict=False, timeout=15, max_body_bytes=None, rpc=rpc_call):
     """Generic eth_* read passthrough. Returns raw JSON-RPC result.
 
-    strict=True: only methods in _STRICT_ALLOWLIST are allowed (refusal before denylist).
-    allow_write=True: bypasses both denylist and strict allowlist.
+    Policy enforcement order (most restrictive first):
+      1. allow_write=True -> bypass everything (denylist + strict allowlist).
+      2. strict=True -> method must be in _STRICT_ALLOWLIST; refusal fires here,
+         before the denylist, with a 'read surface' message.
+      3. denylist -> _DENY_METHODS and _DENY_PREFIXES are blocked.
     """
     if not isinstance(method, str) or not method:
         raise ValueError("--method is required")
