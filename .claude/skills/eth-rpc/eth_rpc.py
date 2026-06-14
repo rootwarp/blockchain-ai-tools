@@ -41,6 +41,24 @@ _DENY_METHODS = frozenset({
 _DENY_PREFIXES = ("personal_", "admin_", "miner_", "engine_", "clique_")
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
+# Allowlist for --read-only-strict: exactly the PRD §Scope "In scope" eth_* read surface.
+# TestStrictAllowlistContents enforces literal equality to prevent silent drift (ADR-011).
+_STRICT_ALLOWLIST = frozenset({
+    "eth_getBalance", "eth_getCode", "eth_getStorageAt",
+    "eth_getTransactionCount",
+    "eth_getTransactionByHash",
+    "eth_getTransactionByBlockHashAndIndex",
+    "eth_getTransactionByBlockNumberAndIndex",
+    "eth_getTransactionReceipt",
+    "eth_getBlockByNumber", "eth_getBlockByHash",
+    "eth_getBlockTransactionCountByNumber",
+    "eth_getBlockTransactionCountByHash",
+    "eth_getLogs", "eth_call", "eth_estimateGas", "eth_gasPrice",
+    "eth_feeHistory", "eth_maxPriorityFeePerGas",
+    "eth_chainId", "eth_blockNumber", "eth_syncing",
+    "eth_accounts", "eth_protocolVersion", "eth_getProof",
+})
+
 
 def network_config(network):
     """Return (chain_id, rpc_url) for a network name, or raise ValueError."""
@@ -338,13 +356,21 @@ def _check_method_policy(method, *, allow_write=False, allowlist=None):
 #                 timeout=15, rpc=rpc_call) -> Any
 
 def do_call(url, *, method, params, allow_write=False,
-            timeout=15, max_body_bytes=None, rpc=rpc_call):
-    """Generic eth_* read passthrough. Returns raw JSON-RPC result."""
+            strict=False, timeout=15, max_body_bytes=None, rpc=rpc_call):
+    """Generic eth_* read passthrough. Returns raw JSON-RPC result.
+
+    strict=True: only methods in _STRICT_ALLOWLIST are allowed (refusal before denylist).
+    allow_write=True: bypasses both denylist and strict allowlist.
+    """
     if not isinstance(method, str) or not method:
         raise ValueError("--method is required")
     if not isinstance(params, list):
         raise ValueError("--params must be a JSON array")
-    _check_method_policy(method, allow_write=allow_write)
+    _check_method_policy(
+        method,
+        allow_write=allow_write,
+        allowlist=_STRICT_ALLOWLIST if strict else None,
+    )
     return rpc(url, method, params, timeout=timeout, max_body_bytes=max_body_bytes)
 
 # === END MODULE: do_call ===
@@ -722,7 +748,13 @@ def main(argv=None):
         required=True,
         help="JSON array; pass '-' to read from stdin",
     )
-    p_call.add_argument("--allow-write", action="store_true")
+    _call_policy = p_call.add_mutually_exclusive_group()
+    _call_policy.add_argument("--allow-write", action="store_true",
+                              help="bypass the call denylist (e.g. for dev nodes)")
+    _call_policy.add_argument(
+        "--read-only-strict", action="store_true",
+        help="only allow methods in the documented eth_* read surface (recommended for CI)",
+    )
     p_call.add_argument("--timeout", type=int, default=15)
     p_call.add_argument(
         "--max-body-bytes", type=_positive_int, default=None,
@@ -828,6 +860,7 @@ def main(argv=None):
                 method=args.method,
                 params=params,
                 allow_write=args.allow_write,
+                strict=args.read_only_strict,
                 timeout=args.timeout,
                 max_body_bytes=args.max_body_bytes,
             )

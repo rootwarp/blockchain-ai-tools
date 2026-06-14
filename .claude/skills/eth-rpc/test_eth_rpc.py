@@ -1354,6 +1354,35 @@ class TestCallCli(unittest.TestCase):
         kwargs = mock_dc.call_args[1]
         self.assertEqual(kwargs["params"], ["latest"])
 
+    def test_allow_write_and_read_only_strict_mutually_exclusive(self):
+        # argparse must reject the combo before main sees it (ADR-010)
+        with self.assertRaises(SystemExit) as ctx:
+            r.main([
+                "call", "--network", "hoodi",
+                "--method", "eth_chainId", "--params", "[]",
+                "--allow-write", "--read-only-strict",
+            ])
+        self.assertNotEqual(ctx.exception.code, 0)
+
+    def test_read_only_strict_allows_listed_method(self):
+        with mock.patch("eth_rpc.do_call", return_value="0x88bb0"):
+            rc, out, err = self._run([
+                "call", "--network", "hoodi",
+                "--method", "eth_chainId", "--params", "[]",
+                "--read-only-strict",
+            ])
+        self.assertEqual(rc, 0)
+        self.assertEqual(json.loads(out), "0x88bb0")
+
+    def test_read_only_strict_rejects_unlisted_method(self):
+        rc, out, err = self._run([
+            "call", "--network", "hoodi",
+            "--method", "net_version", "--params", "[]",
+            "--read-only-strict",
+        ])
+        self.assertEqual(rc, 1)
+        self.assertIn("net_version", err)
+
 
 class TestMaxBodyBytesValidator(unittest.TestCase):
     """--max-body-bytes must reject non-positive values at argparse time (fix 6)."""
@@ -1695,6 +1724,61 @@ class TestDecodeResult(unittest.TestCase):
         result = r._decode_result("eth_getLogs", logs)
         self.assertEqual(len(result), 2)
         self.assertEqual(result[1]["blockNumber"], 5)
+
+
+class TestStrictAllowlistContents(unittest.TestCase):
+    """Drift guard (ADR-011 pattern): any intentional change to _STRICT_ALLOWLIST
+    requires updating both the constant and this test in the same commit."""
+
+    def test_strict_allowlist_exact(self):
+        self.assertEqual(
+            r._STRICT_ALLOWLIST,
+            frozenset({
+                "eth_getBalance", "eth_getCode", "eth_getStorageAt",
+                "eth_getTransactionCount",
+                "eth_getTransactionByHash",
+                "eth_getTransactionByBlockHashAndIndex",
+                "eth_getTransactionByBlockNumberAndIndex",
+                "eth_getTransactionReceipt",
+                "eth_getBlockByNumber", "eth_getBlockByHash",
+                "eth_getBlockTransactionCountByNumber",
+                "eth_getBlockTransactionCountByHash",
+                "eth_getLogs", "eth_call", "eth_estimateGas", "eth_gasPrice",
+                "eth_feeHistory", "eth_maxPriorityFeePerGas",
+                "eth_chainId", "eth_blockNumber", "eth_syncing",
+                "eth_accounts", "eth_protocolVersion", "eth_getProof",
+            }),
+        )
+
+
+class TestDoCallStrict(unittest.TestCase):
+    URL = "https://ethereum-hoodi-rpc.publicnode.com"
+
+    def test_strict_allowlist_hit_proceeds(self):
+        fake = make_fake_rpc_call(result="0x88bb0")
+        out = r.do_call(self.URL, method="eth_blockNumber", params=[], strict=True, rpc=fake)
+        self.assertEqual(out, "0x88bb0")
+
+    def test_strict_allowlist_miss_raises(self):
+        fake = make_fake_rpc_call(result="0x1")
+        with self.assertRaises(ValueError) as ctx:
+            r.do_call(self.URL, method="net_version", params=[], strict=True, rpc=fake)
+        self.assertIn("net_version", str(ctx.exception))
+        # rpc should not have been called
+        self.assertEqual(fake.calls, [])
+
+    def test_strict_with_allow_write_bypasses(self):
+        # allow_write=True still bypasses everything including strict
+        fake = make_fake_rpc_call(result="0x1")
+        out = r.do_call(self.URL, method="eth_sendRawTransaction", params=["0x02ab"],
+                        allow_write=True, strict=True, rpc=fake)
+        self.assertEqual(out, "0x1")
+
+    def test_strict_default_false(self):
+        # strict defaults to False — net_version must pass without strict
+        fake = make_fake_rpc_call(result="1")
+        out = r.do_call(self.URL, method="net_version", params=[], rpc=fake)
+        self.assertEqual(out, "1")
 
 
 class TestCallDecodeCli(unittest.TestCase):

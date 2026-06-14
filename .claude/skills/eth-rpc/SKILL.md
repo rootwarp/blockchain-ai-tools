@@ -152,7 +152,7 @@ Block tags (`"latest"`, `"pending"`, `"finalized"`, `"safe"`, `"earliest"`) and
 hex addresses/quantities are the operator's responsibility; no per-method
 validation is applied beyond "is a JSON array".
 
-#### Denylist and `--allow-write`
+#### Denylist, `--allow-write`, and `--read-only-strict`
 
 By default the following methods are refused with a `ValueError`:
 
@@ -174,6 +174,24 @@ A warning is always printed to stderr when `--allow-write` is active:
 
 ```
 warning: --allow-write bypasses the call denylist
+```
+
+**`--read-only-strict`** is the inverse of `--allow-write`: instead of widening
+the surface, it narrows it to only the documented `eth_*` read surface above.
+Any method **not** in that list is refused. Recommended for CI smoke jobs that
+want a hard guarantee (not just a denylist of known-bad methods).
+`--allow-write` and `--read-only-strict` are mutually exclusive — argparse
+rejects the combination with exit 2.
+
+```bash
+# CI-safe: only eth_* read surface allowed
+python3 eth_rpc.py call --network hoodi --read-only-strict \
+  --method eth_chainId --params '[]'
+
+# Rejected by --read-only-strict (not in the documented surface)
+python3 eth_rpc.py call --network hoodi --read-only-strict \
+  --method net_version --params '[]'
+# → error: method net_version is not in the documented eth_* read surface
 ```
 
 #### `--max-body-bytes`
