@@ -1,13 +1,17 @@
 # eth-rpc
 
 A Claude Code skill that acts as the read/write RPC companion to the
-[`eth-signer-mcp`](../../../apps/eth-signer-mcp/README.md) signer. Three operations:
+[`eth-signer-mcp`](../../../apps/eth-signer-mcp/README.md) signer. Six operations:
 
 - **balance** — query the ETH balance of an EOA (`eth_getBalance`).
 - **broadcast** — propagate an already-signed raw transaction
   (`eth_sendRawTransaction`), optionally waiting for the receipt.
 - **call** — generic `eth_*` JSON-RPC read passthrough for any method on the
   documented read surface.
+- **batch** — send multiple JSON-RPC calls in one request; returns per-entry
+  result/error envelopes.
+- **net-version** — diagnostic: `net_version` → `{chainId, netVersion}`.
+- **client-version** — diagnostic: `web3_clientVersion` → `{chainId, clientVersion}`.
 
 It makes outbound RPC calls; the signer itself stays offline. It does **not** sign
 and does **not** build transactions (see `eth-tx-builder` for building).
@@ -18,7 +22,7 @@ see `SKILL.md` for the full method list.
 ## Files
 
 - `SKILL.md` — the skill Claude follows (operation → optional `get_address` → helper → present).
-- `eth_rpc.py` — stdlib-only helper: network map, validation, RPC, balance + broadcast + call.
+- `eth_rpc.py` — stdlib-only helper: network map, validation, RPC, balance + broadcast + call + batch + diagnostics.
 - `test_eth_rpc.py` — unit tests (mocked RPC; no live network).
 
 ## Prerequisites
@@ -58,11 +62,38 @@ Captured output:
 ```
 
 ```
-"0x2df76a"
+"0x2df761"
 ```
 
 `"0x88bb0"` is hex for 560048 (hoodi `chainId`). `eth_blockNumber` returns the
 current chain head as a hex quantity.
+
+### batch
+
+Two-call batch confirming `eth_chainId` + `eth_blockNumber` via the new batch op
+(re-confirms hoodi chainId = `"0x88bb0"`, Phase 1 Assumption A5):
+
+```bash
+cd .claude/skills/eth-rpc
+python3 eth_rpc.py batch --network hoodi --calls '[
+  {"method": "eth_chainId",     "params": []},
+  {"method": "eth_blockNumber", "params": []}
+]'
+```
+
+<!-- PLACEHOLDER: team lead to run live e2e and paste output here -->
+<!-- Expected: [{"id": 0, "result": "0x88bb0"}, {"id": 1, "result": "0x..."}] -->
+
+### net-version and client-version
+
+```bash
+python3 eth_rpc.py net-version    --network hoodi
+python3 eth_rpc.py client-version --network hoodi
+```
+
+<!-- PLACEHOLDER: team lead to run live e2e and paste output here -->
+<!-- Expected: {"chainId": "560048", "netVersion": "560048"} -->
+<!-- Expected: {"chainId": "560048", "clientVersion": "Geth/..."} -->
 
 ### balance
 
@@ -101,5 +132,6 @@ Expect JSON with `txHash` and, once mined, `status: mined` plus `blockNumber`,
 - Block-tag selection for `balance` (currently fixed at `latest`; `call` accepts
   any block tag the operator passes in `--params`).
 - `--params @file` for large `eth_getLogs` filter objects (deferred to P1).
+- Decoded output for `eth_feeHistory` / `eth_getProof` (deferred to Phase 2+).
 
 Each reuses the network table and RPC plumbing here.
