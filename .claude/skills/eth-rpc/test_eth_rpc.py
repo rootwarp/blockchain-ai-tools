@@ -1514,6 +1514,188 @@ class TestDecodeResult(unittest.TestCase):
             }),
         )
 
+    # ----- Issue 2.3: block / tx / receipt objects -----
+    # Fixtures are trimmed hand-rolled dicts; field names match execution-apis spec.
+
+    # Trimmed eth_getBlockByNumber response (mainnet-shaped, post-merge).
+    FAKE_BLOCK = {
+        "number": "0x10",
+        "gasUsed": "0x5208",
+        "gasLimit": "0x1c9c380",
+        "baseFeePerGas": "0x9502f900",
+        "timestamp": "0x64b2c350",
+        "size": "0x2a0",
+        "difficulty": "0x0",
+        "nonce": "0x0000000000000000",
+        "totalDifficulty": "0x1",
+        "hash": "0xabc",
+    }
+
+    # Trimmed eth_getTransactionByHash response (EIP-1559 tx).
+    FAKE_TX = {
+        "blockNumber": "0x10",
+        "transactionIndex": "0x0",
+        "nonce": "0x5",
+        "value": "0xde0b6b3a7640000",   # 1 ETH
+        "gas": "0x5208",
+        "maxFeePerGas": "0x12a05f200",
+        "maxPriorityFeePerGas": "0x77359400",
+        "chainId": "0x1",
+        "type": "0x2",
+        "hash": "0xdeadbeef",
+    }
+
+    # Trimmed eth_getTransactionByHash missing 'from' (optional per spec).
+    FAKE_TX_NO_FROM = {
+        "blockNumber": "0x5",
+        "nonce": "0x1",
+        "value": "0x0",
+        "gas": "0x5208",
+        "type": "0x2",
+        "hash": "0xcafe",
+    }
+
+    # Trimmed eth_getTransactionReceipt response.
+    FAKE_RECEIPT = {
+        "blockNumber": "0x10",
+        "transactionIndex": "0x0",
+        "gasUsed": "0x5208",
+        "cumulativeGasUsed": "0x5208",
+        "effectiveGasPrice": "0x9502f900",
+        "status": "0x1",
+        "type": "0x2",
+        "logs": [],
+    }
+
+    def test_block_by_number_happy_path(self):
+        result = r._decode_result("eth_getBlockByNumber", self.FAKE_BLOCK)
+        self.assertEqual(result["raw"], self.FAKE_BLOCK)
+        self.assertEqual(result["number"], 16)
+        self.assertEqual(result["gasUsed"], 21000)
+        self.assertEqual(result["gasLimit"], 30000000)
+        self.assertIn("baseFeePerGas", result)
+        self.assertIn("timestamp", result)
+        self.assertIn("size", result)
+
+    def test_block_total_difficulty_not_decoded(self):
+        # totalDifficulty is legacy under PoS; must NOT appear as a decoded top-level key
+        result = r._decode_result("eth_getBlockByNumber", self.FAKE_BLOCK)
+        self.assertNotIn("totalDifficulty", result)
+        # But it must still be accessible via raw
+        self.assertIn("totalDifficulty", result["raw"])
+
+    def test_block_by_hash_dispatches(self):
+        result = r._decode_result("eth_getBlockByHash", self.FAKE_BLOCK)
+        self.assertIn("raw", result)
+        self.assertEqual(result["number"], 16)
+
+    def test_tx_by_hash_happy_path(self):
+        result = r._decode_result("eth_getTransactionByHash", self.FAKE_TX)
+        self.assertEqual(result["raw"], self.FAKE_TX)
+        self.assertEqual(result["blockNumber"], 16)
+        self.assertEqual(result["nonce"], 5)
+        # value -> {wei, eth}
+        self.assertEqual(result["value"]["wei"], 10 ** 18)
+        self.assertEqual(result["value"]["eth"], "1")
+        # gas-price fields -> {wei, gwei}
+        self.assertIn("gwei", result["maxFeePerGas"])
+        self.assertIn("gwei", result["maxPriorityFeePerGas"])
+
+    def test_tx_missing_from_omitted(self):
+        # 'from' is optional per spec; must be omitted when missing, no exception
+        result = r._decode_result("eth_getTransactionByHash", self.FAKE_TX_NO_FROM)
+        self.assertNotIn("from", result)
+        # Other fields still decoded
+        self.assertEqual(result["nonce"], 1)
+
+    def test_tx_by_block_hash_and_index_dispatches(self):
+        result = r._decode_result("eth_getTransactionByBlockHashAndIndex", self.FAKE_TX)
+        self.assertIn("raw", result)
+        self.assertIn("blockNumber", result)
+
+    def test_receipt_happy_path(self):
+        result = r._decode_result("eth_getTransactionReceipt", self.FAKE_RECEIPT)
+        self.assertEqual(result["raw"], self.FAKE_RECEIPT)
+        self.assertEqual(result["status"], 1)
+        self.assertEqual(result["gasUsed"], 21000)
+        self.assertEqual(result["cumulativeGasUsed"], 21000)
+        self.assertIn("effectiveGasPrice", result)
+        self.assertIn("blockNumber", result)
+
+    def test_null_block_result_returns_none(self):
+        result = r._decode_result("eth_getBlockByNumber", None)
+        self.assertIsNone(result)
+
+    def test_null_tx_result_returns_none(self):
+        result = r._decode_result("eth_getTransactionByHash", None)
+        self.assertIsNone(result)
+
+    def test_empty_block_returns_raw_only(self):
+        result = r._decode_result("eth_getBlockByNumber", {})
+        self.assertEqual(result, {"raw": {}})
+
+    def test_block_non_hex_field_omitted(self):
+        # If a field is present but not a hex string, it stays in raw only
+        block = {"number": "not-hex", "gasUsed": "0x5208"}
+        result = r._decode_result("eth_getBlockByNumber", block)
+        self.assertNotIn("number", result)  # not decoded
+        self.assertEqual(result["gasUsed"], 21000)  # other field still decoded
+
+    # ----- Issue 2.4: eth_getLogs arrays -----
+
+    # Trimmed Transfer log fixture (topics for Transfer(address,address,uint256)).
+    FAKE_LOG = {
+        "address": "0xdac17f958d2ee523a2206206994597c13d831ec7",
+        "topics": [
+            "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+            "0x000000000000000000000000abc",
+            "0x000000000000000000000000def",
+        ],
+        "data": "0x00000000000000000000000000000000000000000000000000000002540be400",
+        "blockNumber": "0x10",
+        "logIndex": "0x0",
+        "transactionIndex": "0x2",
+        "transactionHash": "0xdeadbeef",
+        "blockHash": "0xcafe",
+    }
+
+    def test_get_logs_happy_path(self):
+        result = r._decode_result("eth_getLogs", [self.FAKE_LOG])
+        self.assertIsInstance(result, list)
+        self.assertEqual(len(result), 1)
+        entry = result[0]
+        self.assertEqual(entry["raw"], self.FAKE_LOG)
+        self.assertEqual(entry["blockNumber"], 16)
+        self.assertEqual(entry["logIndex"], 0)
+        self.assertEqual(entry["transactionIndex"], 2)
+
+    def test_get_logs_topics_not_decoded(self):
+        result = r._decode_result("eth_getLogs", [self.FAKE_LOG])
+        entry = result[0]
+        # topics/data/address/hashes must stay in raw only
+        self.assertNotIn("topics", entry)
+        self.assertNotIn("data", entry)
+        self.assertNotIn("address", entry)
+        self.assertIn("topics", entry["raw"])
+
+    def test_get_logs_empty_array(self):
+        result = r._decode_result("eth_getLogs", [])
+        self.assertEqual(result, [])
+
+    def test_get_logs_partial_fields(self):
+        # Only blockNumber present; logIndex and transactionIndex omitted -> no exception
+        log = {"blockNumber": "0x10"}
+        result = r._decode_result("eth_getLogs", [log])
+        self.assertEqual(result[0]["blockNumber"], 16)
+        self.assertNotIn("logIndex", result[0])
+        self.assertNotIn("transactionIndex", result[0])
+
+    def test_get_logs_two_entries(self):
+        logs = [self.FAKE_LOG, {"blockNumber": "0x5", "logIndex": "0x1", "transactionIndex": "0x0"}]
+        result = r._decode_result("eth_getLogs", logs)
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[1]["blockNumber"], 5)
+
 
 if __name__ == "__main__":
     unittest.main()
