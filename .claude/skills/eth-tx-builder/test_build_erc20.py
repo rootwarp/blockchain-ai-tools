@@ -513,5 +513,204 @@ class TestGasEstimator(unittest.TestCase):
         self.assertEqual(b.GAS_CAP, 300_000)
 
 
+class TestSummary(unittest.TestCase):
+    """Tests for the Layer 2 summary section."""
+
+    # Synthetic ctx for a 'transfer' operation used by most render tests.
+    _TRANSFER_CTX = {
+        "operation": "transfer",
+        "network": "mainnet",
+        "chain_id": 1,
+        "token": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        "symbol": "USDC",
+        "decimals": 6,
+        "human_amount": "1.5",
+        "base_amount": 1_500_000,
+        "is_max_uint": False,
+        "from_": "0xSender0000000000000000000000000000000000",
+        "to": "0xRecipient00000000000000000000000000000000",
+        "nonce": 42,
+        "gas": 78066,
+        "max_fee": 25_000_000_000,
+        "max_priority_fee": 1_500_000_000,
+    }
+
+    # --- render_summary label checks ---
+
+    def test_render_summary_contains_operation(self):
+        text = b.render_summary(self._TRANSFER_CTX)
+        self.assertIn("operation", text)
+        self.assertIn("transfer", text)
+
+    def test_render_summary_contains_network(self):
+        text = b.render_summary(self._TRANSFER_CTX)
+        self.assertIn("network", text)
+        self.assertIn("mainnet", text)
+
+    def test_render_summary_contains_token(self):
+        text = b.render_summary(self._TRANSFER_CTX)
+        self.assertIn("token", text)
+
+    def test_render_summary_contains_symbol(self):
+        text = b.render_summary(self._TRANSFER_CTX)
+        self.assertIn("USDC", text)
+
+    def test_render_summary_contains_decimals(self):
+        text = b.render_summary(self._TRANSFER_CTX)
+        self.assertIn("decimals", text)
+
+    def test_render_summary_contains_amount_base_units(self):
+        text = b.render_summary(self._TRANSFER_CTX)
+        self.assertIn("amount (base units)", text)
+
+    def test_render_summary_contains_nonce(self):
+        text = b.render_summary(self._TRANSFER_CTX)
+        self.assertIn("nonce", text)
+
+    def test_render_summary_contains_gas(self):
+        text = b.render_summary(self._TRANSFER_CTX)
+        self.assertIn("gas", text)
+
+    def test_render_summary_is_pure_no_stderr(self):
+        """render_summary must not write to stderr (pure function)."""
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+            b.render_summary(self._TRANSFER_CTX)
+            self.assertEqual(fake_err.getvalue(), "")
+
+    # --- render_summary with symbol=None ---
+
+    def test_render_summary_unavailable_when_symbol_none(self):
+        ctx = dict(self._TRANSFER_CTX, symbol=None)
+        text = b.render_summary(ctx)
+        self.assertIn("(unavailable)", text)
+
+    # --- render_summary with is_max_uint=True ---
+
+    def test_render_summary_max_uint256_label(self):
+        ctx = dict(self._TRANSFER_CTX, is_max_uint=True)
+        text = b.render_summary(ctx)
+        self.assertIn("MAX UINT256", text)
+
+    # --- print_summary writes to stderr ---
+
+    def test_print_summary_writes_to_stderr(self):
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+            b.print_summary(self._TRANSFER_CTX)
+            output = fake_err.getvalue()
+        self.assertIn("operation", output)
+        self.assertGreater(len(output), 0)
+
+    # --- warn_approve_max ---
+
+    def test_warn_approve_max_writes_warning_prefix(self):
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+            b.warn_approve_max(symbol="USDC",
+                               token="0xA0b8" + "0" * 36,
+                               spender="0xSpnd" + "0" * 35)
+            output = fake_err.getvalue()
+        self.assertIn("WARNING:", output)
+        self.assertIn("UNLIMITED", output)
+        self.assertIn("USDC", output)
+
+    def test_warn_approve_max_unknown_symbol(self):
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+            b.warn_approve_max(symbol=None,
+                               token="0x" + "a" * 40,
+                               spender="0x" + "b" * 40)
+            output = fake_err.getvalue()
+        self.assertIn("WARNING:", output)
+        self.assertIn("<unknown>", output)
+
+    def test_warn_approve_max_contains_revoke_hint(self):
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+            b.warn_approve_max(symbol="USDC",
+                               token="0x" + "a" * 40,
+                               spender="0x" + "b" * 40)
+            output = fake_err.getvalue()
+        self.assertIn("Revoke", output)
+
+    # --- warn_low_allowance ---
+
+    def test_warn_low_allowance_writes_warning_prefix(self):
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+            b.warn_low_allowance(holder="0x" + "1" * 40,
+                                 spender="0x" + "2" * 40,
+                                 current=500_000,
+                                 requested=1_500_000,
+                                 decimals=6)
+            output = fake_err.getvalue()
+        self.assertIn("WARNING:", output)
+        # base_units_to_human(500_000, 6) = "0.5", base_units_to_human(1_500_000, 6) = "1.5"
+        self.assertIn("0.5", output)
+        self.assertIn("1.5", output)
+
+    def test_warn_low_allowance_contains_revert_hint(self):
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+            b.warn_low_allowance(holder="0x" + "1" * 40,
+                                 spender="0x" + "2" * 40,
+                                 current=0,
+                                 requested=1_000_000,
+                                 decimals=6)
+            output = fake_err.getvalue()
+        self.assertIn("revert", output)
+
+    # --- warn_allowance_check_skipped ---
+
+    def test_warn_allowance_check_skipped_contains_reason(self):
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+            b.warn_allowance_check_skipped(reason="transport error")
+            output = fake_err.getvalue()
+        self.assertIn("WARNING:", output)
+        self.assertIn("transport error", output)
+
+    def test_warn_allowance_check_skipped_build_continues(self):
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+            b.warn_allowance_check_skipped(reason="timeout")
+            output = fake_err.getvalue()
+        self.assertIn("Build continues", output)
+
+    # --- emit_warning dispatcher ---
+
+    def test_emit_warning_approve_max_dispatches(self):
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+            b.emit_warning("approve_max", {
+                "symbol": "USDC",
+                "token": "0x" + "a" * 40,
+                "spender": "0x" + "b" * 40,
+            })
+            output = fake_err.getvalue()
+        self.assertIn("WARNING:", output)
+        self.assertIn("UNLIMITED", output)
+
+    def test_emit_warning_low_allowance_dispatches(self):
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+            b.emit_warning("low_allowance", {
+                "holder": "0x" + "1" * 40,
+                "spender": "0x" + "2" * 40,
+                "current": 0,
+                "requested": 1_000_000,
+                "decimals": 6,
+            })
+            output = fake_err.getvalue()
+        self.assertIn("WARNING:", output)
+
+    def test_emit_warning_allowance_check_skipped_dispatches(self):
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+            b.emit_warning("allowance_check_skipped", {"reason": "rpc down"})
+            output = fake_err.getvalue()
+        self.assertIn("WARNING:", output)
+        self.assertIn("rpc down", output)
+
+    def test_emit_warning_symbol_unavailable_dispatches(self):
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+            b.emit_warning("symbol_unavailable", {})
+            output = fake_err.getvalue()
+        self.assertIn("WARNING:", output)
+
+    def test_emit_warning_unknown_kind_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            b.emit_warning("unknown_kind", {})
+
+
 if __name__ == "__main__":
     unittest.main()

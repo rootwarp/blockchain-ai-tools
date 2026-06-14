@@ -356,6 +356,147 @@ def estimate_gas(rpc, url, sender, token, data):
 
 # === Layer 2: summary ===
 
+
+def render_summary(ctx):
+    """Return the human-readable summary block as a string (pure — no stderr writes).
+
+    PRD §16 fields. All labels are stable so TestSummary can grep them.
+
+    Expected ctx keys:
+        operation        str    e.g. "transfer", "approve", "transfer-from"
+        network          str    e.g. "mainnet"
+        chain_id         int    e.g. 1
+        token            str    token contract address
+        symbol           Optional[str]  None -> "(unavailable)"
+        decimals         int
+        human_amount     str    e.g. "1.5"
+        base_amount      int    base-unit integer
+        is_max_uint      bool   True -> render base_amount as "MAX UINT256"
+        from_            str    sender address (transfer / transfer-from)
+        to               str    recipient address (transfer / transfer-from)
+        -- approve-specific keys (when present) --
+        spender          str    (approve)
+        holder           str    (approve / transfer-from)
+        nonce            int
+        gas              int
+        max_fee          int    wei
+        max_priority_fee int    wei
+    """
+    op = ctx["operation"]
+    symbol_display = ctx["symbol"] if ctx.get("symbol") is not None else "(unavailable)"
+    base_amt_display = (
+        "MAX UINT256" if ctx.get("is_max_uint") else str(ctx["base_amount"])
+    )
+    human_display = (
+        "MAX UINT256" if ctx.get("is_max_uint") else ctx["human_amount"]
+    )
+
+    lines = [
+        "--- ERC-20 transaction summary ---",
+        "operation         : %s" % op,
+        "network           : %s (chainId %s)" % (ctx["network"], ctx["chain_id"]),
+        "token             : %s" % ctx["token"],
+        "symbol            : %s" % symbol_display,
+        "decimals          : %s" % ctx["decimals"],
+        "amount (human)    : %s" % human_display,
+        "amount (base units): %s" % base_amt_display,
+    ]
+
+    # Role-specific address lines per operation
+    if op == "transfer":
+        lines.append("from (sender)     : %s" % ctx.get("from_", ""))
+        lines.append("to (recipient)    : %s" % ctx.get("to", ""))
+    elif op == "approve":
+        lines.append("holder (sender)   : %s" % ctx.get("from_", ctx.get("holder", "")))
+        lines.append("spender           : %s" % ctx.get("spender", ""))
+    elif op == "transfer-from":
+        lines.append("source (from)     : %s" % ctx.get("from_", ""))
+        lines.append("to (recipient)    : %s" % ctx.get("to", ""))
+        lines.append("signer / spender  : %s" % ctx.get("sender", ctx.get("signer_spender", "")))
+
+    lines += [
+        "nonce             : %s" % ctx["nonce"],
+        "gas               : %s" % ctx["gas"],
+        "maxFeePerGas      : %s wei" % ctx["max_fee"],
+        "maxPriorityFeePerGas: %s wei" % ctx["max_priority_fee"],
+        "----------------------------------",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def print_summary(ctx):
+    """Write the rendered summary block to stderr."""
+    text = render_summary(ctx)
+    sys.stderr.write(text)
+    if not text.endswith("\n"):
+        sys.stderr.write("\n")
+
+
+def warn_approve_max(symbol, token, spender):
+    """Write the --approve-max WARNING block to stderr.
+
+    Prints a multi-line WARNING: block per PRD §7. When symbol is None,
+    renders the symbol placeholder as '<unknown>'.
+    """
+    sym = symbol if symbol is not None else "<unknown>"
+    msg = (
+        "WARNING: --approve-max grants UNLIMITED transfer authority on"
+        " %s (%s) to spender %s.\n"
+        "Revoke later with approve(spender, 0) if no longer needed.\n"
+        % (sym, token, spender)
+    )
+    sys.stderr.write(msg)
+
+
+def warn_low_allowance(holder, spender, current, requested, decimals):
+    """Write a low-allowance WARNING line to stderr.
+
+    Uses base_units_to_human for the human-readable figures.
+    """
+    current_human = base_units_to_human(current, decimals)
+    requested_human = base_units_to_human(requested, decimals)
+    msg = (
+        "WARNING: current allowance is %d (%s); requested transfer is %d (%s)."
+        " This transaction will revert unless allowance is increased before broadcast.\n"
+        % (current, current_human, requested, requested_human)
+    )
+    sys.stderr.write(msg)
+
+
+def warn_allowance_check_skipped(reason):
+    """Write an allowance-check-skipped WARNING line to stderr."""
+    sys.stderr.write(
+        "WARNING: allowance soft-check skipped: %s. Build continues.\n" % reason
+    )
+
+
+def warn_symbol_unavailable():
+    """Write a symbol-unavailable WARNING line to stderr (optional, info-only)."""
+    sys.stderr.write(
+        "WARNING: token symbol() unavailable; summary may be less informative.\n"
+    )
+
+
+def emit_warning(kind, payload):
+    """Dispatch a (kind, payload_dict) warning tuple to the matching warn_* emitter.
+
+    kind must be one of: "approve_max", "low_allowance",
+    "allowance_check_skipped", "symbol_unavailable".
+
+    Raises ValueError on an unknown kind (defensive — a typo in tx_assembly
+    should surface in tests rather than silently dropping a warning).
+    """
+    if kind == "approve_max":
+        warn_approve_max(**payload)
+    elif kind == "low_allowance":
+        warn_low_allowance(**payload)
+    elif kind == "allowance_check_skipped":
+        warn_allowance_check_skipped(**payload)
+    elif kind == "symbol_unavailable":
+        warn_symbol_unavailable()
+    else:
+        raise ValueError("unknown warning kind: %r" % (kind,))
+
 # === end Layer 2: summary ===
 
 # === Layer 3: tx_assembly ===
