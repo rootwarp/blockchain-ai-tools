@@ -24,6 +24,16 @@ class TestNetworkConfig(unittest.TestCase):
         with self.assertRaises(ValueError):
             r.network_config("goerli")
 
+    def test_sepolia_entry(self):
+        chain_id, url = r.network_config("sepolia")
+        self.assertEqual(chain_id, 11155111)
+        self.assertEqual(url, "https://ethereum-sepolia-rpc.publicnode.com")
+
+    def test_holesky_entry(self):
+        chain_id, url = r.network_config("holesky")
+        self.assertEqual(chain_id, 17000)
+        self.assertEqual(url, "https://ethereum-holesky-rpc.publicnode.com")
+
 
 class TestValidateHexAddress(unittest.TestCase):
     GOOD = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"

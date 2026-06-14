@@ -21,6 +21,8 @@ import urllib.request
 NETWORKS = {
     "mainnet": (1, "https://ethereum-rpc.publicnode.com"),
     "hoodi": (560048, "https://ethereum-hoodi-rpc.publicnode.com"),
+    "sepolia": (11155111, "https://ethereum-sepolia-rpc.publicnode.com"),
+    "holesky": (17000, "https://ethereum-holesky-rpc.publicnode.com"),
 }
 
 # publicnode rejects the default "Python-urllib/x.y" User-Agent with HTTP 403.

@@ -22,9 +22,11 @@ transactions (that is the `eth-tx-builder` skill).
 
 ## Inputs
 
-- **network** — `mainnet` or `hoodi` (required for balance and broadcast;
-  optional for call/batch/net-version/client-version when using `--rpc-url` +
-  `--chain-id` instead).
+- **network** — `mainnet`, `hoodi`, `sepolia`, or `holesky` (required for
+  balance and broadcast; optional for call/batch/net-version/client-version when
+  using `--rpc-url` + `--chain-id` instead).
+  - **Holesky** was deprecated September 2025 — prefer `hoodi` for new work.
+    Holesky remains reachable for legacy contracts.
 - balance: **address** — the EOA to query (optional; see below).
 - broadcast: **raw-tx** — the `0x`-prefixed signed transaction hex (from the
   signer's `sign_transaction` `rawTransaction` field).
@@ -306,7 +308,12 @@ Output: `{"chainId": "...", "clientVersion": "..."}`.
   exceed `--wait-timeout`) or in the background, and keep `--wait-timeout` within that
   budget.
 - Networks are hardcoded in `eth_rpc.py`: `mainnet` → chainId 1, `hoodi` → 560048,
-  each with a public RPC endpoint.
+  `sepolia` → 11155111, `holesky` → 17000, each with a publicnode endpoint.
+  **Holesky was deprecated September 2025** — prefer `hoodi` for new work.
+  Alternative smoke check on sepolia:
+  ```bash
+  python3 eth_rpc.py call --network sepolia --method eth_chainId --params '[]'
+  ```
 - Balance is always read at the `latest` block.
 - Block return fields: note that `totalDifficulty` is a legacy field and may be
   absent or `null` on post-merge nodes — do not rely on it.
