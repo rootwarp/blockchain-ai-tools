@@ -470,6 +470,29 @@ class TestDecodeSymbolPolished(unittest.TestCase):
         data = b"\x00" * 32
         self.assertIsNone(b._try_decode_bytes32_null_trimmed("0x" + data.hex()))
 
+    def test_try_decode_bytes32_null_trimmed_invalid_utf8_returns_none(self):
+        """_try_decode_bytes32_null_trimmed: invalid UTF-8 bytes32 returns None (U+FFFD guard).
+
+        errors='replace' substitutes U+FFFD for invalid sequences; without the
+        guard, isprintable() returns True for U+FFFD, yielding a corrupted ticker
+        like '\\ufffdXYZ'. The fix checks '\\ufffd' not in text so these return None
+        instead (review Fix 3).
+        """
+        # 0x80, 0x81 are invalid lead bytes in UTF-8; followed by 'XYZ' + nulls.
+        data = bytes([0x80, 0x81, 0x58, 0x59, 0x5A]) + b"\x00" * 27
+        self.assertEqual(len(data), 32)
+        self.assertIsNone(b._try_decode_bytes32_null_trimmed("0x" + data.hex()))
+
+    def test_decode_symbol_invalid_utf8_bytes32_returns_none(self):
+        """decode_symbol: invalid-UTF-8 bytes32 returns None (not a U+FFFD-bearing string).
+
+        Regression fence for review Fix 3: ensures the full decode_symbol ladder
+        returns None rather than a corrupted string when the bytes32 path is taken.
+        """
+        data = bytes([0x80, 0x81, 0x58, 0x59, 0x5A]) + b"\x00" * 27
+        result = b.decode_symbol("0x" + data.hex())
+        self.assertIsNone(result, msg="invalid UTF-8 bytes32 must return None, not a U+FFFD string")
+
     # -----------------------------------------------------------------------
     # _try_decode_bytes32_length_prefixed helper (NEW — ADR-013 Format B / DGD-style)
     # -----------------------------------------------------------------------
@@ -1263,19 +1286,35 @@ class TestSummary(unittest.TestCase):
 
         Phase 1 set ctx['operation']='transfer'; now both 'op_label' and
         'operation' are set to 'transfer'. The rendered text must be identical
-        character-for-character.
+        character-for-character: a full-string assertEqual so whitespace,
+        field-order, or blank-line drift fails immediately (review Fix 1).
         """
         ctx = dict(self._TRANSFER_CTX, op_label="transfer")
-        text = b.render_summary(ctx)
-        # Pin the exact operation line.
-        self.assertIn("operation         : transfer", text)
-        # Ensure no OTHER op label leaks in via the op_label path.
-        self.assertNotIn("operation         : approve", text)
-        self.assertNotIn("operation         : revoke", text)
-        self.assertNotIn("operation         : transfer-from", text)
+        expected = (
+            "--- ERC-20 transaction summary ---\n"
+            "operation         : transfer\n"
+            "network           : mainnet (chainId 1)\n"
+            "token             : 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48\n"
+            "symbol            : USDC\n"
+            "decimals          : 6\n"
+            "amount (human)    : 1.5\n"
+            "amount (base units): 1500000\n"
+            "from (sender)     : 0xSender0000000000000000000000000000000000\n"
+            "to (recipient)    : 0xRecipient00000000000000000000000000000000\n"
+            "nonce             : 42\n"
+            "gas               : 78066\n"
+            "maxFeePerGas      : 25000000000 wei\n"
+            "maxPriorityFeePerGas: 1500000000 wei\n"
+            "----------------------------------\n"
+        )
+        self.assertEqual(b.render_summary(ctx), expected)
 
     def test_render_summary_approve_byte_identical_with_op_label(self):
-        """render_summary with op_label='approve' is byte-identical to Phase 1 output."""
+        """render_summary with op_label='approve' is byte-identical to Phase 1 output.
+
+        Full-string assertEqual so whitespace, field-order, or blank-line drift
+        fails immediately (review Fix 1).
+        """
         ctx = {
             "op_label":       "approve",
             "operation":      "approve",
@@ -1295,13 +1334,31 @@ class TestSummary(unittest.TestCase):
             "max_fee":        25_000_000_000,
             "max_priority_fee": 1_500_000_000,
         }
-        text = b.render_summary(ctx)
-        self.assertIn("operation         : approve", text)
-        self.assertIn("spender", text)
-        self.assertNotIn("operation         : revoke", text)
+        expected = (
+            "--- ERC-20 transaction summary ---\n"
+            "operation         : approve\n"
+            "network           : mainnet (chainId 1)\n"
+            "token             : 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48\n"
+            "symbol            : USDC\n"
+            "decimals          : 6\n"
+            "amount (human)    : 1.5\n"
+            "amount (base units): 1500000\n"
+            "holder (sender)   : 0xSender0000000000000000000000000000000000\n"
+            "spender           : 0xSpender000000000000000000000000000000000\n"
+            "nonce             : 42\n"
+            "gas               : 78066\n"
+            "maxFeePerGas      : 25000000000 wei\n"
+            "maxPriorityFeePerGas: 1500000000 wei\n"
+            "----------------------------------\n"
+        )
+        self.assertEqual(b.render_summary(ctx), expected)
 
     def test_render_summary_transfer_from_byte_identical_with_op_label(self):
-        """render_summary with op_label='transfer-from' is byte-identical to Phase 1 output."""
+        """render_summary with op_label='transfer-from' is byte-identical to Phase 1 output.
+
+        Full-string assertEqual so whitespace, field-order, or blank-line drift
+        fails immediately (review Fix 1).
+        """
         ctx = {
             "op_label":         "transfer-from",
             "operation":        "transfer-from",
@@ -1322,10 +1379,25 @@ class TestSummary(unittest.TestCase):
             "max_fee":          25_000_000_000,
             "max_priority_fee": 1_500_000_000,
         }
-        text = b.render_summary(ctx)
-        self.assertIn("operation         : transfer-from", text)
-        self.assertIn("signer / spender", text)
-        self.assertNotIn("operation         : revoke", text)
+        expected = (
+            "--- ERC-20 transaction summary ---\n"
+            "operation         : transfer-from\n"
+            "network           : mainnet (chainId 1)\n"
+            "token             : 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48\n"
+            "symbol            : USDC\n"
+            "decimals          : 6\n"
+            "amount (human)    : 1.5\n"
+            "amount (base units): 1500000\n"
+            "source (from)     : 0xHolder0000000000000000000000000000000000\n"
+            "to (recipient)    : 0xRecipient00000000000000000000000000000000\n"
+            "signer / spender  : 0xSender0000000000000000000000000000000000\n"
+            "nonce             : 42\n"
+            "gas               : 78066\n"
+            "maxFeePerGas      : 25000000000 wei\n"
+            "maxPriorityFeePerGas: 1500000000 wei\n"
+            "----------------------------------\n"
+        )
+        self.assertEqual(b.render_summary(ctx), expected)
 
     # -----------------------------------------------------------------------
     # Issue 3.2: render_summary with op_label="revoke"
@@ -3312,6 +3384,62 @@ class TestWarningE2E(unittest.TestCase):
         self.assertTrue(stdout, msg="tx JSON must still appear on stdout")
         parsed = json.loads(stdout)
         self.assertEqual(parsed["type"], "eip1559")
+
+    # -----------------------------------------------------------------------
+    # Fix 2 (review) — approve_revoke e2e (fences the Phase-2 crash class)
+    # -----------------------------------------------------------------------
+
+    def test_e2e_approve_revoke_drives_real_do_approve(self):
+        """E2E: approve --revoke drives the REAL do_approve and real emit_warning dispatch.
+
+        The existing test_approve_revoke_happy_path_exit_0 (TestCliDispatch) mocks
+        do_approve and pre-bakes the warns list, so it does NOT exercise the real
+        emit_warning("approve_revoke", payload) dispatch path.  This test uses the
+        same wrapper-injection pattern as the allowance/balance e2e tests above:
+        it calls main() against the REAL do_approve (rpc injected) and asserts:
+
+        - exit 0 (no TypeError or ValueError crash)
+        - valid eip1559 JSON on stdout
+        - the multi-line revoke confirmation block on stderr (no WARNING: prefix)
+        - summary line 'operation         : revoke' on stderr
+
+        If warn_approve_revoke's signature ever drifts from the emit_warning
+        payload dict keys, this test fails here instead of crashing in production.
+        """
+        ta = TestTxAssembly()
+        rpc = ta._make_rpc_for_transfer()
+        _real = b.do_approve
+
+        def _wrapper(*args, **kw):
+            kw["rpc"] = rpc
+            return _real(*args, **kw)
+
+        with mock.patch("build_erc20.do_approve", side_effect=_wrapper):
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+                with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+                    result = b.main([
+                        "approve", "--network", "mainnet",
+                        "--token", ta.TOKEN,
+                        "--spender", ta.SPENDER,
+                        "--revoke",
+                        "--sender", ta.SENDER,
+                    ])
+
+        self.assertEqual(result, 0, msg="approve --revoke must exit 0 (no TypeError)")
+        # stdout: valid eip1559 JSON
+        stdout = fake_out.getvalue().strip()
+        self.assertTrue(stdout, msg="stdout must not be empty")
+        parsed = json.loads(stdout)
+        self.assertEqual(parsed["type"], "eip1559")
+        # stderr: revoke confirmation block (informational, no WARNING: prefix)
+        stderr = fake_err.getvalue()
+        self.assertIn("Revoking approval", stderr,
+                      msg="revoke confirmation block must appear on stderr")
+        self.assertIn("approve(spender, 0)", stderr,
+                      msg="'approve(spender, 0)' hint must appear in confirmation block")
+        # stderr: summary shows operation = revoke
+        self.assertIn("operation         : revoke", stderr,
+                      msg="summary op label must be 'revoke'")
 
 
 if __name__ == "__main__":

@@ -185,7 +185,7 @@ def _try_decode_bytes32_null_trimmed(hex_result):
         if len(data) < 32:
             return None
         text = data[:32].rstrip(b"\x00").decode("utf-8", errors="replace")
-        if text and text.isprintable():
+        if text and text.isprintable() and "�" not in text:
             return text
         return None
     except (UnicodeDecodeError, ValueError, IndexError):
