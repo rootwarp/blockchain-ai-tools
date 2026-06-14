@@ -177,6 +177,8 @@ class TestDoBalance(unittest.TestCase):
                 "balanceEth": "0.9",
             },
         )
+        # R8 byte-identity: "network" stays the FIRST key (json.dumps order).
+        self.assertEqual(list(out.keys())[0], "network")
 
     def test_zero_balance(self):
         rpc = make_fake_rpc({"eth_getBalance": "0x0"})
@@ -363,6 +365,38 @@ class TestMain(unittest.TestCase):
         with self.assertRaises(SystemExit):
             r.main([])
 
+    def test_balance_no_endpoint_exits_one(self):
+        # Issue 2.9: --network no longer required=True; the "neither mode"
+        # error now comes from _resolve_endpoint at runtime, not argparse.
+        err = io.StringIO()
+        with mock.patch("sys.stderr", err):
+            rc = r.main(["balance", "--address", self.ADDR])
+        self.assertEqual(rc, 1)
+        self.assertIn("error:", err.getvalue())
+
+    def test_broadcast_no_endpoint_exits_one(self):
+        err = io.StringIO()
+        with mock.patch("sys.stderr", err):
+            rc = r.main(["broadcast", "--raw-tx", self.RAW])
+        self.assertEqual(rc, 1)
+        self.assertIn("error:", err.getvalue())
+
+    def test_balance_rpc_url_without_chain_id_exits_one(self):
+        err = io.StringIO()
+        with mock.patch("sys.stderr", err):
+            rc = r.main(["balance", "--rpc-url", "http://127.0.0.1:8545",
+                         "--address", self.ADDR])
+        self.assertEqual(rc, 1)
+        self.assertIn("required together", err.getvalue())
+
+    def test_broadcast_rpc_url_without_chain_id_exits_one(self):
+        err = io.StringIO()
+        with mock.patch("sys.stderr", err):
+            rc = r.main(["broadcast", "--rpc-url", "http://127.0.0.1:8545",
+                         "--raw-tx", self.RAW])
+        self.assertEqual(rc, 1)
+        self.assertIn("required together", err.getvalue())
+
     def test_call_dispatch_reaches_do_call(self):
         out = io.StringIO()
         with mock.patch("eth_rpc.do_call", return_value="0x88bb0") as mock_do_call, \
@@ -537,6 +571,8 @@ class TestDoBroadcastSubmit(unittest.TestCase):
                 "status": "submitted",
             },
         )
+        # R8 byte-identity: "network" stays the FIRST key (json.dumps order).
+        self.assertEqual(list(out.keys())[0], "network")
 
     def test_malformed_raw_raises(self):
         with self.assertRaises(ValueError):
