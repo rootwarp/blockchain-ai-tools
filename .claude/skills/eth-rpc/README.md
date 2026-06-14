@@ -17,7 +17,8 @@ It makes outbound RPC calls; the signer itself stays offline. It does **not** si
 and does **not** build transactions (see `eth-tx-builder` for building).
 
 Prefer `balance` / `broadcast` for those flows; use `call` for everything else —
-see `SKILL.md` for the full method list.
+see `SKILL.md` for the full method list, `--decode` examples, `--read-only-strict`
+guidance, and `--params @file` usage.
 
 ## Files
 

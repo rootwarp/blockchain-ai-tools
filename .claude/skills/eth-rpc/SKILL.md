@@ -72,10 +72,11 @@ and `--wait` receipt semantics. Use **call** for everything else.
 
 ```bash
 python3 eth_rpc.py call \
-  (--network <mainnet|hoodi> | --rpc-url <url> --chain-id <int>) \
+  (--network <mainnet|hoodi|sepolia|holesky> | --rpc-url <url> --chain-id <int>) \
   --method <jsonrpc-method-name> \
   --params <json-array-or-"-"> \
   [--allow-write] \
+  [--decode] \
   [--timeout <seconds>] \
   [--max-body-bytes <int>]
 ```
@@ -104,6 +105,39 @@ Notes on specific methods:
 - **`eth_protocolVersion`** is absent from the `ethereum/execution-apis` OpenRPC
   spec but is still implemented by major clients. Example illustrative value:
   `"0x41"` (may differ by client and version; treat as informational).
+
+#### `--decode`
+
+Post-process the raw JSON-RPC result for well-known method shapes. Off by default.
+When omitted, the output is byte-identical to the raw passthrough.
+
+Supported shapes:
+- **Hex-quantity methods** (`eth_blockNumber`, `eth_chainId`, `eth_estimateGas`,
+  `eth_getTransactionCount`, `eth_getBalance`, `eth_gasPrice`,
+  `eth_maxPriorityFeePerGas`): decoded to `{hex, decimal}` (or `{hex, wei, eth}` /
+  `{hex, wei, gwei}` for balance and gas-price shaped results respectively).
+- **Block objects** (`eth_getBlockByNumber`, `eth_getBlockByHash`): decoded to
+  `{raw: <original>, number: int, gasUsed: int, gasLimit: int, ...}`.
+- **Transaction objects** (`eth_getTransactionByHash`, by-index variants): decoded
+  with `value` → `{wei, eth}` and gas-price fields → `{wei, gwei}`.
+- **Receipt objects** (`eth_getTransactionReceipt`): decoded numeric fields.
+- **Log arrays** (`eth_getLogs`): each entry decoded with
+  `{raw, blockNumber, logIndex, transactionIndex}`.
+
+`--decode` is orthogonal to `--allow-write` and `--read-only-strict`.
+
+Worked examples:
+
+```bash
+# Hex-quantity decode: eth_chainId on hoodi
+python3 eth_rpc.py call --network hoodi --method eth_chainId --params '[]' --decode
+# → {"hex": "0x88bb0", "decimal": 560048}
+
+# Block decode: get block 16 with decoded fields
+python3 eth_rpc.py call --network mainnet \
+  --method eth_getBlockByNumber --params '["0x10", false]' --decode
+# → {"raw": {...}, "number": 16, "gasUsed": ..., "timestamp": ...}
+```
 
 #### `--params` shape
 

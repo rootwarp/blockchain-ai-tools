@@ -728,6 +728,10 @@ def main(argv=None):
         "--max-body-bytes", type=_positive_int, default=None,
         help="cap response body size (bytes); see SKILL.md for eth_getLogs guidance",
     )
+    p_call.add_argument(
+        "--decode", action="store_true",
+        help="post-process well-known result shapes; off by default",
+    )
 
     p_batch = sub.add_parser("batch", help="JSON-RPC batch passthrough (ADR-012)")
     p_batch.add_argument("--network", choices=sorted(NETWORKS))
@@ -827,6 +831,8 @@ def main(argv=None):
                 timeout=args.timeout,
                 max_body_bytes=args.max_body_bytes,
             )
+            if args.decode:
+                result = _decode_result(args.method, result)
             print(json.dumps(result, indent=2))
             return 0
     except (ValueError, RPCError) as e:

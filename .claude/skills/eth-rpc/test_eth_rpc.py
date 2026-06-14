@@ -1697,5 +1697,75 @@ class TestDecodeResult(unittest.TestCase):
         self.assertEqual(result[1]["blockNumber"], 5)
 
 
+class TestCallDecodeCli(unittest.TestCase):
+    """Tests for the --decode flag on the call subcommand (issue 2.5)."""
+
+    def _run(self, argv):
+        import contextlib
+        out = io.StringIO()
+        err = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = r.main(argv)
+        return rc, out.getvalue(), err.getvalue()
+
+    def test_decode_flag_in_help(self):
+        import contextlib
+        out = io.StringIO()
+        err = io.StringIO()
+        with self.assertRaises(SystemExit) as ctx, \
+             contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            r.main(["call", "--help"])
+        self.assertEqual(ctx.exception.code, 0)
+        self.assertIn("--decode", out.getvalue())
+
+    def test_without_decode_raw_output_unchanged(self):
+        # Regression: without --decode, output must be byte-identical to raw passthrough.
+        with mock.patch("eth_rpc.do_call", return_value="0x88bb0"):
+            rc, out, err = self._run([
+                "call", "--network", "hoodi",
+                "--method", "eth_chainId", "--params", "[]",
+            ])
+        self.assertEqual(rc, 0)
+        # Output must be the JSON-serialised raw string
+        self.assertEqual(out.strip(), '"0x88bb0"')
+
+    def test_with_decode_block_number(self):
+        with mock.patch("eth_rpc.do_call", return_value="0x10"):
+            rc, out, err = self._run([
+                "call", "--network", "hoodi",
+                "--method", "eth_blockNumber", "--params", "[]",
+                "--decode",
+            ])
+        self.assertEqual(rc, 0)
+        result = json.loads(out)
+        self.assertEqual(result["decimal"], 16)
+        self.assertEqual(result["hex"], "0x10")
+
+    def test_with_decode_block_by_number(self):
+        fake_block = {"number": "0x10", "gasUsed": "0x5208", "gasLimit": "0x1c9c380"}
+        with mock.patch("eth_rpc.do_call", return_value=fake_block):
+            rc, out, err = self._run([
+                "call", "--network", "hoodi",
+                "--method", "eth_getBlockByNumber", "--params", '["latest", false]',
+                "--decode",
+            ])
+        self.assertEqual(rc, 0)
+        result = json.loads(out)
+        self.assertIn("raw", result)
+        self.assertEqual(result["number"], 16)
+        self.assertEqual(result["gasUsed"], 21000)
+
+    def test_without_decode_complex_result_passthrough(self):
+        # Regression: complex result without --decode must be byte-identical.
+        fake_block = {"number": "0x10", "hash": "0xabc"}
+        with mock.patch("eth_rpc.do_call", return_value=fake_block):
+            rc, out, err = self._run([
+                "call", "--network", "hoodi",
+                "--method", "eth_getBlockByNumber", "--params", '["latest", false]',
+            ])
+        self.assertEqual(rc, 0)
+        self.assertEqual(json.loads(out), fake_block)
+
+
 if __name__ == "__main__":
     unittest.main()
