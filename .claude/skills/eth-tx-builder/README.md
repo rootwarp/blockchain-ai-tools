@@ -68,6 +68,19 @@ a live `nonce`, and EIP-1559 fee fields. Optionally paste it into the signer's
 > `transfer-from` run is attempted. The `transfer-from` transaction depends on the
 > on-chain approval; running it before the approve mines will produce a revert.
 
+> **Status — live broadcast DEFERRED (Risk R1).** Pre-flight (a) and (b) are complete:
+> the `eth-signer-mcp` signer is reachable and its wallet
+> `0x6302794A4F2487a2540c40E2dbB211Ff6AF1CD20` holds ~0.86 hoodi ETH (chainId
+> `0x88bb0` / 560048) — sufficient for three sub-300k-gas EIP-1559 broadcasts.
+> Pre-flight (c) is **blocked**: the signer wallet currently holds **no** ERC-20 on
+> hoodi (lifetime nonce 1, no token balance), and the PRD specifies the e2e token is
+> operator-provided. The publicnode endpoint also restricts `eth_getLogs` token
+> discovery (`address` filter required), so a held token cannot be auto-discovered.
+> The three transcript blocks below are intentionally left as placeholders — they
+> will be filled in by a follow-up run once an operator funds the wallet with a
+> standard-surface hoodi ERC-20 (per the plan's R1 mitigation: do **not** fall back
+> to mainnet, do **not** fabricate transcripts).
+
 ### ERC-20 transfer
 
 ```bash
