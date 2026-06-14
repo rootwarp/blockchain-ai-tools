@@ -1345,6 +1345,55 @@ class TestCallCli(unittest.TestCase):
         self.assertEqual(kwargs["params"], ["latest"])
 
 
+class TestMaxBodyBytesValidator(unittest.TestCase):
+    """--max-body-bytes must reject non-positive values at argparse time (fix 6)."""
+
+    def _run(self, argv):
+        import contextlib
+        out = io.StringIO()
+        err = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                rc = r.main(argv)
+            except SystemExit as exc:
+                rc = exc.code
+        return rc, out.getvalue(), err.getvalue()
+
+    def test_call_max_body_bytes_zero_exits_nonzero(self):
+        with self.assertRaises(SystemExit) as ctx:
+            r.main(["call", "--network", "hoodi", "--method", "eth_blockNumber",
+                    "--params", "[]", "--max-body-bytes", "0"])
+        self.assertNotEqual(ctx.exception.code, 0)
+
+    def test_call_max_body_bytes_negative_exits_nonzero(self):
+        with self.assertRaises(SystemExit) as ctx:
+            r.main(["call", "--network", "hoodi", "--method", "eth_blockNumber",
+                    "--params", "[]", "--max-body-bytes", "-1"])
+        self.assertNotEqual(ctx.exception.code, 0)
+
+    def test_batch_max_body_bytes_zero_exits_nonzero(self):
+        with self.assertRaises(SystemExit) as ctx:
+            r.main(["batch", "--network", "hoodi",
+                    "--calls", '[{"method":"eth_blockNumber","params":[]}]',
+                    "--max-body-bytes", "0"])
+        self.assertNotEqual(ctx.exception.code, 0)
+
+    def test_batch_max_body_bytes_negative_exits_nonzero(self):
+        with self.assertRaises(SystemExit) as ctx:
+            r.main(["batch", "--network", "hoodi",
+                    "--calls", '[{"method":"eth_blockNumber","params":[]}]',
+                    "--max-body-bytes", "-5"])
+        self.assertNotEqual(ctx.exception.code, 0)
+
+    def test_positive_value_accepted(self):
+        # A positive value should not raise at parse time
+        with unittest.mock.patch("eth_rpc.do_call", return_value="0x1"):
+            rc, _, _ = self._run(["call", "--network", "hoodi",
+                                   "--method", "eth_blockNumber", "--params", "[]",
+                                   "--max-body-bytes", "1024"])
+        self.assertEqual(rc, 0)
+
+
 class TestCliSmoke(unittest.TestCase):
     def test_help_runs(self):
         # Executes the module directly (not import) — catches definition-order bugs.

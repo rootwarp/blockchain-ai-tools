@@ -447,6 +447,19 @@ def _parse_params(raw, *, stdin=sys.stdin):
 # === END MODULE: param_ingest ===
 
 
+def _positive_int(s):
+    """argparse type validator: accept only integers > 0."""
+    try:
+        value = int(s)
+    except ValueError:
+        raise argparse.ArgumentTypeError("%r is not a valid integer" % s)
+    if value <= 0:
+        raise argparse.ArgumentTypeError(
+            "--max-body-bytes must be a positive integer (got %d)" % value
+        )
+    return value
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description="RPC companion for eth-signer-mcp: query balance + broadcast signed txs."
@@ -477,7 +490,7 @@ def main(argv=None):
     p_call.add_argument("--allow-write", action="store_true")
     p_call.add_argument("--timeout", type=int, default=15)
     p_call.add_argument(
-        "--max-body-bytes", type=int, default=None,
+        "--max-body-bytes", type=_positive_int, default=None,
         help="cap response body size (bytes); see SKILL.md for eth_getLogs guidance",
     )
 
@@ -493,7 +506,7 @@ def main(argv=None):
     p_batch.add_argument("--allow-write", action="store_true")
     p_batch.add_argument("--timeout", type=int, default=15)
     p_batch.add_argument(
-        "--max-body-bytes", type=int, default=None,
+        "--max-body-bytes", type=_positive_int, default=None,
         help="cap response body size (bytes); see SKILL.md for eth_getLogs guidance",
     )
 
