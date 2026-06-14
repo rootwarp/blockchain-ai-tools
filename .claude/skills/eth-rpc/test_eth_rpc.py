@@ -1348,6 +1348,7 @@ class TestCallCli(unittest.TestCase):
 class TestCliSmoke(unittest.TestCase):
     def test_help_runs(self):
         # Executes the module directly (not import) — catches definition-order bugs.
+        # Asserts all subcommands including Phase 3 additions are listed.
         proc = subprocess.run(
             [sys.executable, str(SKILL_DIR / "eth_rpc.py"), "--help"],
             capture_output=True, text=True,
@@ -1356,6 +1357,9 @@ class TestCliSmoke(unittest.TestCase):
         self.assertIn("balance", proc.stdout)
         self.assertIn("broadcast", proc.stdout)
         self.assertIn("call", proc.stdout)
+        self.assertIn("batch", proc.stdout)
+        self.assertIn("net-version", proc.stdout)
+        self.assertIn("client-version", proc.stdout)
 
     def test_balance_bad_address_exits_one(self):
         # Drives the balance path through main() in a real process. Bad address
