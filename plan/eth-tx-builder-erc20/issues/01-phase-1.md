@@ -1350,14 +1350,14 @@ PR or merge to `main` unprompted.
   and the three confirming tx hashes.
 
 **Acceptance Criteria:**
-- [ ] All Phase 1 changes are committed on the `develop` branch (no
+- [x] All Phase 1 changes are committed on the `develop` branch (no
       changes on `main`).
-- [ ] Working tree is clean (`git status` shows no uncommitted changes)
+- [x] Working tree is clean (`git status` shows no uncommitted changes)
       after the commit sequence lands.
-- [ ] Final state: `cd .claude/skills/eth-tx-builder && python3 -m unittest
+- [x] Final state: `cd .claude/skills/eth-tx-builder && python3 -m unittest
       test_build_send_eth test_build_erc20 -v` is green from a clean
       checkout of `develop`.
-- [ ] `git diff main..develop -- .claude/skills/eth-tx-builder/build_send_eth.py
+- [x] `git diff main..develop -- .claude/skills/eth-tx-builder/build_send_eth.py
       .claude/skills/eth-tx-builder/test_build_send_eth.py` is empty (P0
       freeze confirmation; the two v1 files are byte-identical to `main`).
 
