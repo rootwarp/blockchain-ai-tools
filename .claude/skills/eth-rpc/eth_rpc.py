@@ -234,6 +234,26 @@ def do_broadcast(network, raw_tx, wait=False, wait_timeout=DEFAULT_WAIT_TIMEOUT,
         sleep(poll_interval)
 
 
+# === MODULE: param_ingest ===
+# Public: _parse_params(raw, *, stdin=sys.stdin) -> list
+
+def _parse_params(raw, *, stdin=sys.stdin):
+    """Parse --params (inline or stdin) into a list, or raise ValueError."""
+    if raw == "-":
+        raw = stdin.read()
+    try:
+        value = json.loads(raw)
+    except ValueError as e:
+        raise ValueError("--params must be a JSON array: %s" % e)
+    if not isinstance(value, list):
+        raise ValueError(
+            "--params must be a JSON array (got %s)" % type(value).__name__
+        )
+    return value
+
+# === END MODULE: param_ingest ===
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description="RPC companion for eth-signer-mcp: query balance + broadcast signed txs."

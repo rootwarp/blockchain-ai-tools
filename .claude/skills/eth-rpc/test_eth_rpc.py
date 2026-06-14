@@ -535,6 +535,44 @@ class TestResolveEndpoint(unittest.TestCase):
             r._resolve_endpoint()
 
 
+class TestParseParams(unittest.TestCase):
+    def test_inline_empty_array(self):
+        self.assertEqual(r._parse_params("[]"), [])
+
+    def test_inline_non_empty_array(self):
+        self.assertEqual(r._parse_params('["0xabc", "latest"]'), ["0xabc", "latest"])
+
+    def test_inline_object_raises(self):
+        with self.assertRaises(ValueError) as ctx:
+            r._parse_params('{"a": 1}')
+        self.assertIn("JSON array", str(ctx.exception))
+
+    def test_inline_string_raises(self):
+        with self.assertRaises(ValueError) as ctx:
+            r._parse_params('"foo"')
+        self.assertIn("JSON array", str(ctx.exception))
+
+    def test_inline_number_raises(self):
+        with self.assertRaises(ValueError) as ctx:
+            r._parse_params("42")
+        self.assertIn("JSON array", str(ctx.exception))
+
+    def test_malformed_json_raises(self):
+        with self.assertRaises(ValueError) as ctx:
+            r._parse_params("[bad")
+        self.assertIn("JSON array", str(ctx.exception))
+
+    def test_stdin_dash_reads_from_injected(self):
+        self.assertEqual(
+            r._parse_params("-", stdin=io.StringIO('["x"]')),
+            ["x"],
+        )
+
+    def test_stdin_malformed_raises(self):
+        with self.assertRaises(ValueError):
+            r._parse_params("-", stdin=io.StringIO("not json"))
+
+
 class TestCliSmoke(unittest.TestCase):
     def test_help_runs(self):
         # Executes the module directly (not import) — catches definition-order bugs.
