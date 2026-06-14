@@ -389,6 +389,24 @@ def do_batch(url, *, calls, allow_write=False, timeout=15, max_body_bytes=None, 
 # === END MODULE: do_batch ===
 
 
+# === MODULE: do_diagnostics ===
+# Public: do_net_version(url, chain_id, *, timeout=15, rpc=rpc_call) -> dict
+# Public: do_client_version(url, chain_id, *, timeout=15, rpc=rpc_call) -> dict
+
+def do_net_version(url, chain_id, *, timeout=15, rpc=rpc_call):
+    """Call net_version and return a wrapped dict including chainId."""
+    result = rpc(url, "net_version", [], timeout=timeout)
+    return {"chainId": str(chain_id), "netVersion": result}
+
+
+def do_client_version(url, chain_id, *, timeout=15, rpc=rpc_call):
+    """Call web3_clientVersion and return a wrapped dict including chainId."""
+    result = rpc(url, "web3_clientVersion", [], timeout=timeout)
+    return {"chainId": str(chain_id), "clientVersion": result}
+
+# === END MODULE: do_diagnostics ===
+
+
 # === MODULE: param_ingest ===
 # Public: _parse_params(raw, *, stdin=sys.stdin) -> list
 
@@ -459,6 +477,24 @@ def main(argv=None):
         help="cap response body size (bytes); see SKILL.md for eth_getLogs guidance",
     )
 
+    p_nv = sub.add_parser(
+        "net-version",
+        help="diagnostic: call net_version and return chainId + netVersion",
+    )
+    p_nv.add_argument("--network", choices=sorted(NETWORKS))
+    p_nv.add_argument("--rpc-url")
+    p_nv.add_argument("--chain-id", type=int)
+    p_nv.add_argument("--timeout", type=int, default=15)
+
+    p_cv = sub.add_parser(
+        "client-version",
+        help="diagnostic: call web3_clientVersion and return chainId + clientVersion",
+    )
+    p_cv.add_argument("--network", choices=sorted(NETWORKS))
+    p_cv.add_argument("--rpc-url")
+    p_cv.add_argument("--chain-id", type=int)
+    p_cv.add_argument("--timeout", type=int, default=15)
+
     args = parser.parse_args(argv)
 
     try:
@@ -489,6 +525,18 @@ def main(argv=None):
                 timeout=args.timeout,
                 max_body_bytes=args.max_body_bytes,
             )
+            print(json.dumps(result, indent=2))
+            return 0
+        elif args.command in ("net-version", "client-version"):
+            chain_id, url = _resolve_endpoint(
+                network=args.network,
+                rpc_url=args.rpc_url,
+                chain_id=args.chain_id,
+            )
+            if args.command == "net-version":
+                result = do_net_version(url, chain_id, timeout=args.timeout)
+            else:
+                result = do_client_version(url, chain_id, timeout=args.timeout)
             print(json.dumps(result, indent=2))
             return 0
         else:

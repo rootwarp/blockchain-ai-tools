@@ -534,6 +534,104 @@ class TestRpcBatchBoundedBody(unittest.TestCase):
         self.assertEqual(calls, [1024])
 
 
+class TestDoDiagnostics(unittest.TestCase):
+    """Tests for do_net_version and do_client_version."""
+
+    URL = "https://ethereum-hoodi-rpc.publicnode.com"
+    CHAIN_ID = 560048
+
+    def _fake(self, result):
+        def rpc(url, method, params, timeout, max_body_bytes=None):
+            return result
+        return rpc
+
+    def test_net_version_happy_path(self):
+        out = r.do_net_version(self.URL, self.CHAIN_ID, rpc=self._fake("560048"))
+        self.assertEqual(out["netVersion"], "560048")
+        self.assertEqual(out["chainId"], str(self.CHAIN_ID))
+
+    def test_net_version_named_network_path(self):
+        called_with = {}
+
+        def rpc(url, method, params, timeout, max_body_bytes=None):
+            called_with["method"] = method
+            return "1"
+
+        out = r.do_net_version("https://ethereum-rpc.publicnode.com", 1, rpc=rpc)
+        self.assertEqual(called_with["method"], "net_version")
+        self.assertEqual(out["chainId"], "1")
+
+    def test_net_version_rpcerror_propagates(self):
+        def rpc(url, method, params, timeout, max_body_bytes=None):
+            raise r.RPCError("down")
+        with self.assertRaises(r.RPCError):
+            r.do_net_version(self.URL, self.CHAIN_ID, rpc=rpc)
+
+    def test_client_version_happy_path(self):
+        out = r.do_client_version(self.URL, self.CHAIN_ID, rpc=self._fake("Geth/v1.14"))
+        self.assertEqual(out["clientVersion"], "Geth/v1.14")
+        self.assertEqual(out["chainId"], str(self.CHAIN_ID))
+
+    def test_client_version_rpcerror_propagates(self):
+        def rpc(url, method, params, timeout, max_body_bytes=None):
+            raise r.RPCError("down")
+        with self.assertRaises(r.RPCError):
+            r.do_client_version(self.URL, self.CHAIN_ID, rpc=rpc)
+
+    def test_net_version_output_has_network_key(self):
+        # Output includes network field (resolved from chain_id or passed explicitly)
+        # do_net_version takes (url, chain_id); caller resolves network name
+        out = r.do_net_version(self.URL, self.CHAIN_ID, rpc=self._fake("560048"))
+        self.assertIn("chainId", out)
+        self.assertIn("netVersion", out)
+
+    def test_client_version_output_has_network_key(self):
+        out = r.do_client_version(self.URL, self.CHAIN_ID, rpc=self._fake("Geth/v1"))
+        self.assertIn("chainId", out)
+        self.assertIn("clientVersion", out)
+
+
+class TestDiagnosticsCli(unittest.TestCase):
+    """Tests for net-version and client-version subcommands through main."""
+
+    def _run(self, argv):
+        import contextlib
+        out = io.StringIO()
+        err = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = r.main(argv)
+        return rc, out.getvalue(), err.getvalue()
+
+    def test_net_version_dispatch(self):
+        with mock.patch("eth_rpc.do_net_version", return_value={"chainId": "1", "netVersion": "1"}) as mock_fn:
+            rc, out, err = self._run(["net-version", "--network", "mainnet"])
+        self.assertEqual(rc, 0, err)
+        mock_fn.assert_called_once()
+
+    def test_client_version_dispatch(self):
+        with mock.patch("eth_rpc.do_client_version",
+                        return_value={"chainId": "1", "clientVersion": "Geth"}) as mock_fn:
+            rc, out, err = self._run(["client-version", "--network", "mainnet"])
+        self.assertEqual(rc, 0, err)
+        mock_fn.assert_called_once()
+
+    def test_net_version_error_exits_one(self):
+        with mock.patch("eth_rpc.do_net_version", side_effect=r.RPCError("down")):
+            rc, out, err = self._run(["net-version", "--network", "hoodi"])
+        self.assertEqual(rc, 1)
+        self.assertIn("error:", err)
+
+    def test_both_in_help(self):
+        proc = __import__("subprocess").run(
+            [sys.executable,
+             str(__import__("pathlib").Path(__file__).parent / "eth_rpc.py"),
+             "--help"],
+            capture_output=True, text=True,
+        )
+        self.assertIn("net-version", proc.stdout)
+        self.assertIn("client-version", proc.stdout)
+
+
 class TestDenylistContents(unittest.TestCase):
     """Drift guard (ADR-011): any intentional change to the denylist constants
     requires updating both the constant and this test in the same commit."""
