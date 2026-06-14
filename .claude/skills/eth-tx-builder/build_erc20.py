@@ -296,6 +296,62 @@ def fetch_allowance(rpc, url, token, holder, spender):
 
 # === Layer 2: gas_estimator ===
 
+# Gas policy constants (PRD §9):
+GAS_BUFFER_NUM = 12   # Buffer multiplier numerator  (+20% = ×12/10)
+GAS_BUFFER_DEN = 10   # Buffer multiplier denominator
+GAS_CAP        = 300_000  # Hard ceiling on buffered gas estimate
+
+
+def _apply_buffer_cap(est):
+    """Apply the +20% buffer and 300_000 cap using integer arithmetic.
+
+    Returns min((est * GAS_BUFFER_NUM) // GAS_BUFFER_DEN, GAS_CAP).
+    """
+    return min((est * GAS_BUFFER_NUM) // GAS_BUFFER_DEN, GAS_CAP)
+
+
+# Why there is no try/except in estimate_gas:
+#
+# A silent fallback to a hardcoded gas number would let a transaction that
+# will DEFINITELY REVERT on-chain get signed and broadcast, burning its full
+# gas budget with no recourse for the operator. The right behaviour on an
+# eth_estimateGas failure is to surface the node's error message and stop
+# immediately so the operator can investigate (wrong amount, insufficient
+# allowance, contract paused, etc.) before spending real gas.
+#
+# See architecture ADR-007 and research §03 for the full rationale. This
+# RPCError propagation path is LOAD-BEARING. Do NOT add a try/except around
+# the rpc() call below — doing so would silently break the no-fallback
+# guarantee and require a new ADR to justify the exception.
+def estimate_gas(rpc, url, sender, token, data):
+    """Estimate gas for an ERC-20 call and return the buffered+capped value.
+
+    Builds a {from, to, data, value:"0x0"} call object, queries
+    eth_estimateGas against "latest", parses the hex result via
+    _core.parse_hex_int, and returns _apply_buffer_cap(estimate).
+
+    NO try/except — RPCError propagates by design (architecture ADR-007).
+
+    Args:
+        rpc: callable rpc(url, method, params) -> result (or raises RPCError).
+        url: RPC endpoint URL string.
+        sender: the `from` address (hex string with 0x prefix).
+        token: the token contract address (`to` field).
+        data: ABI-encoded calldata (hex string with 0x prefix).
+
+    Returns:
+        int: buffered and capped gas limit.
+    """
+    call_obj = {
+        "from": sender,
+        "to": token,
+        "data": data,
+        "value": "0x0",
+    }
+    hex_result = rpc(url, "eth_estimateGas", [call_obj, "latest"])
+    est = _core.parse_hex_int(hex_result)
+    return _apply_buffer_cap(est)
+
 # === end Layer 2: gas_estimator ===
 
 # === Layer 2: summary ===

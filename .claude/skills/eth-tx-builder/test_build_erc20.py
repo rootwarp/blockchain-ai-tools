@@ -431,5 +431,87 @@ class TestContractReads(unittest.TestCase):
                               spender="0x" + "2" * 40)
 
 
+class TestGasEstimator(unittest.TestCase):
+    """Tests for the Layer 2 gas_estimator section."""
+
+    # --- _apply_buffer_cap table ---
+
+    def test_apply_buffer_cap_zero(self):
+        """0 * 12 // 10 = 0, well below cap."""
+        self.assertEqual(b._apply_buffer_cap(0), 0)
+
+    def test_apply_buffer_cap_one(self):
+        """1 * 12 // 10 = 1 (integer division floors)."""
+        self.assertEqual(b._apply_buffer_cap(1), 1)
+
+    def test_apply_buffer_cap_100k(self):
+        """100_000 * 12 // 10 = 120_000 (below 300_000 cap)."""
+        self.assertEqual(b._apply_buffer_cap(100_000), 120_000)
+
+    def test_apply_buffer_cap_250k_hit_cap(self):
+        """250_000 * 12 // 10 = 300_000 exactly (at cap)."""
+        self.assertEqual(b._apply_buffer_cap(250_000), 300_000)
+
+    def test_apply_buffer_cap_1m_capped(self):
+        """1_000_000 is well above cap — should return 300_000."""
+        self.assertEqual(b._apply_buffer_cap(1_000_000), 300_000)
+
+    # --- estimate_gas happy paths ---
+
+    def test_estimate_gas_buffered(self):
+        """65055 (0xfe1f) buffered: (65055 * 12) // 10 = 78066, below cap."""
+        mock_rpc = mock.Mock(return_value="0xfe1f")
+        sender = "0x" + "a" * 40
+        token = "0x" + "b" * 40
+        data = "0xa9059cbb" + "0" * 120
+        url = "https://ethereum-rpc.publicnode.com"
+
+        result = b.estimate_gas(rpc=mock_rpc, url=url, sender=sender,
+                                token=token, data=data)
+
+        self.assertEqual(result, 78066)
+        # Verify the call to the rpc
+        args = mock_rpc.call_args
+        self.assertEqual(args[0][1], "eth_estimateGas")
+        call_obj = args[0][2][0]
+        self.assertIn("from", call_obj)
+        self.assertIn("to", call_obj)
+        self.assertIn("data", call_obj)
+        self.assertEqual(call_obj["value"], "0x0")
+
+    def test_estimate_gas_capped(self):
+        """250_000 (0x3d090) buffered = 300_000, exactly at cap."""
+        mock_rpc = mock.Mock(return_value="0x3d090")
+        result = b.estimate_gas(rpc=mock_rpc, url="https://x",
+                                sender="0x" + "a" * 40,
+                                token="0x" + "b" * 40,
+                                data="0x00")
+        self.assertEqual(result, 300_000)
+
+    # --- estimate_gas no-fallback regression ---
+
+    def test_estimate_gas_propagates_rpc_error(self):
+        """RPCError must propagate — no internal catch (architecture ADR-007)."""
+        mock_rpc = mock.Mock(side_effect=b._core.RPCError(
+            "execution reverted: ERC20: transfer amount exceeds balance"
+        ))
+        with self.assertRaises(b._core.RPCError):
+            b.estimate_gas(rpc=mock_rpc, url="https://x",
+                           sender="0x" + "a" * 40,
+                           token="0x" + "b" * 40,
+                           data="0x00")
+
+    # --- Constants ---
+
+    def test_gas_buffer_num(self):
+        self.assertEqual(b.GAS_BUFFER_NUM, 12)
+
+    def test_gas_buffer_den(self):
+        self.assertEqual(b.GAS_BUFFER_DEN, 10)
+
+    def test_gas_cap(self):
+        self.assertEqual(b.GAS_CAP, 300_000)
+
+
 if __name__ == "__main__":
     unittest.main()
