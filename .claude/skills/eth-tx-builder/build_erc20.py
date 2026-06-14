@@ -179,9 +179,15 @@ def decode_allowance(hex_result):
 def decode_balance(hex_result):
     """Decode the uint256 return from balanceOf().
 
-    Delegates to _core.parse_hex_int, which parses a 0x-prefixed hex string
-    into an integer (a single 32-byte uint256 word, same shape as allowance).
+    Raises ValueError (not TypeError) when hex_result is not a string so the
+    CLI's except (ValueError, RPCError) handler catches it (Fix 5 — consistent
+    with decode_decimals and decode_allowance non-str guards).
+    Delegates to _core.parse_hex_int for the actual parse.
     """
+    if not isinstance(hex_result, str):
+        raise ValueError(
+            "decode_balance: result is not a hex string: got %s" % type(hex_result).__name__
+        )
     return _core.parse_hex_int(hex_result)
 
 # === end Layer 1: abi_codec ===
@@ -498,17 +504,20 @@ def warn_approve_max(symbol, token, spender):
     sys.stderr.write(msg)
 
 
-def warn_low_allowance(holder, spender, current, requested, decimals):
+def warn_low_allowance(holder, spender, current, requested, decimals, symbol=None):
     """Write a low-allowance WARNING line to stderr.
 
-    Uses base_units_to_human for the human-readable figures.
+    Uses base_units_to_human for the human-readable figures. When symbol is
+    None, renders the symbol placeholder as '<unknown>', consistent with
+    warn_low_balance and warn_approve_race.
     """
+    sym = symbol if symbol is not None else "<unknown>"
     current_human = base_units_to_human(current, decimals)
     requested_human = base_units_to_human(requested, decimals)
     msg = (
-        "WARNING: current allowance is %d (%s); requested transfer is %d (%s)."
+        "WARNING: current allowance is %d (%s %s); requested transfer is %d (%s %s)."
         " This transaction will revert unless allowance is increased before broadcast.\n"
-        % (current, current_human, requested, requested_human)
+        % (current, current_human, sym, requested, requested_human, sym)
     )
     sys.stderr.write(msg)
 
@@ -635,6 +644,12 @@ def _soft_check_allowance(rpc, url, token, holder, spender,
     different op semantics (e.g. approve-race uses
     `lambda cur, req: cur != 0 and cur != req`).
 
+    Merge order: the RPC-derived `current` and `requested` values are set
+    first; `low_payload_extra` is merged second. To prevent callers from
+    accidentally overwriting the RPC-derived values, `low_payload_extra` must
+    NOT contain the reserved keys "current" or "requested" — a ValueError is
+    raised if it does (Fix 3).
+
     Callers append the returned list to their own warnings_list.
     """
     if trigger is None:
@@ -646,6 +661,13 @@ def _soft_check_allowance(rpc, url, token, holder, spender,
     if trigger(current, requested):
         low_payload = {"current": current, "requested": requested}
         if low_payload_extra:
+            reserved = {"current", "requested"}
+            overlap = reserved & set(low_payload_extra)
+            if overlap:
+                raise ValueError(
+                    "low_payload_extra must not contain reserved keys: %s"
+                    % sorted(overlap)
+                )
             low_payload.update(low_payload_extra)
         return [(low_kind, low_payload)]
     return []

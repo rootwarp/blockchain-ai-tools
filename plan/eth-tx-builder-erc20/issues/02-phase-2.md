@@ -162,26 +162,26 @@ local.
   `SKILL.md`, `README.md` (saved for the Issue 2.8 docs sweep).
 
 **Acceptance Criteria:**
-- [ ] `SEL_BALANCE_OF == "0x70a08231"` defined as a module-level constant in
+- [x] `SEL_BALANCE_OF == "0x70a08231"` defined as a module-level constant in
       Layer 1 `abi_codec` with the keccak derivation comment.
-- [ ] `encode_balance_of_call("0x" + "00"*20)` returns
+- [x] `encode_balance_of_call("0x" + "00"*20)` returns
       `"0x70a08231" + "00"*32` (selector + zero-padded address word).
-- [ ] `encode_balance_of_call` round-trips against a known-good calldata vector
+- [x] `encode_balance_of_call` round-trips against a known-good calldata vector
       for a mixed-case address (output is lowercase, left-padded to 64 hex chars).
-- [ ] `decode_balance("0x" + "0"*63 + "a")` returns `10`; `decode_balance("0x" +
+- [x] `decode_balance("0x" + "0"*63 + "a")` returns `10`; `decode_balance("0x" +
       "f"*64)` returns `2**256 - 1`.
-- [ ] `fetch_balance_of` calls `rpc("eth_call", [{...}, "latest"])` once with
+- [x] `fetch_balance_of` calls `rpc("eth_call", [{...}, "latest"])` once with
       the correct `to=token` and `data` payload; verified via mocked rpc.
-- [ ] `fetch_balance_of` returns the decoded balance for a mocked rpc return of
+- [x] `fetch_balance_of` returns the decoded balance for a mocked rpc return of
       `"0x...06"` → `6`.
-- [ ] `fetch_balance_of` **propagates `_core.RPCError`** without catching when
+- [x] `fetch_balance_of` **propagates `_core.RPCError`** without catching when
       the mocked rpc raises (asserted via `with self.assertRaises(_core.RPCError):`).
-- [ ] `TestAbiCodec` gains: selector-constant equality check; encoder bit-pattern
+- [x] `TestAbiCodec` gains: selector-constant equality check; encoder bit-pattern
       check; decoder vectors (0, 10, max uint256).
-- [ ] `TestContractReads` gains: happy-path with mocked rpc; RPCError
+- [x] `TestContractReads` gains: happy-path with mocked rpc; RPCError
       propagation case.
-- [ ] `python3 -m unittest test_build_erc20.TestAbiCodec test_build_erc20.TestContractReads -v` green.
-- [ ] `python3 -m unittest test_build_send_eth -v` still green (regression: no
+- [x] `python3 -m unittest test_build_erc20.TestAbiCodec test_build_erc20.TestContractReads -v` green.
+- [x] `python3 -m unittest test_build_send_eth -v` still green (regression: no
       v1 file touched).
 
 **Testing Notes:**
@@ -252,30 +252,30 @@ Mirrors the existing `transfer-from` allowance soft-check posture exactly
   `SKILL.md`, `README.md`.
 
 **Acceptance Criteria:**
-- [ ] `do_transfer` happy path with sender balance ≥ requested → returns
+- [x] `do_transfer` happy path with sender balance ≥ requested → returns
       `warnings_list == []` (asserted on mocked rpc).
-- [ ] `do_transfer` with `fetch_balance_of` returning `balance < amount_base`
+- [x] `do_transfer` with `fetch_balance_of` returning `balance < amount_base`
       → `warnings_list` contains exactly one `("low_balance", {"holder":...,
       "current":..., "requested":..., "decimals":..., "symbol":...})` tuple;
       JSON `tx_dict` is still built and returned.
-- [ ] `do_transfer` with `fetch_balance_of` raising `_core.RPCError` →
+- [x] `do_transfer` with `fetch_balance_of` raising `_core.RPCError` →
       `warnings_list` contains exactly one `("balance_check_skipped",
       {"reason": "<msg>"})` tuple; JSON `tx_dict` is still built.
-- [ ] `do_transfer` with `estimate_gas` raising `_core.RPCError` still
+- [x] `do_transfer` with `estimate_gas` raising `_core.RPCError` still
       propagates (no JSON, fatal — the ADR-007 invariant). The new balance
       `try/except` does not catch this.
-- [ ] `do_transfer` with `fetch_decimals` raising still propagates (FATAL),
+- [x] `do_transfer` with `fetch_decimals` raising still propagates (FATAL),
       and `fetch_balance_of` is NOT called (short-circuit per Open Question 5
       style).
-- [ ] `TestSummary` gains: `warn_low_balance` emits a `WARNING:` line containing
+- [x] `TestSummary` gains: `warn_low_balance` emits a `WARNING:` line containing
       the holder address; `warn_balance_check_skipped` emits a `WARNING:` line
       containing the reason; both write to stderr.
-- [ ] `TestTxAssembly` gains: the four `do_transfer` cases above (happy, low
+- [x] `TestTxAssembly` gains: the four `do_transfer` cases above (happy, low
       balance, RPC skipped, decimals fatal).
-- [ ] `TestCliDispatch` gains: `main()` with mocked rpc returning low balance
+- [x] `TestCliDispatch` gains: `main()` with mocked rpc returning low balance
       → exit 0, `WARNING:` on stderr, JSON on stdout (parses cleanly).
-- [ ] `python3 -m unittest test_build_erc20 -v` green.
-- [ ] `python3 -m unittest test_build_send_eth -v` green (regression).
+- [x] `python3 -m unittest test_build_erc20 -v` green.
+- [x] `python3 -m unittest test_build_send_eth -v` green (regression).
 
 **Testing Notes:**
 - Use the same mocked-rpc pattern as Phase 1's `TestTxAssembly`. Each test sets
@@ -389,39 +389,39 @@ into 2.3 before 2.4 ships.
   `SKILL.md`, `README.md`.
 
 **Acceptance Criteria:**
-- [ ] `_soft_check_allowance` defined in Layer 3 `tx_assembly` with the
+- [x] `_soft_check_allowance` defined in Layer 3 `tx_assembly` with the
       pinned signature above (including the optional `trigger` parameter
       defaulting to `cur < req`); placed before `do_transfer` / `do_approve` /
       `do_transfer_from`.
-- [ ] `_soft_check_allowance` with default trigger and mocked rpc returning
+- [x] `_soft_check_allowance` with default trigger and mocked rpc returning
       `allowance >= requested` → returns `[]`.
-- [ ] `_soft_check_allowance` with default trigger and mocked rpc returning
+- [x] `_soft_check_allowance` with default trigger and mocked rpc returning
       `allowance < requested` → returns a single-element list with the
       low-kind warning; payload contains `current`, `requested`, plus all
       `low_payload_extra` keys.
-- [ ] `_soft_check_allowance` with a custom trigger
+- [x] `_soft_check_allowance` with a custom trigger
       `lambda cur, req: cur != 0 and cur != req` and mocked rpc returning
       `allowance = 5, requested = 10` → returns the low-kind warning (proves
       the trigger parameter is wired and Issue 2.4 can consume the helper
       unmodified).
-- [ ] `_soft_check_allowance` with a custom trigger
+- [x] `_soft_check_allowance` with a custom trigger
       `lambda cur, req: cur != 0 and cur != req` and mocked rpc returning
       `allowance = 0` → returns `[]` (proves the trigger short-circuits the
       approve-race revocation case before 2.4 ships).
-- [ ] `_soft_check_allowance` with mocked rpc raising `_core.RPCError` →
+- [x] `_soft_check_allowance` with mocked rpc raising `_core.RPCError` →
       returns a single-element list with the skipped-kind warning; payload
       contains `reason` equal to `str(e)`. (Behavior is independent of
       trigger.)
-- [ ] `do_transfer_from` rewired to use the helper with the default trigger;
+- [x] `do_transfer_from` rewired to use the helper with the default trigger;
       all Phase 1 `TestTxAssembly` cases for `do_transfer_from` (happy, low
       allowance, RPC skipped) pass **unmodified**.
-- [ ] `do_transfer_from` warning payload bytes-for-bytes identical to Phase 1:
+- [x] `do_transfer_from` warning payload bytes-for-bytes identical to Phase 1:
       `("low_allowance", {"holder", "spender", "current", "requested",
       "decimals", "symbol"})` and `("allowance_check_skipped", {"reason"})`.
       This AC remains valid because Issue 2.4 is forbidden from editing the
       helper signature.
-- [ ] `python3 -m unittest test_build_erc20 -v` green; no Phase 1 test modified.
-- [ ] `python3 -m unittest test_build_send_eth -v` green (regression).
+- [x] `python3 -m unittest test_build_erc20 -v` green; no Phase 1 test modified.
+- [x] `python3 -m unittest test_build_send_eth -v` green (regression).
 
 **Testing Notes:**
 - This is a refactor; the strongest test is that **no Phase 1 test file lines
@@ -513,40 +513,40 @@ warning. Build still emits JSON unmodified.
   `SKILL.md`, `README.md`.
 
 **Acceptance Criteria:**
-- [ ] `_soft_check_allowance` (from Issue 2.3) is consumed **unmodified** —
+- [x] `_soft_check_allowance` (from Issue 2.3) is consumed **unmodified** —
       `git diff` of `build_erc20.py` for this issue shows zero changes to the
       helper's signature or body; only the `do_approve` call site adds a new
       invocation passing a custom `trigger` lambda. Issue 2.3's
       byte-identical-Phase-1 AC remains valid after this issue lands.
-- [ ] `do_approve` happy path with `allowance == 0` (most common modern case)
+- [x] `do_approve` happy path with `allowance == 0` (most common modern case)
       → `warnings_list == []` for the race check (`--approve-max` warning may
       still appear if `approve_max=True`).
-- [ ] `do_approve` with `allowance != 0 AND allowance != requested` →
+- [x] `do_approve` with `allowance != 0 AND allowance != requested` →
       `warnings_list` contains exactly one
       `("approve_race", {"holder": sender, "spender":..., "current":...,
       "requested":..., "decimals":..., "symbol":...})` tuple; JSON still
       emitted.
-- [ ] `do_approve` with `allowance != 0 AND allowance == requested` →
+- [x] `do_approve` with `allowance != 0 AND allowance == requested` →
       `warnings_list` does NOT contain `approve_race` (a no-op approve is
       not racy in the SWC-114 sense).
-- [ ] `do_approve` with `approve_max=True` → `warnings_list` contains
+- [x] `do_approve` with `approve_max=True` → `warnings_list` contains
       `approve_max` (existing Phase 1 behavior) but NOT `approve_race`.
-- [ ] `do_approve` with `amount=0` (revocation) → `warnings_list` does NOT
+- [x] `do_approve` with `amount=0` (revocation) → `warnings_list` does NOT
       contain `approve_race` (revocations have no race).
-- [ ] `do_approve` with the allowance RPC raising `_core.RPCError` →
+- [x] `do_approve` with the allowance RPC raising `_core.RPCError` →
       `warnings_list` contains
       `("approve_race_check_skipped", {"reason": "<msg>"})`; JSON still
       emitted.
-- [ ] `do_approve` with `estimate_gas` raising still propagates (FATAL — the
+- [x] `do_approve` with `estimate_gas` raising still propagates (FATAL — the
       ADR-007 regression check).
-- [ ] `TestSummary` gains: `warn_approve_race` emits a multi-line `WARNING:`
+- [x] `TestSummary` gains: `warn_approve_race` emits a multi-line `WARNING:`
       containing the spender and the SWC-114 reference;
       `warn_approve_race_check_skipped` emits a `WARNING:` line.
-- [ ] `TestTxAssembly` gains: the six `do_approve` cases above.
-- [ ] `TestCliDispatch` gains: `main()` with non-zero current allowance returns
+- [x] `TestTxAssembly` gains: the six `do_approve` cases above.
+- [x] `TestCliDispatch` gains: `main()` with non-zero current allowance returns
       exit 0, `WARNING:` on stderr, JSON on stdout.
-- [ ] `python3 -m unittest test_build_erc20 -v` green.
-- [ ] `python3 -m unittest test_build_send_eth -v` green (regression).
+- [x] `python3 -m unittest test_build_erc20 -v` green.
+- [x] `python3 -m unittest test_build_send_eth -v` green (regression).
 
 **Testing Notes:**
 - The `do_approve` mock-rpc sequence gains one extra `eth_call` for the
@@ -618,20 +618,20 @@ strictly the dict edit + new test cases.
 - SKILL.md / README.md edits are deferred to Issue 2.8.
 
 **Acceptance Criteria:**
-- [ ] `build_send_eth.NETWORKS` contains exactly four entries: `mainnet`,
+- [x] `build_send_eth.NETWORKS` contains exactly four entries: `mainnet`,
       `hoodi`, `sepolia`, `holesky` — with the chain IDs and URLs above.
-- [ ] `git diff build_send_eth.py` shows exactly two added lines (one per new
+- [x] `git diff build_send_eth.py` shows exactly two added lines (one per new
       network entry) and nothing else (no whitespace, no re-formatting, no
       comment edits).
-- [ ] `network_config("sepolia") == (11155111, "https://ethereum-sepolia-rpc.publicnode.com")`.
-- [ ] `network_config("holesky") == (17000, "https://ethereum-holesky-rpc.publicnode.com")`.
-- [ ] `network_config("nope")` still raises `ValueError` whose message lists
+- [x] `network_config("sepolia") == (11155111, "https://ethereum-sepolia-rpc.publicnode.com")`.
+- [x] `network_config("holesky") == (17000, "https://ethereum-holesky-rpc.publicnode.com")`.
+- [x] `network_config("nope")` still raises `ValueError` whose message lists
       all four networks in sorted order.
-- [ ] `test_build_send_eth.TestNetworkConfig.test_sepolia` passes (added).
-- [ ] `test_build_send_eth.TestNetworkConfig.test_holesky` passes (added).
-- [ ] All pre-existing `test_build_send_eth` cases still pass unmodified.
-- [ ] `python3 -m unittest test_build_send_eth -v` green.
-- [ ] `python3 -m unittest test_build_erc20 -v` still green (regression; no
+- [x] `test_build_send_eth.TestNetworkConfig.test_sepolia` passes (added).
+- [x] `test_build_send_eth.TestNetworkConfig.test_holesky` passes (added).
+- [x] All pre-existing `test_build_send_eth` cases still pass unmodified.
+- [x] `python3 -m unittest test_build_send_eth -v` green.
+- [x] `python3 -m unittest test_build_erc20 -v` still green (regression; no
       ERC-20 helper code changed).
 
 **Testing Notes:**
@@ -698,19 +698,19 @@ add a smoke case asserting the argparse `choices` includes all four networks.
   `SKILL.md`, `README.md` (saved for Issue 2.8).
 
 **Acceptance Criteria:**
-- [ ] `_build_parser()` argparse `choices` for `--network` is exactly
+- [x] `_build_parser()` argparse `choices` for `--network` is exactly
       `["holesky", "hoodi", "mainnet", "sepolia"]` on each of the three
       subparsers.
-- [ ] `main(["transfer", "--network", "sepolia", "--token", ..., "--to", ...,
+- [x] `main(["transfer", "--network", "sepolia", "--token", ..., "--to", ...,
       "--amount", "1", "--sender", ...])` with mocked rpc → exit 0, JSON
       `chainId == "11155111"`.
-- [ ] `main(["transfer", "--network", "holesky", ...])` with mocked rpc → exit 0,
+- [x] `main(["transfer", "--network", "holesky", ...])` with mocked rpc → exit 0,
       JSON `chainId == "17000"`.
-- [ ] `main(["transfer", "--network", "nope", ...])` → argparse rejection,
+- [x] `main(["transfer", "--network", "nope", ...])` → argparse rejection,
       exit 2 (the standard argparse code), error message mentions all four
       valid networks.
-- [ ] `python3 -m unittest test_build_erc20.TestCliDispatch -v` green.
-- [ ] `python3 -m unittest test_build_send_eth -v` still green.
+- [x] `python3 -m unittest test_build_erc20.TestCliDispatch -v` green.
+- [x] `python3 -m unittest test_build_send_eth -v` still green.
 
 **Testing Notes:**
 - If `_build_parser` was Phase-1-implemented with a hardcoded list instead of
@@ -774,23 +774,23 @@ reads, all calldata generation, all gas estimation, all warning emission) but
   `SKILL.md`, `README.md` (Issue 2.8).
 
 **Acceptance Criteria:**
-- [ ] Each of `transfer`, `approve`, `transfer-from` subcommand `--help` lists
+- [x] Each of `transfer`, `approve`, `transfer-from` subcommand `--help` lists
       `--summary-only` with the help text above.
-- [ ] `main(["transfer", "--network", ..., "--summary-only", ...])` with mocked
+- [x] `main(["transfer", "--network", ..., "--summary-only", ...])` with mocked
       rpc → exit 0, stdout is empty (no characters at all), stderr contains
       the summary block.
-- [ ] `main(["approve", "--approve-max", "--summary-only", ...])` with mocked
+- [x] `main(["approve", "--approve-max", "--summary-only", ...])` with mocked
       rpc → exit 0, stdout empty, stderr contains both the `WARNING:` line for
       `--approve-max` (Phase 1 surface — independent of 2.4) AND the summary
       block. This case uses only Phase 1 warning surfaces so 2.7 stays
       unblocked by 2.2 / 2.4.
-- [ ] `main([..., "--summary-only", ...])` with `estimate_gas` raising →
+- [x] `main([..., "--summary-only", ...])` with `estimate_gas` raising →
       exit 1, stdout empty, stderr contains `error:` (so `--summary-only`
       does NOT mask fatal errors).
-- [ ] Without `--summary-only`, all existing happy-path tests still pass
+- [x] Without `--summary-only`, all existing happy-path tests still pass
       unmodified (JSON still goes to stdout).
-- [ ] `python3 -m unittest test_build_erc20.TestCliDispatch -v` green.
-- [ ] `python3 -m unittest test_build_send_eth -v` green (regression).
+- [x] `python3 -m unittest test_build_erc20.TestCliDispatch -v` green.
+- [x] `python3 -m unittest test_build_send_eth -v` green (regression).
 
 **Out of scope (deferred to Issue 2.8b regression matrix):**
 - Interactions of `--summary-only` with `low_balance` warning (depends on

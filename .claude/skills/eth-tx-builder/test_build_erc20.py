@@ -537,6 +537,18 @@ class TestContractReads(unittest.TestCase):
     def test_decode_balance_max_uint256(self):
         self.assertEqual(b.decode_balance("0x" + "f" * 64), (1 << 256) - 1)
 
+    # --- decode_balance non-str guard (Fix 5) ---
+
+    def test_decode_balance_non_str_int_raises_value_error(self):
+        """Non-string input must raise ValueError (Fix 5 — pin decode_balance contract)."""
+        with self.assertRaises(ValueError):
+            b.decode_balance(42)
+
+    def test_decode_balance_non_str_dict_raises_value_error(self):
+        """Dict input must raise ValueError (Fix 5 — pin decode_balance contract)."""
+        with self.assertRaises(ValueError):
+            b.decode_balance({"result": "0x06"})
+
     # --- fetch_balance_of ---
 
     def test_fetch_balance_of_happy_path(self):
@@ -1198,6 +1210,34 @@ class TestTxAssembly(unittest.TestCase):
         kind, payload = result[0]
         self.assertIn("current", payload)
         self.assertIn("requested", payload)
+
+    def test_soft_check_allowance_reserved_key_current_raises(self):
+        """low_payload_extra containing 'current' must raise ValueError (Fix 3)."""
+        rpc = self._make_rpc_allowance(1)  # trigger fires
+        with self.assertRaises(ValueError) as ctx:
+            b._soft_check_allowance(
+                rpc=rpc, url="https://x",
+                token=self.TOKEN, holder=self.FROM_, spender=self.SENDER,
+                requested=100,
+                skipped_kind="allowance_check_skipped",
+                low_kind="low_allowance",
+                low_payload_extra={"current": 999, "holder": self.FROM_},
+            )
+        self.assertIn("reserved", str(ctx.exception))
+
+    def test_soft_check_allowance_reserved_key_requested_raises(self):
+        """low_payload_extra containing 'requested' must raise ValueError (Fix 3)."""
+        rpc = self._make_rpc_allowance(1)  # trigger fires
+        with self.assertRaises(ValueError) as ctx:
+            b._soft_check_allowance(
+                rpc=rpc, url="https://x",
+                token=self.TOKEN, holder=self.FROM_, spender=self.SENDER,
+                requested=100,
+                skipped_kind="allowance_check_skipped",
+                low_kind="low_allowance",
+                low_payload_extra={"requested": 50, "holder": self.FROM_},
+            )
+        self.assertIn("reserved", str(ctx.exception))
 
     # -----------------------------------------------------------------------
     # _build_eip1559_envelope
@@ -1910,32 +1950,39 @@ class TestCliDispatch(unittest.TestCase):
     # -----------------------------------------------------------------------
 
     def test_transfer_from_low_allowance_returns_0_with_warning(self):
-        """Low allowance warning path: exit 0; WARNING: on stderr; JSON on stdout."""
-        tf_ctx = dict(self.FAKE_CTX, operation="transfer-from",
-                      from_=self.FROM_, sender=self.SENDER)
-        warns = [("low_allowance", {
-            "holder":    self.FROM_,
-            "spender":   self.SENDER,
-            "current":   1,
-            "requested": 1_500_000,
-            "decimals":  6,
-        })]
-        with mock.patch("build_erc20.do_transfer_from",
-                        return_value=(self.FAKE_TX, tf_ctx, warns)):
+        """Low allowance warning path: exit 0; WARNING: on stderr; JSON on stdout.
+
+        Uses the real do_transfer_from via a thin wrapper that injects a low-
+        allowance fake rpc. The real _soft_check_allowance payload (which includes
+        'symbol' after the 2.3 refactor) flows through the real emit_warning
+        (**payload), exercising the true contract and catching the Fix-1 TypeError.
+        """
+        ta = TestTxAssembly()
+        rpc = ta._make_rpc_for_transfer(allowance_hex=ta.HEX_ALLOWANCE_LOW)
+        # Capture original before patching to avoid recursion when the wrapper
+        # calls do_transfer_from while it is still patched.
+        _real_do_transfer_from = b.do_transfer_from
+
+        def wrapper(*args, **kw):
+            kw["rpc"] = rpc
+            return _real_do_transfer_from(*args, **kw)
+
+        with mock.patch("build_erc20.do_transfer_from", side_effect=wrapper):
             with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
                 with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
                     result = b.main([
                         "transfer-from", "--network", "mainnet",
-                        "--token", self.TOKEN,
-                        "--from", self.FROM_,
-                        "--to", self.TO,
+                        "--token", ta.TOKEN,
+                        "--from", ta.FROM_,
+                        "--to", ta.TO,
                         "--amount", "1.5",
-                        "--sender", self.SENDER,
+                        "--sender", ta.SENDER,
                     ])
         self.assertEqual(result, 0)
         self.assertIn("WARNING:", fake_err.getvalue())
+        self.assertIn("allowance", fake_err.getvalue())
         parsed = json.loads(fake_out.getvalue())
-        self.assertEqual(parsed, self.FAKE_TX)
+        self.assertIn("type", parsed)
 
     # -----------------------------------------------------------------------
     # balanceOf soft-check at the CLI layer (Issue 2.2)
@@ -2254,27 +2301,28 @@ class TestCliDispatch(unittest.TestCase):
             self.assertIn("operation", stderr)      # summary block present
 
         # ---- Cell B: transfer-from low-allowance + --summary-only ----
+        # Uses real do_transfer_from via wrapper injection so the real
+        # _soft_check_allowance payload (with 'symbol') flows through emit_warning.
         with self.subTest(op="transfer-from", warning="low_allowance", summary_only=True):
-            tf_ctx = dict(self.FAKE_CTX, operation="transfer-from",
-                          from_=self.FROM_, sender=self.SENDER)
-            warns = [("low_allowance", {
-                "holder":    self.FROM_,
-                "spender":   self.SENDER,
-                "current":   1,
-                "requested": 1_500_000,
-                "decimals":  6,
-            })]
-            with mock.patch("build_erc20.do_transfer_from",
-                            return_value=(self.FAKE_TX, tf_ctx, warns)):
+            ta = TestTxAssembly()
+            rpc_b = ta._make_rpc_for_transfer(allowance_hex=ta.HEX_ALLOWANCE_LOW)
+            # Capture original before patching to avoid recursion.
+            _real_dtf = b.do_transfer_from
+
+            def _wrapper_b(*args, **kw):
+                kw["rpc"] = rpc_b
+                return _real_dtf(*args, **kw)
+
+            with mock.patch("build_erc20.do_transfer_from", side_effect=_wrapper_b):
                 with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
                     with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
                         result = b.main([
                             "transfer-from", "--network", "mainnet",
-                            "--token", self.TOKEN,
-                            "--from", self.FROM_,
-                            "--to", self.TO,
+                            "--token", ta.TOKEN,
+                            "--from", ta.FROM_,
+                            "--to", ta.TO,
                             "--amount", "1.5",
-                            "--sender", self.SENDER,
+                            "--sender", ta.SENDER,
                             "--summary-only",
                         ])
             self.assertEqual(result, 0)
@@ -2448,6 +2496,200 @@ class TestCliDispatch(unittest.TestCase):
                         expected_chain_id,
                         msg="chainId mismatch for network=%s op=%s" % (network, op),
                     )
+
+
+class TestWarningE2E(unittest.TestCase):
+    """End-to-end regression tests that drive main() against a real mocked RPC.
+
+    These tests exercise the real do_* functions by injecting a fake rpc via a
+    thin wrapper patch (same technique as test_regression_matrix_networks_x_ops
+    in TestCliDispatch). The real _soft_check_allowance payload flows through
+    the real emit_warning(**payload), catching any warn_* signature mismatches.
+
+    This is the class of bug Fix 1 addresses: warn_low_allowance lacked the
+    'symbol' param that _soft_check_allowance started including after the 2.3
+    refactor, causing a TypeError that escaped main()'s except handler.
+
+    Re-uses _make_rpc_for_transfer from TestTxAssembly to share the selector-aware
+    dispatcher (architecture A14 comment).
+    """
+
+    # -----------------------------------------------------------------------
+    # Fix 2, Part 1 — low_allowance e2e (this is the regression guard for Fix 1)
+    # -----------------------------------------------------------------------
+
+    def test_e2e_transfer_from_low_allowance_exit_0_warning_on_stderr(self):
+        """E2E: transfer-from with real low-allowance RPC → exit 0, WARNING with
+        'allowance' on stderr, valid JSON on stdout.
+
+        This test FAILS before Fix 1 (TypeError in warn_low_allowance missing
+        'symbol' param) and PASSES after Fix 1 (symbol=None param added).
+
+        Uses the real do_transfer_from via a thin wrapper that injects rpc (captured
+        before patching to avoid recursion) — so the real _soft_check_allowance
+        payload (which includes 'symbol') flows through the real emit_warning(**payload).
+        """
+        ta = TestTxAssembly()
+        rpc = ta._make_rpc_for_transfer(allowance_hex=ta.HEX_ALLOWANCE_LOW)
+        # Capture original before patching to prevent recursive mock calls.
+        _real = b.do_transfer_from
+
+        def _wrapper(*args, **kw):
+            kw["rpc"] = rpc
+            return _real(*args, **kw)
+
+        with mock.patch("build_erc20.do_transfer_from", side_effect=_wrapper):
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+                with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+                    result = b.main([
+                        "transfer-from", "--network", "mainnet",
+                        "--token", ta.TOKEN,
+                        "--from", ta.FROM_,
+                        "--to", ta.TO,
+                        "--amount", "1.5",
+                        "--sender", ta.SENDER,
+                    ])
+
+        self.assertEqual(result, 0, msg="exit code must be 0 (warn-don't-block)")
+        stderr = fake_err.getvalue()
+        self.assertIn("WARNING:", stderr, msg="low_allowance WARNING must appear on stderr")
+        self.assertIn("allowance", stderr, msg="'allowance' must appear in WARNING text")
+        # stdout must contain valid JSON (the tx_dict)
+        stdout = fake_out.getvalue().strip()
+        self.assertTrue(stdout, msg="stdout must not be empty")
+        parsed = json.loads(stdout)
+        self.assertIn("type", parsed)
+        self.assertEqual(parsed["type"], "eip1559")
+
+    def test_e2e_transfer_from_low_allowance_warning_contains_symbol(self):
+        """E2E: low_allowance WARNING must include the symbol (USDC from fake RPC).
+
+        Specifically guards against the pre-Fix-1 crash: warn_low_allowance had
+        no 'symbol' param but the payload from _soft_check_allowance included one
+        after the 2.3 refactor.
+        """
+        ta = TestTxAssembly()
+        rpc = ta._make_rpc_for_transfer(allowance_hex=ta.HEX_ALLOWANCE_LOW)
+        _real = b.do_transfer_from
+
+        def _wrapper(*args, **kw):
+            kw["rpc"] = rpc
+            return _real(*args, **kw)
+
+        with mock.patch("build_erc20.do_transfer_from", side_effect=_wrapper):
+            with mock.patch("sys.stdout", new_callable=io.StringIO):
+                with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+                    result = b.main([
+                        "transfer-from", "--network", "mainnet",
+                        "--token", ta.TOKEN,
+                        "--from", ta.FROM_,
+                        "--to", ta.TO,
+                        "--amount", "1.5",
+                        "--sender", ta.SENDER,
+                    ])
+
+        self.assertEqual(result, 0)
+        stderr = fake_err.getvalue()
+        # After Fix 1, the symbol "USDC" (returned by fake RPC) must appear in the warning.
+        self.assertIn("USDC", stderr, msg="token symbol must appear in low_allowance WARNING")
+
+    # -----------------------------------------------------------------------
+    # Fix 2, Part 2 — allowance_check_skipped e2e
+    # -----------------------------------------------------------------------
+
+    def test_e2e_transfer_from_allowance_rpc_error_exit_0_warning_on_stderr(self):
+        """E2E: transfer-from with allowance RPC error → exit 0, WARNING on stderr,
+        valid JSON on stdout.
+
+        Uses the real do_transfer_from via wrapper injection — the real soft-check
+        catch flows through emit_warning("allowance_check_skipped", ...).
+        """
+        ta = TestTxAssembly()
+        base_rpc = ta._make_rpc_for_transfer()
+
+        def _rpc_allowance_fails(url, method, params):
+            if method == "eth_call":
+                call_obj = params[0]
+                data = call_obj.get("data", "")
+                if data.startswith(b.SEL_ALLOWANCE):
+                    raise b._core.RPCError("simulated allowance rpc failure")
+            return base_rpc(url, method, params)
+
+        _real = b.do_transfer_from
+
+        def _wrapper(*args, **kw):
+            kw["rpc"] = _rpc_allowance_fails
+            return _real(*args, **kw)
+
+        with mock.patch("build_erc20.do_transfer_from", side_effect=_wrapper):
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+                with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+                    result = b.main([
+                        "transfer-from", "--network", "mainnet",
+                        "--token", ta.TOKEN,
+                        "--from", ta.FROM_,
+                        "--to", ta.TO,
+                        "--amount", "1.5",
+                        "--sender", ta.SENDER,
+                    ])
+
+        self.assertEqual(result, 0, msg="allowance_check_skipped must not block build (exit 0)")
+        stderr = fake_err.getvalue()
+        self.assertIn("WARNING:", stderr)
+        self.assertIn("allowance", stderr)
+        stdout = fake_out.getvalue().strip()
+        self.assertTrue(stdout, msg="tx JSON must still appear on stdout")
+        parsed = json.loads(stdout)
+        self.assertEqual(parsed["type"], "eip1559")
+
+    # -----------------------------------------------------------------------
+    # Fix 2, Part 3 — balance_check_skipped e2e
+    # -----------------------------------------------------------------------
+
+    def test_e2e_transfer_balance_rpc_error_exit_0_warning_on_stderr(self):
+        """E2E: transfer with balanceOf RPC error → exit 0, WARNING on stderr,
+        valid JSON on stdout.
+
+        Uses the real do_transfer via wrapper injection — the real balance soft-check
+        catch flows through emit_warning("balance_check_skipped", ...).
+        """
+        ta = TestTxAssembly()
+        base_rpc = ta._make_rpc_for_transfer()
+
+        def _rpc_balance_fails(url, method, params):
+            if method == "eth_call":
+                call_obj = params[0]
+                data = call_obj.get("data", "")
+                if data.startswith(b.SEL_BALANCE_OF):
+                    raise b._core.RPCError("simulated balanceOf rpc failure")
+            return base_rpc(url, method, params)
+
+        _real = b.do_transfer
+
+        def _wrapper(*args, **kw):
+            kw["rpc"] = _rpc_balance_fails
+            return _real(*args, **kw)
+
+        with mock.patch("build_erc20.do_transfer", side_effect=_wrapper):
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+                with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+                    result = b.main([
+                        "transfer", "--network", "mainnet",
+                        "--token", ta.TOKEN,
+                        "--to", ta.TO,
+                        "--amount", "1.5",
+                        "--sender", ta.SENDER,
+                    ])
+
+        self.assertEqual(result, 0, msg="balance_check_skipped must not block build (exit 0)")
+        stderr = fake_err.getvalue()
+        self.assertIn("WARNING:", stderr)
+        # The balance_check_skipped warning text includes "balanceOf"
+        self.assertIn("balanceOf", stderr)
+        stdout = fake_out.getvalue().strip()
+        self.assertTrue(stdout, msg="tx JSON must still appear on stdout")
+        parsed = json.loads(stdout)
+        self.assertEqual(parsed["type"], "eip1559")
 
 
 if __name__ == "__main__":

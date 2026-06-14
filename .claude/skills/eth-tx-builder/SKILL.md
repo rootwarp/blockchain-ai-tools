@@ -17,7 +17,10 @@ separate, explicit step the user takes afterward.
 
 ## Inputs — native ETH send
 
-1. **network** — `mainnet` or `hoodi`.
+1. **network** — `mainnet`, `hoodi`, `sepolia`, or `holesky`.
+   - Prefer `hoodi` or `sepolia` for testnet work. `holesky` is scheduled for
+     deprecation (post-2025) and its publicnode endpoint was unreachable at last
+     check; prefer `hoodi` for new testnet work.
 2. **destination** — recipient EOA address (`0x` + 40 hex).
 3. **amount** — amount to send, in **gwei** (1 gwei = 1e9 wei = 1e-9 ETH).
 
@@ -60,8 +63,9 @@ sender address.
 
 ### Native ETH send
 
-2. **Validate inputs:** network is `mainnet` or `hoodi`; destination looks like
-   `0x` + 40 hex; amount is a non-negative integer.
+2. **Validate inputs:** network is one of `mainnet`, `hoodi`, `sepolia`, `holesky`
+   (prefer `hoodi`/`sepolia` for testnet; `holesky` is deprecated); destination
+   looks like `0x` + 40 hex; amount is a non-negative integer.
 3. **Get the sender:** call the `get_address` MCP tool. Use its `address` as the
    sender (the account whose nonce we query and that will sign).
 4. **Build the transaction:** run the bundled helper from the skill directory:
@@ -188,12 +192,15 @@ below will cause the helper to exit non-zero.
 | `allowance_check_skipped` | `transfer-from` | The `allowance` RPC call fails; the check is skipped and the build continues. |
 | `approve_max` | `approve` | `--approve-max` is passed; grants unlimited (`MAX_UINT256`) authority to the spender. |
 
+Note: `symbol_unavailable` is an additional `emit_warning` kind (info-only, fires when
+`symbol()` cannot be decoded) and is NOT one of the seven soft-checks in the table above.
+
 In-code `WARNING:` wording (verbatim from `build_erc20.py`):
 - `low_balance`: `WARNING: sender <HOLDER> balance is <CUR> (<HUMAN_CUR> <SYM>); requested transfer is <REQ> (<HUMAN_REQ> <SYM>). This transaction will revert unless balance is funded before broadcast.`
 - `balance_check_skipped`: `WARNING: balanceOf pre-check skipped: <reason>. Build continues.`
 - `approve_race`: `WARNING: current allowance(<HOLDER>, <SPENDER>) is <CUR> (<HUMAN_CUR> <SYM>); requested approve is <REQ> (<HUMAN_REQ> <SYM>). The ERC-20 "approve race" (SWC-114) lets the spender front-run this transaction to pull tokens at the OLD allowance and then again at the NEW. To eliminate the race, broadcast approve(<SPENDER>, 0) first, then this approve.`
 - `approve_race_check_skipped`: `WARNING: approve-race pre-check skipped: <reason>. Build continues.`
-- `low_allowance`: `WARNING: current allowance is <CUR> (<HUMAN_CUR>); requested transfer is <REQ> (<HUMAN_REQ>). This transaction will revert unless allowance is increased before broadcast.`
+- `low_allowance`: `WARNING: current allowance is <CUR> (<HUMAN_CUR> <SYM>); requested transfer is <REQ> (<HUMAN_REQ> <SYM>). This transaction will revert unless allowance is increased before broadcast.`
 - `allowance_check_skipped`: `WARNING: allowance soft-check skipped: <reason>. Build continues.`
 - `approve_max`: `WARNING: --approve-max grants UNLIMITED transfer authority on <SYM> (<TOKEN>) to spender <SPENDER>. Revoke later with approve(spender, 0) if no longer needed.`
 
@@ -238,6 +245,9 @@ the calldata reaches your signer or shell history.
   isn't a surprise.
 - This skill makes outbound RPC calls; the `eth-signer-mcp` signer itself remains
   strictly offline. The two concerns are separate.
+- stderr `WARNING:` output contains on-chain account addresses and balances; treat
+  stderr as PII-grade in shared log pipelines (CI transcripts, MCP session logs,
+  screen recordings).
 
 ## Out of scope (v1)
 
