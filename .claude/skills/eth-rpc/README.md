@@ -191,20 +191,53 @@ omitted.
 
 ## Phase 3.4 manual end-to-end (--decode eth_feeHistory / eth_getProof)
 
-<!-- PLACEHOLDER: team lead runs the live hoodi call and fills in the transcript below. -->
+Captured live against hoodi (decoded fields land at the top level next to a
+`raw` echo of the original response):
 
 ```bash
-# eth_feeHistory with --decode (run against hoodi; replace with live output)
+# eth_feeHistory with --decode
 $ python3 eth_rpc.py call --network hoodi --decode \
-    --method eth_feeHistory --params '[1, "latest", []]'
-# <PASTE LIVE OUTPUT HERE>
+    --method eth_feeHistory --params '[1, "latest", [25]]'
+{
+  "raw": {
+    "oldestBlock": "0x2df886",
+    "reward": [["0x4e39ff0"]],
+    "baseFeePerGas": ["0x3db5e366", "0x3626688e"],
+    "gasUsedRatio": [0.0099396],
+    "baseFeePerBlobGas": ["0x36d821e9", "0x3b5307ff"],
+    "blobGasUsedRatio": [1]
+  },
+  "oldestBlock": 3012742,
+  "baseFeePerGas": [1035330406, 908486798],
+  "baseFeePerGasGwei": ["1.035330406", "0.908486798"],
+  "gasUsedRatio": [0.0099396],
+  "reward": [[82026480]]
+}
 
-# eth_getProof with --decode (run against hoodi; replace address + slot with real values)
+# eth_getProof with --decode (EOA; accountProof elided for brevity)
 $ python3 eth_rpc.py call --network hoodi --decode \
     --method eth_getProof \
-    --params '["0x<address>", ["0x0"], "latest"]'
-# <PASTE LIVE OUTPUT HERE>
+    --params '["0x6302794A4F2487a2540c40E2dbB211Ff6AF1CD20", [], "latest"]'
+{
+  "raw": {
+    "address": "0x6302794a4f2487a2540c40e2dbb211ff6af1cd20",
+    "accountProof": ["0xf90211...", "..."],
+    "balance": "0xc7d5bd5cc534c60",
+    "codeHash": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+    "nonce": "0x1",
+    "storageHash": "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
+    "storageProof": []
+  },
+  "balance": 899976474358140000,
+  "nonce": 1,
+  "storageProof": []
+}
 ```
+
+`baseFeePerGas`/`reward` decode to wei ints (with a `baseFeePerGasGwei` companion);
+`gasUsedRatio` stays as floats; proof byte-arrays (`accountProof`, `storageProof[].proof`)
+and digests (`codeHash`, `storageHash`) are left as raw hex — only `balance`, `nonce`,
+and `storageProof[].value` are numeric-decoded.
 
 ## Future operations (not yet implemented)
 
