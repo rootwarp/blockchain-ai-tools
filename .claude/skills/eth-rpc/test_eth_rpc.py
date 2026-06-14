@@ -1169,7 +1169,10 @@ class TestCallCli(unittest.TestCase):
         return rc, out.getvalue(), err.getvalue()
 
     def test_happy_path_named_network(self):
-        with mock.patch("eth_rpc.rpc_call", return_value="0x88bb0"):
+        # Patch do_call (not rpc_call): do_call binds rpc_call as a default arg
+        # at definition time, so patching the module attribute would not
+        # intercept it and the test would hit the live network.
+        with mock.patch("eth_rpc.do_call", return_value="0x88bb0") as mock_dc:
             rc, out, err = self._run([
                 "call", "--network", "hoodi",
                 "--method", "eth_chainId", "--params", "[]",
@@ -1177,6 +1180,7 @@ class TestCallCli(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(json.loads(out), "0x88bb0")
         self.assertEqual(err, "")
+        self.assertTrue(mock_dc.called)  # proves no live network call
 
     def test_happy_path_custom_endpoint(self):
         with mock.patch("eth_rpc.do_call", return_value="0x1") as mock_dc:
@@ -1216,7 +1220,8 @@ class TestCallCli(unittest.TestCase):
         self.assertIn("required together", err)
 
     def test_allow_write_warning_on_stderr(self):
-        with mock.patch("eth_rpc.rpc_call", return_value="0xhash"):
+        # Patch do_call (not rpc_call) — see test_happy_path_named_network.
+        with mock.patch("eth_rpc.do_call", return_value="0xhash") as mock_dc:
             rc, out, err = self._run([
                 "call", "--network", "hoodi",
                 "--method", "eth_blockNumber", "--params", "[]",
@@ -1224,7 +1229,8 @@ class TestCallCli(unittest.TestCase):
             ])
         self.assertEqual(rc, 0)
         self.assertIn("warning: --allow-write bypasses the call denylist", err)
-        self.assertNotEqual(out.strip(), "")
+        self.assertEqual(json.loads(out), "0xhash")
+        self.assertTrue(mock_dc.called)  # proves no live network call
 
     def test_allow_write_warning_prints_even_when_do_call_raises(self):
         with mock.patch(
