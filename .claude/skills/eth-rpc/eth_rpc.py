@@ -141,6 +141,21 @@ def wei_to_eth_str(wei):
     return "%s%d.%s" % (sign, whole, frac_str)
 
 
+WEI_PER_GWEI = 1_000_000_000
+
+
+def _wei_to_gwei_str(wei):
+    """Exact wei -> gwei decimal string using integer divmod (no float).
+
+    e.g. 30_000_000_000 -> '30', 1_500_000_000 -> '1.5'
+    """
+    whole, frac = divmod(wei, WEI_PER_GWEI)
+    if frac == 0:
+        return "%d" % whole
+    frac_str = ("%09d" % frac).rstrip("0")
+    return "%d.%s" % (whole, frac_str)
+
+
 class RPCError(Exception):
     """A JSON-RPC transport failure or error response."""
 
@@ -427,6 +442,224 @@ def do_client_version(url, chain_id, *, network=None, timeout=15, rpc=rpc_call):
     return out
 
 # === END MODULE: do_diagnostics ===
+
+
+# === MODULE: decode ===
+# Public:  _decode_result(method, result) -> dict | list | result
+#
+# Per-method decoders post-process the raw JSON-RPC result. Off by default.
+# Called from main after do_call returns when --decode is set.
+
+_HEX_QUANTITY_METHODS = frozenset({
+    "eth_blockNumber",
+    "eth_gasPrice",
+    "eth_chainId",
+    "eth_getTransactionCount",
+    "eth_estimateGas",
+    "eth_maxPriorityFeePerGas",
+    "eth_getBalance",
+})
+
+# Methods that return gas-price-shaped quantities (wei + gwei).
+_GAS_PRICE_METHODS = frozenset({"eth_gasPrice", "eth_maxPriorityFeePerGas"})
+
+
+def _decode_hex_quantity(method, result):
+    """Return a decoded dict for a hex-quantity result.
+
+    For eth_getBalance: {hex, wei, eth}.
+    For gas-price methods: {hex, wei, gwei} (integer divmod, no float).
+    For all others: {hex, decimal}.
+
+    Defensive: if result is not a 0x-prefixed string, return it unchanged.
+    """
+    if not isinstance(result, str) or not result.startswith("0x"):
+        return result
+    try:
+        value = parse_hex_int(result)
+    except ValueError:
+        return result
+
+    if method == "eth_getBalance":
+        return {
+            "hex": result,
+            "wei": value,
+            "eth": wei_to_eth_str(value),
+        }
+    if method in _GAS_PRICE_METHODS:
+        return {
+            "hex": result,
+            "wei": value,
+            "gwei": _wei_to_gwei_str(value),
+        }
+    return {"hex": result, "decimal": value}
+
+
+def _decode_block(result):
+    """Decode a block object result. Returns {raw: result, <decoded fields>}.
+
+    Decodes: number, gasUsed, gasLimit, baseFeePerGas, timestamp, size,
+    difficulty, nonce. Does NOT decode totalDifficulty (legacy under PoS).
+    Defensive: missing field -> omit; field not hex-string -> omit.
+    """
+    if result is None:
+        return None
+    if not isinstance(result, dict):
+        return {"raw": result}
+
+    _BLOCK_INT_FIELDS = (
+        "number", "gasUsed", "gasLimit", "baseFeePerGas",
+        "timestamp", "size", "difficulty", "nonce",
+    )
+    out = {"raw": result}
+    for field in _BLOCK_INT_FIELDS:
+        raw_val = result.get(field)
+        if raw_val is not None and isinstance(raw_val, str) and raw_val.startswith("0x"):
+            try:
+                out[field] = parse_hex_int(raw_val)
+            except ValueError:
+                pass
+    return out
+
+
+def _decode_tx(result):
+    """Decode a transaction object result. Returns {raw: result, <decoded fields>}.
+
+    Decodes numeric fields. value -> {wei, eth}. Gas-price fields -> {wei, gwei}.
+    `from` is optional per spec — omitted when missing.
+    Defensive: missing or non-hex field -> omit.
+    """
+    if result is None:
+        return None
+    if not isinstance(result, dict):
+        return {"raw": result}
+
+    _TX_INT_FIELDS = ("blockNumber", "transactionIndex", "nonce", "gas", "chainId", "type")
+    _TX_GWEI_FIELDS = ("gasPrice", "maxFeePerGas", "maxPriorityFeePerGas")
+
+    out = {"raw": result}
+    for field in _TX_INT_FIELDS:
+        raw_val = result.get(field)
+        if raw_val is not None and isinstance(raw_val, str) and raw_val.startswith("0x"):
+            try:
+                out[field] = parse_hex_int(raw_val)
+            except ValueError:
+                pass
+    # value: wei + eth
+    raw_value = result.get("value")
+    if raw_value is not None and isinstance(raw_value, str) and raw_value.startswith("0x"):
+        try:
+            wei = parse_hex_int(raw_value)
+            out["value"] = {"wei": wei, "eth": wei_to_eth_str(wei)}
+        except ValueError:
+            pass
+    # gas-price-shaped fields
+    for field in _TX_GWEI_FIELDS:
+        raw_val = result.get(field)
+        if raw_val is not None and isinstance(raw_val, str) and raw_val.startswith("0x"):
+            try:
+                wei = parse_hex_int(raw_val)
+                out[field] = {"wei": wei, "gwei": _wei_to_gwei_str(wei)}
+            except ValueError:
+                pass
+    return out
+
+
+def _decode_receipt(result):
+    """Decode a transaction receipt object result. Returns {raw: result, <decoded fields>}.
+
+    Decodes: blockNumber, transactionIndex, gasUsed, cumulativeGasUsed,
+    effectiveGasPrice, status, type.
+    Defensive: missing or non-hex field -> omit.
+    """
+    if result is None:
+        return None
+    if not isinstance(result, dict):
+        return {"raw": result}
+
+    _RECEIPT_INT_FIELDS = (
+        "blockNumber", "transactionIndex", "gasUsed",
+        "cumulativeGasUsed", "effectiveGasPrice", "status", "type",
+    )
+    out = {"raw": result}
+    for field in _RECEIPT_INT_FIELDS:
+        raw_val = result.get(field)
+        if raw_val is not None and isinstance(raw_val, str) and raw_val.startswith("0x"):
+            try:
+                out[field] = parse_hex_int(raw_val)
+            except ValueError:
+                pass
+    return out
+
+
+def _decode_log_entry(entry):
+    """Decode a single log entry dict. Returns {raw: entry, blockNumber, logIndex, transactionIndex}.
+
+    topics/data/address/hashes remain in raw only.
+    Defensive: missing field -> omit; non-dict entry -> return untouched.
+    """
+    if not isinstance(entry, dict):
+        return entry
+    out = {"raw": entry}
+    for field in ("blockNumber", "logIndex", "transactionIndex"):
+        raw_val = entry.get(field)
+        if raw_val is not None and isinstance(raw_val, str) and raw_val.startswith("0x"):
+            try:
+                out[field] = parse_hex_int(raw_val)
+            except ValueError:
+                pass
+    return out
+
+
+# Methods that return block objects.
+_BLOCK_METHODS = frozenset({
+    "eth_getBlockByNumber",
+    "eth_getBlockByHash",
+})
+
+# Methods that return transaction objects.
+_TX_METHODS = frozenset({
+    "eth_getTransactionByHash",
+    "eth_getTransactionByBlockHashAndIndex",
+    "eth_getTransactionByBlockNumberAndIndex",
+})
+
+# Methods that return receipt objects.
+_RECEIPT_METHODS = frozenset({
+    "eth_getTransactionReceipt",
+})
+
+# Methods that return log arrays.
+_LOG_METHODS = frozenset({
+    "eth_getLogs",
+})
+
+
+def _decode_result(method, result):
+    """Post-process raw JSON-RPC result for well-known method shapes.
+
+    Returns decoded representation, or result unchanged if not recognised.
+    NEVER raises — decode must not break passthrough.
+    """
+    try:
+        if method in _HEX_QUANTITY_METHODS:
+            return _decode_hex_quantity(method, result)
+        if method in _BLOCK_METHODS:
+            return _decode_block(result)
+        if method in _TX_METHODS:
+            return _decode_tx(result)
+        if method in _RECEIPT_METHODS:
+            return _decode_receipt(result)
+        if method in _LOG_METHODS:
+            if not isinstance(result, list):
+                return result
+            return [_decode_log_entry(entry) for entry in result]
+    except Exception:
+        # Defensive: any unexpected error must not break passthrough.
+        pass
+    return result
+
+# === END MODULE: decode ===
 
 
 # === MODULE: param_ingest ===

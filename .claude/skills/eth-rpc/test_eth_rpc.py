@@ -1432,5 +1432,88 @@ class TestCliSmoke(unittest.TestCase):
         self.assertIn("error:", proc.stderr)
 
 
+class TestDecodeResult(unittest.TestCase):
+    """Tests for _decode_result — pure function, no mocked rpc needed.
+
+    Fixtures are hand-rolled; comments note the source field shapes.
+    """
+
+    # ----- Issue 2.2: hex-quantity methods -----
+
+    def test_block_number_decoded(self):
+        result = r._decode_result("eth_blockNumber", "0x10")
+        self.assertEqual(result, {"hex": "0x10", "decimal": 16})
+
+    def test_chain_id_decoded(self):
+        result = r._decode_result("eth_chainId", "0x88bb0")
+        self.assertEqual(result["decimal"], 560048)
+        self.assertEqual(result["hex"], "0x88bb0")
+
+    def test_get_transaction_count_decoded(self):
+        result = r._decode_result("eth_getTransactionCount", "0x5")
+        self.assertEqual(result, {"hex": "0x5", "decimal": 5})
+
+    def test_estimate_gas_decoded(self):
+        result = r._decode_result("eth_estimateGas", "0x5208")
+        self.assertEqual(result["decimal"], 21000)
+        self.assertEqual(result["hex"], "0x5208")
+
+    def test_get_balance_decoded(self):
+        # 1 ETH = 10**18 wei = "0xde0b6b3a7640000"
+        result = r._decode_result("eth_getBalance", "0xde0b6b3a7640000")
+        self.assertEqual(result["hex"], "0xde0b6b3a7640000")
+        self.assertEqual(result["wei"], 10 ** 18)
+        self.assertEqual(result["eth"], "1")
+
+    def test_get_balance_tenth_eth(self):
+        # 0.1 ETH = 10**17 wei
+        result = r._decode_result("eth_getBalance", "0x16345785d8a0000")
+        self.assertEqual(result["wei"], 10 ** 17)
+        self.assertEqual(result["eth"], "0.1")
+
+    def test_gas_price_decoded_no_float(self):
+        # 30_000_000_000 wei = 30 gwei (exact integer divmod)
+        result = r._decode_result("eth_gasPrice", hex(30_000_000_000))
+        self.assertEqual(result["wei"], 30_000_000_000)
+        self.assertEqual(result["gwei"], "30")
+        # Must not contain float keys
+        self.assertNotIn("decimal", result)
+
+    def test_max_priority_fee_decoded(self):
+        # 1_500_000_000 wei = 1 gwei + 500000000 rem
+        result = r._decode_result("eth_maxPriorityFeePerGas", hex(1_500_000_000))
+        self.assertEqual(result["wei"], 1_500_000_000)
+        self.assertIn("gwei", result)
+
+    def test_unknown_method_passthrough(self):
+        payload = {"foo": "bar"}
+        result = r._decode_result("eth_someUnknown", payload)
+        self.assertIs(result, payload)
+
+    def test_null_result_returned_unchanged(self):
+        result = r._decode_result("eth_blockNumber", None)
+        self.assertIsNone(result)
+
+    def test_non_hex_string_passthrough(self):
+        # result is not a hex string — must return unchanged, never raise
+        result = r._decode_result("eth_blockNumber", "not-hex")
+        self.assertEqual(result, "not-hex")
+
+    def test_hex_quantity_methods_frozenset(self):
+        # Drift guard: the frozenset must contain exactly these seven methods
+        self.assertEqual(
+            r._HEX_QUANTITY_METHODS,
+            frozenset({
+                "eth_blockNumber",
+                "eth_gasPrice",
+                "eth_chainId",
+                "eth_getTransactionCount",
+                "eth_estimateGas",
+                "eth_maxPriorityFeePerGas",
+                "eth_getBalance",
+            }),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
