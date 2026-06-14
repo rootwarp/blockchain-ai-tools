@@ -808,7 +808,7 @@ def _decode_proof(result):
                 continue
             decoded_slot = {
                 "key": slot.get("key"),
-                "proof": slot.get("proof", []),
+                "proof": slot.get("proof") or [],  # null/absent/non-list -> []
             }
             raw_val = slot.get("value")
             if (raw_val is not None and isinstance(raw_val, str)

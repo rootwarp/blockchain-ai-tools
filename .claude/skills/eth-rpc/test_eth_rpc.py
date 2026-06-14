@@ -2333,6 +2333,24 @@ class TestDecodeProof(unittest.TestCase):
         ],
     }
 
+    def test_storage_proof_proof_none_defaults_to_empty_list(self):
+        # A node may return proof: null (devnet / malformed) — it must decode to
+        # an empty list, never None, so downstream iteration can't raise.
+        fixture = {
+            "balance": "0x1",
+            "nonce": "0x0",
+            "storageProof": [{"key": "0x0", "value": "0x1", "proof": None}],
+        }
+        out = r._decode_proof(fixture)
+        self.assertEqual(out["storageProof"][0]["proof"], [])
+
+    def test_account_proof_left_in_raw_only(self):
+        # accountProof is a byte-array witness, not a quantity — it must stay in
+        # raw and never be decoded/int-parsed at the top level.
+        out = r._decode_proof(self.FULL)
+        self.assertNotIn("accountProof", out)
+        self.assertIn("accountProof", out["raw"])
+
     # EOA with zero balance, empty storageProof.
     EOA = {
         "balance": "0x0",
