@@ -940,6 +940,9 @@ def _build_parser():
                             help="human-readable token amount (e.g. 1.5)")
     p_transfer.add_argument("--sender", required=True,
                             help="signing account address (0x + 40 hex)")
+    p_transfer.add_argument("--summary-only", action="store_true",
+                            dest="summary_only",
+                            help="print the stderr summary + warnings only; do NOT print the TxRequest JSON on stdout")
 
     # --- approve ---
     p_approve = sub.add_parser("approve", help="ERC-20 approve(spender, amount)")
@@ -959,6 +962,9 @@ def _build_parser():
     amt_group.add_argument("--approve-max", action="store_true",
                            dest="approve_max",
                            help="approve MAX_UINT256 (unlimited); prints loud WARNING:")
+    p_approve.add_argument("--summary-only", action="store_true",
+                           dest="summary_only",
+                           help="print the stderr summary + warnings only; do NOT print the TxRequest JSON on stdout")
 
     # --- transfer-from ---
     p_tf = sub.add_parser("transfer-from",
@@ -976,6 +982,9 @@ def _build_parser():
                       help="human-readable token amount (e.g. 1.5)")
     p_tf.add_argument("--sender", required=True,
                       help="signing / spender account address (0x + 40 hex)")
+    p_tf.add_argument("--summary-only", action="store_true",
+                      dest="summary_only",
+                      help="print the stderr summary + warnings only; do NOT print the TxRequest JSON on stdout")
 
     return parser
 
@@ -1032,6 +1041,8 @@ def main(argv=None):
         for w_kind, w_payload in warns:
             emit_warning(w_kind, w_payload)
         print_summary(ctx)
+        if getattr(args, "summary_only", False):
+            return 0
         print(json.dumps(tx, indent=2))
         return 0
     except (ValueError, _core.RPCError) as e:

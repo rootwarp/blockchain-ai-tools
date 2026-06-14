@@ -2087,6 +2087,126 @@ class TestCliDispatch(unittest.TestCase):
         self.assertIn("error:", fake_err.getvalue())
         self.assertIn("execution reverted", fake_err.getvalue())
 
+    # -----------------------------------------------------------------------
+    # Issue 2.7: --summary-only flag
+    # -----------------------------------------------------------------------
+
+    def test_transfer_help_lists_summary_only(self):
+        """transfer --help includes --summary-only."""
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+            with self.assertRaises(SystemExit):
+                b.main(["transfer", "--help"])
+        self.assertIn("--summary-only", fake_out.getvalue())
+
+    def test_approve_help_lists_summary_only(self):
+        """approve --help includes --summary-only."""
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+            with self.assertRaises(SystemExit):
+                b.main(["approve", "--help"])
+        self.assertIn("--summary-only", fake_out.getvalue())
+
+    def test_transfer_from_help_lists_summary_only(self):
+        """transfer-from --help includes --summary-only."""
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+            with self.assertRaises(SystemExit):
+                b.main(["transfer-from", "--help"])
+        self.assertIn("--summary-only", fake_out.getvalue())
+
+    def test_transfer_summary_only_exit_0_empty_stdout_summary_on_stderr(self):
+        """transfer --summary-only → exit 0, stdout empty, summary on stderr."""
+        with mock.patch("build_erc20.do_transfer",
+                        return_value=(self.FAKE_TX, self.FAKE_CTX, [])):
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+                with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+                    result = b.main([
+                        "transfer", "--network", "mainnet",
+                        "--token", self.TOKEN, "--to", self.TO,
+                        "--amount", "1.5", "--sender", self.SENDER,
+                        "--summary-only",
+                    ])
+        self.assertEqual(result, 0)
+        self.assertEqual(fake_out.getvalue(), "")
+        self.assertIn("operation", fake_err.getvalue())
+
+    def test_approve_max_summary_only_exit_0_empty_stdout_warning_and_summary_on_stderr(self):
+        """approve --approve-max --summary-only → exit 0, stdout empty,
+        stderr contains approve_max WARNING and summary block."""
+        approve_ctx = dict(self.FAKE_CTX, operation="approve",
+                           is_max_uint=True,
+                           holder=self.SENDER, spender=self.SPENDER)
+        warns = [("approve_max", {
+            "symbol": "USDC",
+            "token": self.TOKEN,
+            "spender": self.SPENDER,
+        })]
+        with mock.patch("build_erc20.do_approve",
+                        return_value=(self.FAKE_TX, approve_ctx, warns)):
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+                with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+                    result = b.main([
+                        "approve", "--network", "mainnet",
+                        "--token", self.TOKEN, "--spender", self.SPENDER,
+                        "--approve-max", "--sender", self.SENDER,
+                        "--summary-only",
+                    ])
+        self.assertEqual(result, 0)
+        self.assertEqual(fake_out.getvalue(), "")
+        stderr = fake_err.getvalue()
+        self.assertIn("WARNING:", stderr)
+        self.assertIn("operation", stderr)
+
+    def test_summary_only_estimate_gas_raises_exit_1_empty_stdout_error_on_stderr(self):
+        """--summary-only does NOT mask fatal errors: estimate_gas raises → exit 1,
+        stdout empty, error: on stderr."""
+        with mock.patch("build_erc20.do_transfer",
+                        side_effect=b._core.RPCError("execution reverted")):
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+                with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+                    result = b.main([
+                        "transfer", "--network", "mainnet",
+                        "--token", self.TOKEN, "--to", self.TO,
+                        "--amount", "1.5", "--sender", self.SENDER,
+                        "--summary-only",
+                    ])
+        self.assertEqual(result, 1)
+        self.assertEqual(fake_out.getvalue(), "")
+        self.assertIn("error:", fake_err.getvalue())
+
+    def test_transfer_without_summary_only_still_prints_json(self):
+        """Without --summary-only, happy-path JSON still goes to stdout (unchanged)."""
+        with mock.patch("build_erc20.do_transfer",
+                        return_value=(self.FAKE_TX, self.FAKE_CTX, [])):
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+                with mock.patch("sys.stderr", new_callable=io.StringIO):
+                    result = b.main([
+                        "transfer", "--network", "mainnet",
+                        "--token", self.TOKEN, "--to", self.TO,
+                        "--amount", "1.5", "--sender", self.SENDER,
+                    ])
+        self.assertEqual(result, 0)
+        parsed = json.loads(fake_out.getvalue())
+        self.assertEqual(parsed, self.FAKE_TX)
+
+    def test_transfer_from_summary_only_exit_0_empty_stdout(self):
+        """transfer-from --summary-only → exit 0, stdout empty."""
+        tf_ctx = dict(self.FAKE_CTX, operation="transfer-from",
+                      from_=self.FROM_, sender=self.SENDER)
+        with mock.patch("build_erc20.do_transfer_from",
+                        return_value=(self.FAKE_TX, tf_ctx, [])):
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+                with mock.patch("sys.stderr", new_callable=io.StringIO):
+                    result = b.main([
+                        "transfer-from", "--network", "mainnet",
+                        "--token", self.TOKEN,
+                        "--from", self.FROM_,
+                        "--to", self.TO,
+                        "--amount", "1.5",
+                        "--sender", self.SENDER,
+                        "--summary-only",
+                    ])
+        self.assertEqual(result, 0)
+        self.assertEqual(fake_out.getvalue(), "")
+
 
 if __name__ == "__main__":
     unittest.main()
