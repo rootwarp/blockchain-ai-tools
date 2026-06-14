@@ -225,13 +225,53 @@ python3 build_erc20.py approve \
 
 `--revoke` is mutually exclusive with `--amount` and `--approve-max`. The resulting
 calldata is `approve(spender, 0)`. The stderr summary shows `operation: revoke`; a
-confirmation block names the token and spender. Live hoodi e2e transcript will be
-filled in by Issue 3.8.
+confirmation block names the token and spender.
 
-**Legacy-token `symbol()` coverage:** `build_erc20.py` now decodes additional
-historical `symbol()` return formats beyond standard ABI `string`, including
-DGD-style length-prefixed bytes32. See **ADR-013** in
-`plan/eth-tx-builder-erc20/architecture.md` for the bounded format catalog.
+#### Issue 3.8 e2e capture
+
+**`--revoke` build (deterministic; sepolia inputs).** Exit 0; the amount word of the
+calldata is all-zeros (`approve(spender, 0)`):
+
+```console
+$ python3 build_erc20.py approve --network sepolia --token 0x1111...1111 \
+    --spender 0x4444...4444 --revoke --sender 0x5555...5555
+# stderr:
+Revoking approval: setting allowance to 0 for
+  token  : USDC (0x1111111111111111111111111111111111111111)
+  spender: 0x4444444444444444444444444444444444444444
+This transaction calls approve(spender, 0).
+--- ERC-20 transaction summary ---
+operation         : revoke
+...
+amount (base units): 0
+...
+# stdout (data): 0x095ea7b3 <spender padded> 0000...0000   (amount word = 32 zero bytes)
+```
+
+> **`--revoke` LIVE broadcast + on-chain `allowance(sender,spender)==0` verification:
+> DEFERRED (Risk R1).** The signer wallet holds no testnet ERC-20 and the e2e token is
+> operator-provided; setting/clearing allowance requires a live broadcast we cannot make
+> autonomously. When an operator funds a hoodi ERC-20, broadcast the JSON above via the
+> `eth-rpc` skill and verify the post-state with `eth-rpc`'s generic `call` op against
+> `allowance(address,address)` (selector `0xdd62ed3e`); the return must be 32 zero bytes.
+
+**Legacy-token `symbol()` coverage — LIVE mainnet read-only readback (Issue 3.4 / 3.8).**
+The polished `decode_symbol` was verified against real on-chain `symbol()` responses
+(read-only `eth_call`, no broadcast):
+
+| token | address | raw `symbol()` (head) | `decode_symbol` → |
+|---|---|---|---|
+| MKR (legacy bytes32) | `0x9f8F72aA9304c8B593d555F12eF6589cC3A579A2` | `0x4d4b5200…` | `"MKR"` |
+| USDC (standard ABI string) | `0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48` | `0x0000…0020…` | `"USDC"` |
+
+See **ADR-013** in `plan/eth-tx-builder-erc20/architecture.md` for the bounded format
+catalog (standard ABI string → null-trimmed bytes32 → length-prefixed bytes32 → `None`).
+
+> **Phase 1 regression:** Phase 3 is additive — the happy-path `TxRequest` JSON for
+> `transfer` / `approve` / `transfer-from` is byte-identical before and after every
+> Phase 3 change (verified deterministically with fixed RPC inputs). The live hoodi
+> re-run of the Phase 1 three-op e2e is deferred (R1, same token dependency).
+> **`permit`:** no e2e — Phase 3 ships no `permit` code (paper-only ADR-014 + draft PRD).
 
 ## Supported networks
 

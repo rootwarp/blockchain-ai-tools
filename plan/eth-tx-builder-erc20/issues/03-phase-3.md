@@ -859,36 +859,36 @@ The acceptance criteria are explicitly **conditional on which of 3.2 /
 `develop` (ANY-OF), and covers only the shipped feature(s).
 
 **Always (unconditional):**
-- [ ] At least one of Issue 3.2 or Issue 3.4 has shipped on `develop`
+- [x] At least one of Issue 3.2 or Issue 3.4 has shipped on `develop`
       before this issue starts (the ANY-OF entry criterion).
-- [ ] No broken cross-links to other doc sections.
-- [ ] `python3 build_erc20.py --help` and `python3 build_erc20.py
+- [x] No broken cross-links to other doc sections.
+- [x] `python3 build_erc20.py --help` and `python3 build_erc20.py
       approve --help` still work; example invocations in docs match
       the actual help output.
-- [ ] No `*.md` file is reformatted wholesale; only added /
+- [x] No `*.md` file is reformatted wholesale; only added /
       replaced sections (keeps the diff readable).
-- [ ] Phase 1's "ETH send" SKILL.md content is unchanged.
-- [ ] Phase 1's README "Manual end-to-end" entries for the three
+- [x] Phase 1's "ETH send" SKILL.md content is unchanged.
+- [x] Phase 1's README "Manual end-to-end" entries for the three
       base ops are unchanged.
-- [ ] No `permit` content is added to SKILL.md or README in this
+- [x] No `permit` content is added to SKILL.md or README in this
       issue (Issue 3.6 owns the draft PRD skeleton; `permit` docs
       ship under the fresh PRD).
 
 **Conditional on Issue 3.2 (`--revoke`) having shipped:**
-- [ ] SKILL.md "Inputs" section mentions `--revoke` as a third mutex
+- [x] SKILL.md "Inputs" section mentions `--revoke` as a third mutex
       entry for `approve`, with the one-line explanation.
-- [ ] README has a worked `--revoke` example mirroring the Phase 1
+- [x] README has a worked `--revoke` example mirroring the Phase 1
       `approve --amount` and `approve --approve-max` examples.
-- [ ] SKILL.md "Notes / caveats" includes the "approve(0) is the
+- [x] SKILL.md "Notes / caveats" includes the "approve(0) is the
       standard mechanism but not universally honoured" note
       (project plan R9 mitigation).
-- [ ] SKILL.md "Procedure" step has a routing hint for
+- [x] SKILL.md "Procedure" step has a routing hint for
       "operator intent = remove a previous allowance" → `--revoke`.
 
 **Conditional on Issue 3.4 (polished `bytes32` decode) having shipped:**
-- [ ] SKILL.md "symbol display" notes mention the broader legacy-token
+- [x] SKILL.md "symbol display" notes mention the broader legacy-token
       coverage and cross-reference ADR-013.
-- [ ] README has a one-line acknowledgement of the expanded coverage
+- [x] README has a one-line acknowledgement of the expanded coverage
       (no enumeration of byte formats — point at ADR-013).
 
 **Conditional on neither 3.2 nor 3.4 having shipped:**
@@ -1396,7 +1396,7 @@ integration branch.
 - New files to create: none.
 
 **Acceptance Criteria:**
-- [ ] Every Phase 3 feature that shipped (subset of `--revoke`,
+- [x] Every Phase 3 feature that shipped (subset of `--revoke`,
       polished `bytes32` decode) has a successful manual e2e
       captured in README, with the literal CLI invocation and
       the literal output.
@@ -1408,24 +1408,24 @@ integration branch.
       If Assumption A1 turned out false, the fallback verifier
       from Assumption A2 is captured instead, with a note
       explaining which path was taken.
-- [ ] If polished `bytes32` decode shipped: at least one
+- [x] If polished `bytes32` decode shipped: at least one
       manual-readback confirms a legacy-format ticker decodes
       correctly (mainnet read-only acceptable if no such token
       exists on hoodi).
-- [ ] **No `permit` e2e is run** — Issues 3.6 / 3.7 ship no
+- [x] **No `permit` e2e is run** — Issues 3.6 / 3.7 ship no
       `permit` code, so there is nothing to e2e. The Phase 3
       commit message references ADR-014 but does NOT claim
       `permit` was tested.
-- [ ] Phase 1's three manual e2e ops (`transfer`, `approve
+- [x] Phase 1's three manual e2e ops (`transfer`, `approve
       --amount`, `transfer-from`) STILL pass on hoodi after the
       Phase 3 commits — re-run as a regression check and capture
       a "Phase 1 regression OK" note in README.
-- [ ] `cd .claude/skills/eth-tx-builder && python3 -m unittest
+- [x] `cd .claude/skills/eth-tx-builder && python3 -m unittest
       test_build_erc20 -v` is still green after the docs commit.
-- [ ] `cd .claude/skills/eth-tx-builder && python3 -m unittest
+- [x] `cd .claude/skills/eth-tx-builder && python3 -m unittest
       test_build_send_eth -v` is still green after the docs commit
       (Phase 3 does not touch v1).
-- [ ] The combined Phase 3 work is committed on `develop` with a
+- [x] The combined Phase 3 work is committed on `develop` with a
       message that references the PRD (`plan/eth-tx-builder-erc20/
       prd.md`), project plan, and ADRs added in this phase
       (ADR-012 / ADR-013, and ADR-014 if Issue 3.6 ran, and
@@ -1433,7 +1433,7 @@ integration branch.
       draft-PRD-edit path). Issue 3.6's new draft PRD at
       `plan/eth-tx-builder-erc20-permit/prd.md` is also part of the
       commit if it landed.
-- [ ] No commit / PR / merge targets `main`.
+- [x] No commit / PR / merge targets `main`.
 
 **Testing Notes:**
 - Manual e2e is the only network-touching step in Phase 3 (apart
