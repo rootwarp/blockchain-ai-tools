@@ -689,12 +689,27 @@ def _decode_result(method, result):
 
 
 # === MODULE: param_ingest ===
-# Public: _parse_params(raw, *, stdin=sys.stdin) -> list
+# Public: _parse_params(raw, *, stdin=sys.stdin, opener=open) -> list
 
-def _parse_params(raw, *, stdin=sys.stdin):
-    """Parse --params (inline or stdin) into a list, or raise ValueError."""
+def _parse_params(raw, *, stdin=sys.stdin, opener=open):
+    """Parse --params (inline, stdin, or @file) into a list, or raise ValueError.
+
+    Modes:
+      '-'          read from stdin.
+      '@<path>'    read from file at <path>. '@-' is a file path, not stdin.
+      '<json>'     parse inline JSON.
+    """
     if raw == "-":
         raw = stdin.read()
+    elif raw.startswith("@"):
+        # @<path>: read file contents. @- is intentionally not equivalent
+        # to bare "-" — the @ prefix unambiguously means "file path".
+        path = raw[1:]
+        try:
+            with opener(path, "r") as fh:
+                raw = fh.read()
+        except OSError as e:
+            raise ValueError("--params @%s: %s" % (path, e))
     try:
         value = json.loads(raw)
     except ValueError as e:

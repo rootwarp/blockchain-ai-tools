@@ -146,7 +146,19 @@ Must be a JSON array string (top-level type list). Anything else is rejected.
 - Inline: `--params '["0x...", "latest"]'`
 - Stdin: `--params -` reads the rest of stdin as a JSON array (useful for large
   `eth_getLogs` filter objects).
-- `@file` (deferred to P1 — not yet supported).
+- `@file`: `--params @./logs-filter.json` reads the file at the given path.
+  `@-` is **not** equivalent to `-` — it attempts to open a literal file named
+  `-` and will fail with a clear error. Use plain `-` for stdin.
+
+```bash
+# Save a large eth_getLogs filter to a file, then pass it:
+cat > /tmp/logs-filter.json <<'EOF'
+[{"fromBlock": "0x1000", "toBlock": "0x2000",
+  "address": "0xdac17f958d2ee523a2206206994597c13d831ec7"}]
+EOF
+python3 eth_rpc.py call --network mainnet \
+  --method eth_getLogs --params @/tmp/logs-filter.json
+```
 
 Block tags (`"latest"`, `"pending"`, `"finalized"`, `"safe"`, `"earliest"`) and
 hex addresses/quantities are the operator's responsibility; no per-method
@@ -381,5 +393,4 @@ Output: `{"chainId": "...", "clientVersion": "..."}`.
 - `debug_*` / `trace_*` namespaces (many nodes refuse them; not documented).
 - Subscription / websocket transports (`eth_subscribe`).
 - Multi-network parallel fan-out.
-- `--params @file` syntax (deferred to P1).
-- Decoded output for `eth_feeHistory` / `eth_getProof` (deferred to Phase 2+).
+- Decoded output for `eth_feeHistory` / `eth_getProof` (deferred to a future phase).

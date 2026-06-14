@@ -1226,6 +1226,46 @@ class TestParseParams(unittest.TestCase):
         with self.assertRaises(ValueError):
             r._parse_params("-", stdin=io.StringIO("not json"))
 
+    # ----- Issue 2.7: @file extension -----
+
+    def _make_opener(self, contents):
+        """Return a fake opener(path, mode) context manager yielding StringIO."""
+        class _FakeFile:
+            def __enter__(self_):
+                return io.StringIO(contents)
+            def __exit__(self_, *args):
+                pass
+        def opener(path, mode="r"):
+            return _FakeFile()
+        return opener
+
+    def test_at_file_happy_path(self):
+        opener = self._make_opener('[{"fromBlock":"0x0","toBlock":"0x10"}]')
+        result = r._parse_params("@/path/to/params.json", opener=opener)
+        self.assertEqual(result, [{"fromBlock": "0x0", "toBlock": "0x10"}])
+
+    def test_at_file_no_such_file_raises(self):
+        # Real filesystem: no such file
+        with self.assertRaises(ValueError) as ctx:
+            r._parse_params("@/no/such/file.json")
+        self.assertIn("/no/such/file.json", str(ctx.exception))
+
+    def test_at_dash_raises_with_path_in_message(self):
+        # @- falls into file branch; must raise a clear ValueError, not open stdin
+        with self.assertRaises(ValueError) as ctx:
+            r._parse_params("@-")
+        self.assertIn("@-", str(ctx.exception))
+
+    def test_stdin_regression(self):
+        # '-' without '@' still reads stdin
+        result = r._parse_params("-", stdin=io.StringIO('["regression"]'))
+        self.assertEqual(result, ["regression"])
+
+    def test_inline_regression(self):
+        # Inline still works
+        result = r._parse_params('["a", "b"]')
+        self.assertEqual(result, ["a", "b"])
+
 
 class TestCallCli(unittest.TestCase):
     """Tests for the `call` subcommand driven through main(argv=[...])."""
