@@ -373,7 +373,19 @@ def do_batch(url, *, calls, allow_write=False, timeout=15, max_body_bytes=None, 
     if wire_payload:
         wire_response = rpc(url, wire_payload, timeout, max_body_bytes=max_body_bytes)
         # Re-sort by id (servers may return out of order per JSON-RPC spec).
-        by_id = {entry["id"]: entry for entry in wire_response}
+        # Defensive: skip entries whose "id" is absent/None (JSON-RPC permits
+        # this on a parse error).  Normalise string ids to int so that gateways
+        # that echo ids as "0" instead of 0 still match our int-keyed wire_payload.
+        by_id = {}
+        for entry in wire_response:
+            raw_id = entry.get("id")
+            if raw_id is None:
+                continue
+            try:
+                key = int(raw_id)
+            except (TypeError, ValueError):
+                key = raw_id
+            by_id[key] = entry
         for item in wire_payload:
             i = item["id"]
             server_entry = by_id.get(i, {})

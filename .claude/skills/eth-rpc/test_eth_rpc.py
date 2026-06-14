@@ -1048,6 +1048,51 @@ class TestDoBatch(unittest.TestCase):
                        calls=[{"method": "eth_blockNumber", "params": "[]"}],
                        rpc=make_fake_rpc_batch())
 
+    def test_server_entry_missing_id_yields_synthetic_error_not_crash(self):
+        # Bug fix: server returns an entry with no "id" (JSON-RPC permits this on
+        # parse error). Building {entry["id"]: entry} crashes with KeyError.
+        # The kept slot must become a synthetic -32603 envelope, not a traceback.
+        wire = [{"jsonrpc": "2.0", "error": {"code": -32700, "message": "Parse error"}}]
+        fake = make_fake_rpc_batch(raw_results=wire)
+        result = r.do_batch(self.URL, calls=[{"method": "eth_chainId", "params": []}], rpc=fake)
+        self.assertEqual(len(result), 1)
+        self.assertIn("error", result[0])
+        self.assertEqual(result[0]["id"], 0)
+        self.assertEqual(result[0]["error"]["code"], -32603)
+        self.assertIn("missing result", result[0]["error"]["message"])
+
+    def test_server_string_id_normalised_to_int(self):
+        # Bug fix: some gateways echo ids back as strings ("0" instead of 0).
+        # by_id.get(0) misses and every entry degrades to a synthetic -32603 even
+        # though the server answered correctly. String ids must be normalised to int.
+        wire = [
+            {"jsonrpc": "2.0", "id": "0", "result": "0x88bb0"},
+            {"jsonrpc": "2.0", "id": "1", "result": "0x1"},
+        ]
+        fake = make_fake_rpc_batch(raw_results=wire)
+        calls = [
+            {"method": "eth_chainId", "params": []},
+            {"method": "eth_blockNumber", "params": []},
+        ]
+        result = r.do_batch(self.URL, calls=calls, rpc=fake)
+        self.assertEqual(result[0], {"id": 0, "result": "0x88bb0"})
+        self.assertEqual(result[1], {"id": 1, "result": "0x1"})
+
+    def test_all_entries_denied_never_calls_rpc(self):
+        # Invariant: when every batch entry is denied, rpc must never be called.
+        calls = [
+            {"method": "eth_sendRawTransaction", "params": ["0x02ab"]},
+            {"method": "personal_unlockAccount", "params": []},
+        ]
+
+        def rpc_must_not_be_called(url, payload, timeout, max_body_bytes=None):
+            raise AssertionError("rpc should not be called when all entries are denied")
+
+        result = r.do_batch(self.URL, calls=calls, rpc=rpc_must_not_be_called)
+        self.assertEqual(len(result), 2)
+        for entry in result:
+            self.assertIn("error", entry)
+
 
 class TestBatchCli(unittest.TestCase):
     """Tests for the `batch` subcommand driven through main(argv=[...])."""
