@@ -579,16 +579,20 @@ class TestDoDiagnostics(unittest.TestCase):
             r.do_client_version(self.URL, self.CHAIN_ID, rpc=rpc)
 
     def test_net_version_output_has_network_key(self):
-        # Output includes network field (resolved from chain_id or passed explicitly)
-        # do_net_version takes (url, chain_id); caller resolves network name
-        out = r.do_net_version(self.URL, self.CHAIN_ID, rpc=self._fake("560048"))
+        # Spec (Issue 3.7): output must include network, chainId, AND netVersion.
+        out = r.do_net_version(self.URL, self.CHAIN_ID, network="hoodi", rpc=self._fake("560048"))
         self.assertIn("chainId", out)
         self.assertIn("netVersion", out)
+        self.assertIn("network", out)
+        self.assertEqual(out["network"], "hoodi")
 
     def test_client_version_output_has_network_key(self):
-        out = r.do_client_version(self.URL, self.CHAIN_ID, rpc=self._fake("Geth/v1"))
+        # Spec (Issue 3.7): output must include network, chainId, AND clientVersion.
+        out = r.do_client_version(self.URL, self.CHAIN_ID, network="hoodi", rpc=self._fake("Geth/v1"))
         self.assertIn("chainId", out)
         self.assertIn("clientVersion", out)
+        self.assertIn("network", out)
+        self.assertEqual(out["network"], "hoodi")
 
 
 class TestDiagnosticsCli(unittest.TestCase):

@@ -405,16 +405,22 @@ def do_batch(url, *, calls, allow_write=False, timeout=15, max_body_bytes=None, 
 # Public: do_net_version(url, chain_id, *, timeout=15, rpc=rpc_call) -> dict
 # Public: do_client_version(url, chain_id, *, timeout=15, rpc=rpc_call) -> dict
 
-def do_net_version(url, chain_id, *, timeout=15, rpc=rpc_call):
-    """Call net_version and return a wrapped dict including chainId."""
+def do_net_version(url, chain_id, *, network=None, timeout=15, rpc=rpc_call):
+    """Call net_version and return a wrapped dict including chainId (and network if given)."""
     result = rpc(url, "net_version", [], timeout=timeout)
-    return {"chainId": str(chain_id), "netVersion": result}
+    out = {"chainId": str(chain_id), "netVersion": result}
+    if network is not None:
+        out["network"] = network
+    return out
 
 
-def do_client_version(url, chain_id, *, timeout=15, rpc=rpc_call):
-    """Call web3_clientVersion and return a wrapped dict including chainId."""
+def do_client_version(url, chain_id, *, network=None, timeout=15, rpc=rpc_call):
+    """Call web3_clientVersion and return a wrapped dict including chainId (and network if given)."""
     result = rpc(url, "web3_clientVersion", [], timeout=timeout)
-    return {"chainId": str(chain_id), "clientVersion": result}
+    out = {"chainId": str(chain_id), "clientVersion": result}
+    if network is not None:
+        out["network"] = network
+    return out
 
 # === END MODULE: do_diagnostics ===
 
@@ -546,9 +552,9 @@ def main(argv=None):
                 chain_id=args.chain_id,
             )
             if args.command == "net-version":
-                result = do_net_version(url, chain_id, timeout=args.timeout)
+                result = do_net_version(url, chain_id, network=args.network, timeout=args.timeout)
             else:
-                result = do_client_version(url, chain_id, timeout=args.timeout)
+                result = do_client_version(url, chain_id, network=args.network, timeout=args.timeout)
             print(json.dumps(result, indent=2))
             return 0
         else:
