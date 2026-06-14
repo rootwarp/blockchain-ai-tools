@@ -189,11 +189,27 @@ error: method net_version is not in the documented eth_* read surface (--read-on
 decimal alongside the raw hex; the raw passthrough is unchanged when `--decode` is
 omitted.
 
+## Phase 3.4 manual end-to-end (--decode eth_feeHistory / eth_getProof)
+
+<!-- PLACEHOLDER: team lead runs the live hoodi call and fills in the transcript below. -->
+
+```bash
+# eth_feeHistory with --decode (run against hoodi; replace with live output)
+$ python3 eth_rpc.py call --network hoodi --decode \
+    --method eth_feeHistory --params '[1, "latest", []]'
+# <PASTE LIVE OUTPUT HERE>
+
+# eth_getProof with --decode (run against hoodi; replace address + slot with real values)
+$ python3 eth_rpc.py call --network hoodi --decode \
+    --method eth_getProof \
+    --params '["0x<address>", ["0x0"], "latest"]'
+# <PASTE LIVE OUTPUT HERE>
+```
+
 ## Future operations (not yet implemented)
 
 - ERC-20 balance / `balanceOf` via `call --method eth_call` with decoded output.
 - Block-tag selection for `balance` (currently fixed at `latest`; `call` accepts
   any block tag the operator passes in `--params`).
-- Decoded output for `eth_feeHistory` / `eth_getProof`.
 
 Each reuses the network table and RPC plumbing here.

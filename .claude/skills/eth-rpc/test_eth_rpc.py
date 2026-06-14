@@ -2135,5 +2135,332 @@ class TestCallDecodeCli(unittest.TestCase):
         self.assertEqual(json.loads(out), fake_block)
 
 
+class TestDecodeFeeHistory(unittest.TestCase):
+    """Tests for _decode_fee_history (Issue 3.4).
+
+    Fixtures are hand-rolled dicts modelled on real eth_feeHistory responses.
+    All tests are purely static (no network, no mocked rpc).
+    """
+
+    # Full fixture: 3-block range with reward percentiles.
+    FULL = {
+        "oldestBlock": "0x10",
+        "baseFeePerGas": ["0x9502f900", "0xa0a0a000", "0x8b000000"],
+        "gasUsedRatio": [0.5, 0.7, 0.3],
+        "reward": [
+            ["0x3b9aca00", "0x77359400"],
+            ["0x3b9aca00", "0x5f5e1000"],
+            ["0x3b9aca00", "0x77359400"],
+        ],
+    }
+
+    # No-reward fixture: feeHistory called without percentiles arg.
+    NO_REWARD = {
+        "oldestBlock": "0x20",
+        "baseFeePerGas": ["0x3b9aca00", "0x3b9aca00"],
+        "gasUsedRatio": [0.9, 0.1],
+    }
+
+    # Single-block fixture.
+    SINGLE_BLOCK = {
+        "oldestBlock": "0x1",
+        "baseFeePerGas": ["0x12a05f200"],
+        "gasUsedRatio": [0.5],
+    }
+
+    # Multi-block fixture (5 entries).
+    MULTI_BLOCK = {
+        "oldestBlock": "0x64",
+        "baseFeePerGas": [
+            "0x3b9aca00",
+            "0x3b9aca00",
+            "0x3b9aca00",
+            "0x3b9aca00",
+            "0x3b9aca00",
+        ],
+        "gasUsedRatio": [0.1, 0.2, 0.3, 0.4, 0.5],
+    }
+
+    # Fixture with a malformed baseFeePerGas entry (None in the array).
+    MALFORMED_BASE_FEE = {
+        "oldestBlock": "0x5",
+        "baseFeePerGas": ["0x3b9aca00", None, "0x5f5e1000"],
+        "gasUsedRatio": [0.5, 0.5],
+    }
+
+    def test_full_result_with_reward_has_raw(self):
+        out = r._decode_fee_history(self.FULL)
+        self.assertEqual(out["raw"], self.FULL)
+
+    def test_full_result_oldest_block_decoded(self):
+        out = r._decode_fee_history(self.FULL)
+        self.assertEqual(out["oldestBlock"], 16)  # 0x10
+
+    def test_full_result_base_fee_per_gas_decoded(self):
+        out = r._decode_fee_history(self.FULL)
+        self.assertIn("baseFeePerGas", out)
+        expected = [
+            r.parse_hex_int("0x9502f900"),
+            r.parse_hex_int("0xa0a0a000"),
+            r.parse_hex_int("0x8b000000"),
+        ]
+        self.assertEqual(out["baseFeePerGas"], expected)
+
+    def test_full_result_base_fee_gwei_array(self):
+        out = r._decode_fee_history(self.FULL)
+        self.assertIn("baseFeePerGasGwei", out)
+        # Each entry must be a string
+        for entry in out["baseFeePerGasGwei"]:
+            self.assertIsInstance(entry, str)
+        # 0x9502f900 = 2500000000 wei = 2.5 gwei
+        self.assertEqual(out["baseFeePerGasGwei"][0], "2.5")
+
+    def test_full_result_gas_used_ratio_unchanged(self):
+        out = r._decode_fee_history(self.FULL)
+        self.assertEqual(out["gasUsedRatio"], self.FULL["gasUsedRatio"])
+
+    def test_full_result_reward_decoded(self):
+        out = r._decode_fee_history(self.FULL)
+        self.assertIn("reward", out)
+        # 0x3b9aca00 = 1_000_000_000
+        self.assertEqual(out["reward"][0][0], 1_000_000_000)
+        # 0x77359400 = 2_000_000_000
+        self.assertEqual(out["reward"][0][1], 2_000_000_000)
+
+    def test_full_result_reward_ordering_preserved(self):
+        out = r._decode_fee_history(self.FULL)
+        self.assertEqual(len(out["reward"]), 3)
+        self.assertEqual(len(out["reward"][0]), 2)
+        self.assertEqual(len(out["reward"][1]), 2)
+        self.assertEqual(len(out["reward"][2]), 2)
+
+    def test_missing_reward_field_omitted(self):
+        out = r._decode_fee_history(self.NO_REWARD)
+        self.assertNotIn("reward", out)
+
+    def test_none_reward_field_omitted(self):
+        fixture = dict(self.FULL)
+        fixture["reward"] = None
+        out = r._decode_fee_history(fixture)
+        self.assertNotIn("reward", out)
+
+    def test_single_block_range(self):
+        out = r._decode_fee_history(self.SINGLE_BLOCK)
+        self.assertEqual(out["oldestBlock"], 1)  # 0x1
+        self.assertEqual(len(out["baseFeePerGas"]), 1)
+        self.assertEqual(len(out["baseFeePerGasGwei"]), 1)
+
+    def test_multi_block_range_5_entries(self):
+        out = r._decode_fee_history(self.MULTI_BLOCK)
+        self.assertEqual(len(out["baseFeePerGas"]), 5)
+        self.assertEqual(len(out["baseFeePerGasGwei"]), 5)
+        # 0x3b9aca00 = 1_000_000_000 wei = 1 gwei
+        for val in out["baseFeePerGas"]:
+            self.assertEqual(val, 1_000_000_000)
+        for s in out["baseFeePerGasGwei"]:
+            self.assertEqual(s, "1")
+
+    def test_malformed_base_fee_entry_none_omitted_gracefully(self):
+        # None in baseFeePerGas must produce None (or be skipped) without raising.
+        out = r._decode_fee_history(self.MALFORMED_BASE_FEE)
+        # Must not raise; the valid entries must decode; the None entry must be handled.
+        self.assertIn("baseFeePerGas", out)
+        self.assertEqual(out["baseFeePerGas"][0], r.parse_hex_int("0x3b9aca00"))
+        # None entry: decoded value must be None (not raise, not crash)
+        self.assertIsNone(out["baseFeePerGas"][1])
+        self.assertEqual(out["baseFeePerGas"][2], r.parse_hex_int("0x5f5e1000"))
+
+    def test_oldest_block_non_hex_omitted(self):
+        fixture = {"oldestBlock": "not-hex", "baseFeePerGas": [], "gasUsedRatio": []}
+        out = r._decode_fee_history(fixture)
+        self.assertNotIn("oldestBlock", out)
+        self.assertIn("raw", out)
+
+    def test_oldest_block_none_omitted(self):
+        fixture = {"oldestBlock": None, "baseFeePerGas": [], "gasUsedRatio": []}
+        out = r._decode_fee_history(fixture)
+        self.assertNotIn("oldestBlock", out)
+
+    def test_oldest_block_oversized_omitted(self):
+        fixture = {"oldestBlock": "0x" + "f" * 65, "baseFeePerGas": [], "gasUsedRatio": []}
+        out = r._decode_fee_history(fixture)
+        self.assertNotIn("oldestBlock", out)
+
+    def test_decode_result_dispatches_fee_history(self):
+        # Confirm _decode_result routes eth_feeHistory to _decode_fee_history.
+        out = r._decode_result("eth_feeHistory", self.NO_REWARD)
+        self.assertIn("raw", out)
+        self.assertEqual(out["oldestBlock"], 0x20)
+
+    def test_decode_result_without_decode_flag_returns_raw(self):
+        # _decode_result is only consulted when --decode is set. Without it,
+        # do_call returns the raw dict; the CLI passes it straight to json.dumps.
+        # Here we confirm that calling _decode_result on an eth_feeHistory result
+        # returns a dict with a "raw" key — i.e. it WAS decoded by the helper.
+        # The absence-of-decode path is exercised by test_without_decode_raw_output_unchanged
+        # in TestCallDecodeCli; this test confirms the dispatch side.
+        out = r._decode_result("eth_feeHistory", self.FULL)
+        self.assertIn("raw", out)
+
+
+class TestDecodeProof(unittest.TestCase):
+    """Tests for _decode_proof (Issue 3.4).
+
+    Fixtures are hand-rolled dicts modelled on real eth_getProof responses.
+    """
+
+    # Account with non-zero balance, nonce, and two storage slots.
+    FULL = {
+        "balance": "0xde0b6b3a7640000",   # 1 ETH in wei
+        "nonce": "0x5",
+        "codeHash": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+        "storageHash": "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
+        "accountProof": [
+            "0xf90211a0...",
+            "0xf8718080...",
+        ],
+        "storageProof": [
+            {
+                "key": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "value": "0x1",
+                "proof": ["0xf90211a0...", "0xe3a12080..."],
+            },
+            {
+                "key": "0x0000000000000000000000000000000000000000000000000000000000000001",
+                "value": "0x2710",
+                "proof": ["0xf90211a0..."],
+            },
+        ],
+    }
+
+    # EOA with zero balance, empty storageProof.
+    EOA = {
+        "balance": "0x0",
+        "nonce": "0x0",
+        "codeHash": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+        "storageHash": "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
+        "accountProof": [],
+        "storageProof": [],
+    }
+
+    # Account missing codeHash (defensive test).
+    NO_CODE_HASH = {
+        "balance": "0xa",
+        "nonce": "0x1",
+        "storageHash": "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
+        "accountProof": [],
+        "storageProof": [],
+    }
+
+    def test_full_result_has_raw(self):
+        out = r._decode_proof(self.FULL)
+        self.assertEqual(out["raw"], self.FULL)
+
+    def test_balance_decoded_to_decimal(self):
+        out = r._decode_proof(self.FULL)
+        self.assertEqual(out["balance"], 10 ** 18)  # 0xde0b6b3a7640000
+
+    def test_nonce_decoded_to_decimal(self):
+        out = r._decode_proof(self.FULL)
+        self.assertEqual(out["nonce"], 5)  # 0x5
+
+    def test_code_hash_left_as_raw_hex(self):
+        # codeHash is a 32-byte digest — must NOT be int-parsed.
+        out = r._decode_proof(self.FULL)
+        self.assertNotIn("codeHash", out)   # not a top-level decoded field
+        self.assertIn("codeHash", out["raw"])  # still accessible via raw
+
+    def test_storage_hash_left_as_raw_hex(self):
+        out = r._decode_proof(self.FULL)
+        self.assertNotIn("storageHash", out)
+        self.assertIn("storageHash", out["raw"])
+
+    def test_storage_proof_value_decoded(self):
+        out = r._decode_proof(self.FULL)
+        self.assertEqual(out["storageProof"][0]["value"], 1)   # 0x1
+        self.assertEqual(out["storageProof"][1]["value"], 0x2710)  # 10000
+
+    def test_storage_proof_key_left_as_hex(self):
+        # key is a 32-byte slot — must stay as raw hex string.
+        out = r._decode_proof(self.FULL)
+        self.assertEqual(
+            out["storageProof"][0]["key"],
+            "0x0000000000000000000000000000000000000000000000000000000000000000",
+        )
+
+    def test_storage_proof_proof_array_left_as_hex(self):
+        # proof[] contains Merkle-proof RLP bytes — must NOT be int-parsed.
+        out = r._decode_proof(self.FULL)
+        for entry in out["storageProof"]:
+            for node in entry["proof"]:
+                self.assertIsInstance(node, str)
+
+    def test_eoa_zero_balance_zero_nonce(self):
+        out = r._decode_proof(self.EOA)
+        self.assertEqual(out["balance"], 0)
+        self.assertEqual(out["nonce"], 0)
+
+    def test_eoa_empty_storage_proof(self):
+        out = r._decode_proof(self.EOA)
+        self.assertEqual(out["storageProof"], [])
+
+    def test_multiple_storage_slots(self):
+        out = r._decode_proof(self.FULL)
+        self.assertEqual(len(out["storageProof"]), 2)
+        self.assertEqual(out["storageProof"][0]["value"], 1)
+        self.assertEqual(out["storageProof"][1]["value"], 10000)
+
+    def test_missing_code_hash_omitted_gracefully(self):
+        out = r._decode_proof(self.NO_CODE_HASH)
+        # codeHash is not in the decoded top-level fields anyway (left in raw),
+        # and it being absent from the input should not raise.
+        self.assertIn("raw", out)
+        self.assertNotIn("codeHash", out)
+
+    def test_result_none_returns_none(self):
+        out = r._decode_proof(None)
+        self.assertIsNone(out)
+
+    def test_balance_none_omitted(self):
+        fixture = dict(self.FULL)
+        fixture["balance"] = None
+        out = r._decode_proof(fixture)
+        self.assertNotIn("balance", out)
+
+    def test_nonce_non_hex_omitted(self):
+        fixture = dict(self.FULL)
+        fixture["nonce"] = "not-hex"
+        out = r._decode_proof(fixture)
+        self.assertNotIn("nonce", out)
+
+    def test_balance_oversized_omitted(self):
+        fixture = dict(self.FULL)
+        fixture["balance"] = "0x" + "f" * 65  # > 66 chars
+        out = r._decode_proof(fixture)
+        self.assertNotIn("balance", out)
+
+    def test_storage_value_none_omitted(self):
+        fixture = {
+            "balance": "0x1",
+            "nonce": "0x0",
+            "storageProof": [
+                {
+                    "key": "0x0000",
+                    "value": None,
+                    "proof": [],
+                }
+            ],
+        }
+        out = r._decode_proof(fixture)
+        # value=None must not produce a decoded key (just omit it)
+        self.assertNotIn("value", out["storageProof"][0])
+
+    def test_decode_result_dispatches_get_proof(self):
+        out = r._decode_result("eth_getProof", self.EOA)
+        self.assertIn("raw", out)
+        self.assertEqual(out["balance"], 0)
+        self.assertEqual(out["nonce"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

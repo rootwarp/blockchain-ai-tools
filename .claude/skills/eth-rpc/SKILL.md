@@ -125,6 +125,33 @@ Supported shapes:
 - **Receipt objects** (`eth_getTransactionReceipt`): decoded numeric fields.
 - **Log arrays** (`eth_getLogs`): each entry decoded with
   `{raw, blockNumber, logIndex, transactionIndex}`.
+- **`eth_feeHistory`**: decoded to `{raw, oldestBlock: int, baseFeePerGas: [int],
+  baseFeePerGasGwei: [str], gasUsedRatio: [float], reward?: [[int]]}`. The
+  `baseFeePerGasGwei` array provides exact integer-divmod gwei strings alongside the
+  decoded wei ints. `reward` is omitted when the node omits it (no percentiles arg).
+  Missing or malformed entries in the arrays are represented as `null` rather than
+  raising.
+
+  ```bash
+  python3 eth_rpc.py call --network hoodi --decode \
+    --method eth_feeHistory --params '[1, "latest", []]'
+  # → {"raw": {...}, "oldestBlock": 12345, "baseFeePerGas": [2500000000],
+  #    "baseFeePerGasGwei": ["2.5"], "gasUsedRatio": [0.5]}
+  ```
+
+- **`eth_getProof`**: decoded to `{raw, balance: int, nonce: int,
+  storageProof: [{key: str, value: int, proof: [str]}]}`. `codeHash` and
+  `storageHash` are left as raw hex (32-byte digests — not int-parsed). Each storage
+  slot's `proof` array is left as raw hex RLP nodes. Missing or non-hex fields are
+  omitted rather than raising.
+
+  ```bash
+  python3 eth_rpc.py call --network hoodi --decode \
+    --method eth_getProof \
+    --params '["0x<address>", ["0x0"], "latest"]'
+  # → {"raw": {...}, "balance": 1000000000000000000, "nonce": 5,
+  #    "storageProof": [{"key": "0x0...", "value": 1, "proof": ["0xf9..."]}]}
+  ```
 
 `--decode` is orthogonal to `--allow-write` and `--read-only-strict`.
 
@@ -395,4 +422,3 @@ Output: `{"chainId": "...", "clientVersion": "..."}`.
 - `debug_*` / `trace_*` namespaces (many nodes refuse them; not documented).
 - Subscription / websocket transports (`eth_subscribe`).
 - Multi-network parallel fan-out.
-- Decoded output for `eth_feeHistory` / `eth_getProof` (deferred to a future phase).

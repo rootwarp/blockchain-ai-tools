@@ -682,6 +682,147 @@ _LOG_METHODS = frozenset({
 })
 
 
+def _decode_fee_history(result):
+    """Decode an eth_feeHistory result dict.
+
+    Returns a new dict with decoded numeric fields alongside raw.
+    Decoded additions:
+      - oldestBlock: int decimal (hex -> int)
+      - baseFeePerGas: list of ints (each hex entry decoded)
+      - baseFeePerGasGwei: list of decimal-string gwei values
+      - reward: 2D list of ints (present only if result had a non-None reward)
+      - raw: the unmodified result dict
+    gasUsedRatio is left as-is (already floats per spec).
+    DEFENSIVE: missing/None/non-hex/oversized (> 66 chars) field -> omit decoded
+    variant; never raise.
+    """
+    if not isinstance(result, dict):
+        return result
+
+    out = {"raw": result}
+
+    # oldestBlock: hex quantity -> decimal int
+    raw_ob = result.get("oldestBlock")
+    if (raw_ob is not None and isinstance(raw_ob, str)
+            and raw_ob.startswith("0x") and len(raw_ob) <= 66):
+        try:
+            out["oldestBlock"] = parse_hex_int(raw_ob)
+        except ValueError:
+            pass
+
+    # baseFeePerGas array: decode each entry; produce parallel gwei array.
+    raw_bfpg = result.get("baseFeePerGas")
+    if isinstance(raw_bfpg, list):
+        decoded_bfpg = []
+        gwei_bfpg = []
+        for entry in raw_bfpg:
+            if (entry is not None and isinstance(entry, str)
+                    and entry.startswith("0x") and len(entry) <= 66):
+                try:
+                    wei = parse_hex_int(entry)
+                    decoded_bfpg.append(wei)
+                    gwei_bfpg.append(_wei_to_gwei_str(wei))
+                    continue
+                except ValueError:
+                    pass
+            decoded_bfpg.append(None)
+            gwei_bfpg.append(None)
+        out["baseFeePerGas"] = decoded_bfpg
+        out["baseFeePerGasGwei"] = gwei_bfpg
+
+    # gasUsedRatio: already floats per spec, copy as-is.
+    raw_gur = result.get("gasUsedRatio")
+    if raw_gur is not None:
+        out["gasUsedRatio"] = raw_gur
+
+    # reward: 2D list of hex quantities; omit entirely if absent or None.
+    raw_reward = result.get("reward")
+    if isinstance(raw_reward, list):
+        decoded_reward = []
+        for inner in raw_reward:
+            if not isinstance(inner, list):
+                decoded_reward.append(inner)
+                continue
+            decoded_inner = []
+            for entry in inner:
+                if (entry is not None and isinstance(entry, str)
+                        and entry.startswith("0x") and len(entry) <= 66):
+                    try:
+                        decoded_inner.append(parse_hex_int(entry))
+                        continue
+                    except ValueError:
+                        pass
+                decoded_inner.append(None)
+            decoded_reward.append(decoded_inner)
+        out["reward"] = decoded_reward
+
+    return out
+
+
+def _decode_proof(result):
+    """Decode an eth_getProof result dict.
+
+    Returns a new dict with decoded numeric fields alongside raw.
+    Decoded additions:
+      - balance: int decimal (hex -> int)
+      - nonce: int decimal (hex -> int)
+      - storageProof[]: list of dicts; each entry's value decoded to int;
+        key left as raw hex; proof[] array left as raw hex byte sequences.
+      - raw: the unmodified result dict
+    codeHash, storageHash: left as raw hex (32-byte digests — not int-parsed).
+    DEFENSIVE: missing key/None -> omit decoded variant; never raise;
+    result is None -> return None.
+    """
+    if result is None:
+        return None
+    if not isinstance(result, dict):
+        return {"raw": result}
+
+    out = {"raw": result}
+
+    # balance: hex quantity -> decimal int
+    raw_balance = result.get("balance")
+    if (raw_balance is not None and isinstance(raw_balance, str)
+            and raw_balance.startswith("0x") and len(raw_balance) <= 66):
+        try:
+            out["balance"] = parse_hex_int(raw_balance)
+        except ValueError:
+            pass
+
+    # nonce: hex quantity -> decimal int
+    raw_nonce = result.get("nonce")
+    if (raw_nonce is not None and isinstance(raw_nonce, str)
+            and raw_nonce.startswith("0x") and len(raw_nonce) <= 66):
+        try:
+            out["nonce"] = parse_hex_int(raw_nonce)
+        except ValueError:
+            pass
+
+    # storageProof: decode value for each slot; key and proof[] stay as raw hex.
+    raw_sp = result.get("storageProof")
+    if isinstance(raw_sp, list):
+        decoded_sp = []
+        for slot in raw_sp:
+            if not isinstance(slot, dict):
+                decoded_sp.append(slot)
+                continue
+            decoded_slot = {
+                "key": slot.get("key"),
+                "proof": slot.get("proof", []),
+            }
+            raw_val = slot.get("value")
+            if (raw_val is not None and isinstance(raw_val, str)
+                    and raw_val.startswith("0x") and len(raw_val) <= 66):
+                try:
+                    decoded_slot["value"] = parse_hex_int(raw_val)
+                except ValueError:
+                    pass
+            decoded_sp.append(decoded_slot)
+        out["storageProof"] = decoded_sp
+
+    return out
+
+
 def _decode_result(method, result):
     """Post-process raw JSON-RPC result for well-known method shapes.
 
@@ -703,6 +844,10 @@ def _decode_result(method, result):
             if not isinstance(result, list):
                 return result
             return [_decode_log_entry(entry) for entry in result]
+        if method == "eth_feeHistory":
+            return _decode_fee_history(result)
+        if method == "eth_getProof":
+            return _decode_proof(result)
     except Exception as _exc:
         # Defensive: any unexpected error must not break passthrough.
         # Emit a one-line warning so the operator knows decode was skipped.
