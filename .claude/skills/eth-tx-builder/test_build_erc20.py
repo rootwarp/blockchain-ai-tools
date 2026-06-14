@@ -2207,6 +2207,248 @@ class TestCliDispatch(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(fake_out.getvalue(), "")
 
+    # -----------------------------------------------------------------------
+    # Issue 2.8b: cross-feature regression matrix
+    # -----------------------------------------------------------------------
+
+    def test_regression_matrix_warnings_x_ops_summary_only(self):
+        """4-warning × ops × --summary-only matrix.
+
+        Each subTest sets up a mocked-rpc scenario that fires one warning family,
+        runs main() with --summary-only, and asserts:
+          - exit 0
+          - stdout is empty
+          - stderr contains the WARNING: text + the summary block
+
+        Cells (relocated from 2.7 and 2.8 AC lists):
+          A: approve --approve-max --summary-only          → approve_max warning
+          B: transfer-from low-allowance --summary-only    → low_allowance warning
+          C: transfer low-balance --summary-only           → low_balance warning
+          D: approve non-zero current-allowance --summary-only → approve_race warning
+        """
+        # ---- Cell A: approve --approve-max → approve_max warning ----
+        with self.subTest(op="approve", warning="approve_max", summary_only=True):
+            approve_ctx = dict(self.FAKE_CTX, operation="approve",
+                               is_max_uint=True,
+                               holder=self.SENDER, spender=self.SPENDER)
+            warns = [("approve_max", {
+                "symbol": "USDC",
+                "token": self.TOKEN,
+                "spender": self.SPENDER,
+            })]
+            with mock.patch("build_erc20.do_approve",
+                            return_value=(self.FAKE_TX, approve_ctx, warns)):
+                with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+                    with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+                        result = b.main([
+                            "approve", "--network", "mainnet",
+                            "--token", self.TOKEN, "--spender", self.SPENDER,
+                            "--approve-max", "--sender", self.SENDER,
+                            "--summary-only",
+                        ])
+            self.assertEqual(result, 0)
+            self.assertEqual(fake_out.getvalue(), "")
+            stderr = fake_err.getvalue()
+            self.assertIn("WARNING:", stderr)
+            self.assertIn("UNLIMITED", stderr)      # approve_max wording
+            self.assertIn("operation", stderr)      # summary block present
+
+        # ---- Cell B: transfer-from low-allowance + --summary-only ----
+        with self.subTest(op="transfer-from", warning="low_allowance", summary_only=True):
+            tf_ctx = dict(self.FAKE_CTX, operation="transfer-from",
+                          from_=self.FROM_, sender=self.SENDER)
+            warns = [("low_allowance", {
+                "holder":    self.FROM_,
+                "spender":   self.SENDER,
+                "current":   1,
+                "requested": 1_500_000,
+                "decimals":  6,
+            })]
+            with mock.patch("build_erc20.do_transfer_from",
+                            return_value=(self.FAKE_TX, tf_ctx, warns)):
+                with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+                    with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+                        result = b.main([
+                            "transfer-from", "--network", "mainnet",
+                            "--token", self.TOKEN,
+                            "--from", self.FROM_,
+                            "--to", self.TO,
+                            "--amount", "1.5",
+                            "--sender", self.SENDER,
+                            "--summary-only",
+                        ])
+            self.assertEqual(result, 0)
+            self.assertEqual(fake_out.getvalue(), "")
+            stderr = fake_err.getvalue()
+            self.assertIn("WARNING:", stderr)
+            self.assertIn("allowance", stderr)      # low_allowance wording
+            self.assertIn("operation", stderr)      # summary block present
+
+        # ---- Cell C: transfer low-balance + --summary-only ----
+        with self.subTest(op="transfer", warning="low_balance", summary_only=True):
+            warns = [("low_balance", {
+                "holder":    self.SENDER,
+                "current":   1,
+                "requested": 1_500_000,
+                "decimals":  6,
+                "symbol":    "USDC",
+            })]
+            with mock.patch("build_erc20.do_transfer",
+                            return_value=(self.FAKE_TX, self.FAKE_CTX, warns)):
+                with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+                    with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+                        result = b.main([
+                            "transfer", "--network", "mainnet",
+                            "--token", self.TOKEN, "--to", self.TO,
+                            "--amount", "1.5", "--sender", self.SENDER,
+                            "--summary-only",
+                        ])
+            self.assertEqual(result, 0)
+            self.assertEqual(fake_out.getvalue(), "")
+            stderr = fake_err.getvalue()
+            self.assertIn("WARNING:", stderr)
+            self.assertIn("balance", stderr)        # low_balance wording
+            self.assertIn("operation", stderr)      # summary block present
+
+        # ---- Cell D: approve non-zero current-allowance + --summary-only ----
+        with self.subTest(op="approve", warning="approve_race", summary_only=True):
+            approve_ctx = dict(self.FAKE_CTX, operation="approve",
+                               is_max_uint=False,
+                               holder=self.SENDER, spender=self.SPENDER)
+            warns = [("approve_race", {
+                "holder":    self.SENDER,
+                "spender":   self.SPENDER,
+                "current":   5_000_000,
+                "requested": 1_500_000,
+                "decimals":  6,
+                "symbol":    "USDC",
+            })]
+            with mock.patch("build_erc20.do_approve",
+                            return_value=(self.FAKE_TX, approve_ctx, warns)):
+                with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+                    with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+                        result = b.main([
+                            "approve", "--network", "mainnet",
+                            "--token", self.TOKEN, "--spender", self.SPENDER,
+                            "--amount", "1.5", "--sender", self.SENDER,
+                            "--summary-only",
+                        ])
+            self.assertEqual(result, 0)
+            self.assertEqual(fake_out.getvalue(), "")
+            stderr = fake_err.getvalue()
+            self.assertIn("WARNING:", stderr)
+            self.assertIn("SWC-114", stderr)        # approve_race wording
+            self.assertIn("operation", stderr)      # summary block present
+
+    def test_regression_matrix_networks_x_ops_summary_only(self):
+        """4-networks × 3-ops × --summary-only matrix (12 cells).
+
+        For each (network, op) pair, wraps the real do_* function with a
+        side_effect that calls through but captures the returned tx_dict.
+        Asserts:
+          - exit 0
+          - stdout empty (--summary-only suppresses JSON)
+          - the captured tx_dict["chainId"] matches the expected chain ID
+
+        Expected chain IDs per network:
+          mainnet  → "1"
+          hoodi    → "560048"
+          sepolia  → "11155111"
+          holesky  → "17000"
+        """
+        # Build a real-but-mocked RPC for do_* calls (from TestTxAssembly harness).
+        # We can't use self._make_rpc_for_transfer() directly here because that
+        # belongs to TestTxAssembly — reuse the same pattern inline.
+        tx_assembly = TestTxAssembly()  # re-use the _make_rpc_for_transfer helper
+
+        NETWORK_CHAIN_IDS = {
+            "mainnet": "1",
+            "hoodi":   "560048",
+            "sepolia": "11155111",
+            "holesky": "17000",
+        }
+        OPS = ["transfer", "approve", "transfer-from"]
+
+        for network, expected_chain_id in NETWORK_CHAIN_IDS.items():
+            for op in OPS:
+                with self.subTest(network=network, op=op, summary_only=True):
+                    # Build a fresh mocked RPC for this cell.
+                    # For approve: zero allowance avoids approve_race warning.
+                    # For transfer-from: high allowance avoids low_allowance warning.
+                    # (Both > requested amount so no soft-check warning fires.)
+                    allowance_hex = (
+                        "0x" + "0" * 64
+                        if op == "approve"
+                        else tx_assembly.HEX_ALLOWANCE_HIGH
+                    )
+                    rpc = tx_assembly._make_rpc_for_transfer(
+                        allowance_hex=allowance_hex,
+                        balance_hex=tx_assembly.HEX_BALANCE_HIGH,
+                    )
+                    captured = {}
+
+                    def make_wrapper(fn, cap, mock_rpc):
+                        """Wrap a do_* function: inject mock_rpc and capture tx_dict."""
+                        def wrapper(*args, **kw):
+                            # Inject the mock rpc so no live network calls happen.
+                            kw["rpc"] = mock_rpc
+                            result = fn(*args, **kw)
+                            cap["tx_dict"] = result[0]
+                            return result
+                        return wrapper
+
+                    if op == "transfer":
+                        side_effect = make_wrapper(b.do_transfer, captured, rpc)
+                        patch_target = "build_erc20.do_transfer"
+                        cli_args = [
+                            "transfer", "--network", network,
+                            "--token", tx_assembly.TOKEN,
+                            "--to",    tx_assembly.TO,
+                            "--amount", "1.0",
+                            "--sender", tx_assembly.SENDER,
+                            "--summary-only",
+                        ]
+                    elif op == "approve":
+                        side_effect = make_wrapper(b.do_approve, captured, rpc)
+                        patch_target = "build_erc20.do_approve"
+                        cli_args = [
+                            "approve", "--network", network,
+                            "--token",   tx_assembly.TOKEN,
+                            "--spender", tx_assembly.SPENDER,
+                            "--amount",  "1.0",
+                            "--sender",  tx_assembly.SENDER,
+                            "--summary-only",
+                        ]
+                    else:  # transfer-from
+                        side_effect = make_wrapper(b.do_transfer_from, captured, rpc)
+                        patch_target = "build_erc20.do_transfer_from"
+                        cli_args = [
+                            "transfer-from", "--network", network,
+                            "--token",  tx_assembly.TOKEN,
+                            "--from",   tx_assembly.FROM_,
+                            "--to",     tx_assembly.TO,
+                            "--amount", "1.0",
+                            "--sender", tx_assembly.SENDER,
+                            "--summary-only",
+                        ]
+
+                    with mock.patch(patch_target, side_effect=side_effect):
+                        with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+                            with mock.patch("sys.stderr", new_callable=io.StringIO):
+                                exit_code = b.main(cli_args)
+
+                    self.assertEqual(exit_code, 0,
+                                     msg="expected exit 0 for %s %s" % (network, op))
+                    self.assertEqual(fake_out.getvalue(), "",
+                                     msg="stdout should be empty for %s %s" % (network, op))
+                    self.assertIn("tx_dict", captured,
+                                  msg="do_* was not called for %s %s" % (network, op))
+                    self.assertEqual(
+                        captured["tx_dict"]["chainId"],
+                        expected_chain_id,
+                        msg="chainId mismatch for network=%s op=%s" % (network, op),
+                    )
+
 
 if __name__ == "__main__":
     unittest.main()
