@@ -535,6 +535,94 @@ class TestResolveEndpoint(unittest.TestCase):
             r._resolve_endpoint()
 
 
+def make_fake_rpc_call(result=None, raises=None):
+    """Return a fake rpc(url, method, params, timeout) for do_call injection."""
+    calls = []
+
+    def fake(url, method, params, timeout):
+        calls.append((url, method, params, timeout))
+        if raises is not None:
+            raise raises
+        return result
+
+    fake.calls = calls
+    return fake
+
+
+class TestDoCall(unittest.TestCase):
+    URL = "https://ethereum-hoodi-rpc.publicnode.com"
+
+    def test_happy_path_calls_rpc_and_returns_result(self):
+        fake = make_fake_rpc_call(result="0x123")
+        out = r.do_call(self.URL, method="eth_blockNumber", params=[], rpc=fake)
+        self.assertEqual(out, "0x123")
+        self.assertEqual(fake.calls, [(self.URL, "eth_blockNumber", [], 15)])
+
+    def test_explicit_timeout_forwarded(self):
+        fake = make_fake_rpc_call(result="0x0")
+        r.do_call(self.URL, method="eth_chainId", params=[], timeout=42, rpc=fake)
+        self.assertEqual(fake.calls[0][3], 42)
+
+    def test_deny_method_raises_before_rpc(self):
+        for method in r._DENY_METHODS:
+            fake = make_fake_rpc_call(result="0x0")
+            with self.assertRaises(ValueError) as ctx:
+                r.do_call(self.URL, method=method, params=[], rpc=fake)
+            self.assertEqual(fake.calls, [], "rpc should not be called for %s" % method)
+            msg = str(ctx.exception)
+            self.assertIn(method, msg)
+
+    def test_prefix_denylist_raises_before_rpc(self):
+        prefix_methods = [
+            "personal_unlockAccount",
+            "admin_peers",
+            "miner_setGasPrice",
+            "engine_forkchoiceUpdatedV1",
+            "clique_getSnapshot",
+        ]
+        for method in prefix_methods:
+            fake = make_fake_rpc_call(result="0x0")
+            with self.assertRaises(ValueError):
+                r.do_call(self.URL, method=method, params=[], rpc=fake)
+            self.assertEqual(fake.calls, [], "rpc should not be called for %s" % method)
+
+    def test_allow_write_bypasses_denylist(self):
+        fake = make_fake_rpc_call(result="0xhash")
+        out = r.do_call(
+            self.URL,
+            method="eth_sendRawTransaction",
+            params=["0x02ab"],
+            allow_write=True,
+            rpc=fake,
+        )
+        self.assertEqual(out, "0xhash")
+        self.assertEqual(len(fake.calls), 1)
+
+    def test_rpc_error_propagates(self):
+        fake = make_fake_rpc_call(raises=r.RPCError("boom"))
+        with self.assertRaises(r.RPCError) as ctx:
+            r.do_call(self.URL, method="eth_blockNumber", params=[], rpc=fake)
+        self.assertIn("boom", str(ctx.exception))
+
+    def test_empty_method_raises(self):
+        with self.assertRaises(ValueError):
+            r.do_call(self.URL, method="", params=[], rpc=make_fake_rpc_call())
+
+    def test_none_method_raises(self):
+        with self.assertRaises(ValueError):
+            r.do_call(self.URL, method=None, params=[], rpc=make_fake_rpc_call())
+
+    def test_params_not_list_raises(self):
+        with self.assertRaises(ValueError):
+            r.do_call(self.URL, method="eth_blockNumber", params="not a list",
+                      rpc=make_fake_rpc_call())
+
+    def test_params_none_raises(self):
+        with self.assertRaises(ValueError):
+            r.do_call(self.URL, method="eth_blockNumber", params=None,
+                      rpc=make_fake_rpc_call())
+
+
 class TestParseParams(unittest.TestCase):
     def test_inline_empty_array(self):
         self.assertEqual(r._parse_params("[]"), [])

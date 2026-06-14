@@ -234,6 +234,33 @@ def do_broadcast(network, raw_tx, wait=False, wait_timeout=DEFAULT_WAIT_TIMEOUT,
         sleep(poll_interval)
 
 
+# === MODULE: do_call ===
+# Public: do_call(url, *, method, params, allow_write=False,
+#                 timeout=15, rpc=rpc_call) -> Any
+
+def do_call(url, *, method, params, allow_write=False,
+            timeout=15, rpc=rpc_call):
+    """Generic eth_* read passthrough. Returns raw JSON-RPC result."""
+    if not isinstance(method, str) or not method:
+        raise ValueError("--method is required")
+    if not isinstance(params, list):
+        raise ValueError("--params must be a JSON array")
+    if not allow_write:
+        if method in _DENY_METHODS:
+            raise ValueError(
+                "method %s refused (use the 'broadcast' op for sends, "
+                "or pass --allow-write to override)" % method
+            )
+        if method.startswith(_DENY_PREFIXES):
+            raise ValueError(
+                "method %s in a sensitive namespace; pass --allow-write "
+                "to override" % method
+            )
+    return rpc(url, method, params, timeout=timeout)
+
+# === END MODULE: do_call ===
+
+
 # === MODULE: param_ingest ===
 # Public: _parse_params(raw, *, stdin=sys.stdin) -> list
 
