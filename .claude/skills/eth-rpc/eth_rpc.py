@@ -234,6 +234,37 @@ def do_broadcast(network, raw_tx, wait=False, wait_timeout=DEFAULT_WAIT_TIMEOUT,
         sleep(poll_interval)
 
 
+# === MODULE: policy ===
+# Public: _check_method_policy(method, *, allow_write=False, allowlist=None) -> None
+
+def _check_method_policy(method, *, allow_write=False, allowlist=None):
+    """Check method against the denylist (and optional allowlist). Raise ValueError on refusal.
+
+    allow_write=True bypasses all checks (denylist + allowlist).
+    allowlist=None means no allowlist is enforced (Phase 2 Task 2.3 contract).
+    """
+    if allow_write:
+        return None
+    if method in _DENY_METHODS:
+        raise ValueError(
+            "method %s refused (use the 'broadcast' op for sends, "
+            "or pass --allow-write to override)" % method
+        )
+    if method.startswith(_DENY_PREFIXES):
+        raise ValueError(
+            "method %s in a sensitive namespace; pass --allow-write "
+            "to override" % method
+        )
+    if allowlist is not None and method not in allowlist:
+        raise ValueError(
+            "method %s is not in the documented eth_* read surface; "
+            "use --allow-write to override" % method
+        )
+    return None
+
+# === END MODULE: policy ===
+
+
 # === MODULE: do_call ===
 # Public: do_call(url, *, method, params, allow_write=False,
 #                 timeout=15, rpc=rpc_call) -> Any
@@ -245,17 +276,7 @@ def do_call(url, *, method, params, allow_write=False,
         raise ValueError("--method is required")
     if not isinstance(params, list):
         raise ValueError("--params must be a JSON array")
-    if not allow_write:
-        if method in _DENY_METHODS:
-            raise ValueError(
-                "method %s refused (use the 'broadcast' op for sends, "
-                "or pass --allow-write to override)" % method
-            )
-        if method.startswith(_DENY_PREFIXES):
-            raise ValueError(
-                "method %s in a sensitive namespace; pass --allow-write "
-                "to override" % method
-            )
+    _check_method_policy(method, allow_write=allow_write)
     return rpc(url, method, params, timeout=timeout)
 
 # === END MODULE: do_call ===

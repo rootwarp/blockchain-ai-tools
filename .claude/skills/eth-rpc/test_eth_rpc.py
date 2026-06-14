@@ -549,6 +549,77 @@ class TestResolveEndpoint(unittest.TestCase):
             r._resolve_endpoint()
 
 
+class TestCheckMethodPolicy(unittest.TestCase):
+    """Tests for _check_method_policy — pure function, no mocked rpc needed."""
+
+    def test_permitted_method_accepted(self):
+        # Should return None without raising
+        result = r._check_method_policy("eth_blockNumber")
+        self.assertIsNone(result)
+
+    def test_permitted_method_with_allow_write(self):
+        result = r._check_method_policy("eth_blockNumber", allow_write=True)
+        self.assertIsNone(result)
+
+    def test_each_deny_method_rejected(self):
+        for method in r._DENY_METHODS:
+            with self.assertRaises(ValueError) as ctx:
+                r._check_method_policy(method)
+            self.assertIn(method, str(ctx.exception))
+
+    def test_each_deny_prefix_rejected(self):
+        samples = [
+            "personal_unlockAccount",
+            "admin_peers",
+            "miner_setGasPrice",
+            "engine_forkchoiceUpdatedV1",
+            "clique_getSnapshot",
+        ]
+        for method in samples:
+            with self.assertRaises(ValueError):
+                r._check_method_policy(method)
+
+    def test_allow_write_bypasses_deny_methods(self):
+        for method in r._DENY_METHODS:
+            # Must not raise
+            r._check_method_policy(method, allow_write=True)
+
+    def test_allow_write_bypasses_deny_prefixes(self):
+        r._check_method_policy("personal_unlockAccount", allow_write=True)
+        r._check_method_policy("admin_peers", allow_write=True)
+
+    def test_allowlist_none_means_not_enforced(self):
+        # Phase 2 Task 2.3 contract: allowlist=None -> no allowlist check
+        result = r._check_method_policy("eth_blockNumber", allowlist=None)
+        self.assertIsNone(result)
+
+    def test_allowlist_non_none_refuses_unlisted_method(self):
+        allowlist = frozenset({"eth_blockNumber", "eth_chainId"})
+        with self.assertRaises(ValueError) as ctx:
+            r._check_method_policy("eth_getLogs", allowlist=allowlist)
+        self.assertIn("eth_getLogs", str(ctx.exception))
+
+    def test_allowlist_non_none_permits_listed_method(self):
+        allowlist = frozenset({"eth_blockNumber", "eth_chainId"})
+        result = r._check_method_policy("eth_blockNumber", allowlist=allowlist)
+        self.assertIsNone(result)
+
+    def test_allowlist_denylist_still_applies_unless_allow_write(self):
+        # Even if method is in the allowlist, denylist still blocks it
+        # unless allow_write=True
+        allowlist = frozenset({"eth_sendRawTransaction"})
+        with self.assertRaises(ValueError):
+            r._check_method_policy("eth_sendRawTransaction", allowlist=allowlist)
+
+    def test_allowlist_denylist_bypassed_with_allow_write(self):
+        allowlist = frozenset({"eth_sendRawTransaction"})
+        # allow_write=True bypasses both denylist and allowlist enforcement
+        result = r._check_method_policy(
+            "eth_sendRawTransaction", allow_write=True, allowlist=allowlist
+        )
+        self.assertIsNone(result)
+
+
 def make_fake_rpc_call(result=None, raises=None):
     """Return a fake rpc(url, method, params, timeout) for do_call injection."""
     calls = []
