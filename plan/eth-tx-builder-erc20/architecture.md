@@ -1680,3 +1680,178 @@ confirmable at review or deferrable to follow-up.
   Cross-references: PRD §P2.3 (source requirement); architecture
   ADR-005 (no new selector — `encode_approve` is reused); architecture
   Assumption 13 (the existing two-way mutex this ADR extends).
+
+---
+
+### ADR-013: Polished bytes32 symbol decode — bounded format catalog
+
+- **Status:** Accepted. (2026-06-14)
+- **Context:** PRD §P2.4 names "bytes32 symbol decode polish" as a niche
+  improvement against historical legacy token formats (MKR, DGD, and
+  friends) that return `bytes32` instead of the standard ABI `string` for
+  `symbol()`. The Phase 1 `decode_symbol` already handles two cases:
+  (1) standard ABI `string` layout and (2) null-trimmed raw `bytes32`
+  ASCII (the MKR pattern). The Phase 1 fallback uses a broad
+  `except Exception` which is wider than necessary and does not explicitly
+  enumerate which formats are supported. Research §02-erc20-safety-ux flags
+  the `d-xo/weird-erc20` catalog as the bounded reference; project plan
+  R10 explicitly bounds the task to a finite ship list to prevent scope
+  creep.
+
+  The two legacy on-chain formats NOT yet handled by Phase 1's named
+  ladder but present in real deployed tokens are:
+
+  **Format A — MKR-style null-padded ASCII bytes32 (Phase 1 already
+  handles this):** The raw 32-byte response is the ASCII ticker
+  right-padded with null bytes. Example — MKR token (mainnet
+  `0x9f8F72aA9304c8B593d555F12eF6589cC3A579A2`), `symbol()` returns
+  exactly 32 bytes: `4d4b52` followed by 29 null bytes
+  (`0x4d4b520000000000000000000000000000000000000000000000000000000000`).
+  Null-stripping gives `b"MKR"`.
+
+  **Format B — DGD-style length-prefixed bytes32:** The raw 32-byte
+  response encodes a length-prefixed string inside a single 32-byte word.
+  The first byte is the byte length of the ticker; the following bytes
+  are the ASCII ticker. Example — DGD token
+  (`0xE0B7927c4aF23765Cb51314A0E0521A9645F0E2A`, now defunct but widely
+  cited in the weird-erc20 catalog), `symbol()` returns a 32-byte word
+  whose first byte is `0x03` (length 3) and the next three bytes are
+  `444744` ("DGD"), followed by 28 null bytes:
+  `0x0344474400000000000000000000000000000000000000000000000000000000`.
+  This format is DISTINCT from the MKR-style null-pad — the first byte is
+  a length prefix, not part of the ticker. Without explicit handling, the
+  null-trimmed Phase 1 fallback would decode it as `"\x03DGD"` (with a
+  non-printable leading byte), which the `isprintable()` guard would then
+  reject, returning `None`.
+
+  **Format C — Non-printable tail guard (Phase 1's `isprintable()` check
+  is sufficient):** Some responses contain valid ASCII ticker characters
+  followed by non-printable bytes that are not null (e.g. garbage padding
+  from non-standard implementations). The existing Phase 1 null-trimmed
+  path already rejects these via `isprintable()`. No new variant helper is
+  needed; this is an implicit guard in the existing ladder.
+
+- **Decision:**
+
+  **Bounded ship list (three variants total, two new):**
+
+  | Variant | Name | Hex example (32 bytes) | Expected ticker |
+  |---------|------|------------------------|-----------------|
+  | Phase 1 — standard ABI `string` | `_try_decode_abi_string` | `0x0000...0020` + `0000...0003` + `4d4b520000...` | e.g. `"MKR"` (if returned as ABI string) |
+  | Phase 1 — null-padded ASCII bytes32 | `_try_decode_bytes32_null_trimmed` | `4d4b520000000000000000000000000000000000000000000000000000000000` | `"MKR"` |
+  | NEW — DGD-style length-prefixed bytes32 | `_try_decode_bytes32_length_prefixed` | `0344474400000000000000000000000000000000000000000000000000000000` | `"DGD"` |
+
+  **Fallback ladder order (short-circuit on first non-None):**
+
+  1. `_try_decode_abi_string(hex_result)` — standard ABI dynamic `string`.
+     Checked first because it is the most common modern format (USDC, DAI,
+     WETH, etc.). If the response has an offset word of `0x20` (32), a
+     valid length word, and sufficient bytes, decode as UTF-8.
+  2. `_try_decode_bytes32_null_trimmed(hex_result)` — raw 32-byte
+     response with the ticker left-aligned, null-padded on the right.
+     Catches MKR, MANA (mainnet), and other early tokens. The
+     `isprintable()` guard already rejects responses with non-printable
+     bytes.
+  3. `_try_decode_bytes32_length_prefixed(hex_result)` — raw 32-byte
+     response where byte 0 is the string length and bytes 1..len are the
+     ASCII ticker. Catches DGD and similar length-prefixed formats.
+     Validate: `length = raw[0]`, then `raw[1:1+length]` must be printable
+     ASCII and length must be in range `[1, 31]` (a 0-length prefix is not
+     a valid ticker; a length ≥ 32 overflows the 32-byte word and is junk).
+  4. Return `None` — unknown / unsupported format. Best-effort posture
+     preserved; the summary shows `(unavailable)` and the build continues
+     (architecture ADR-006).
+
+  **Order rationale:** ABI `string` first because it is unambiguous (the
+  offset word 0x20 is a strong discriminator). Null-trimmed second because
+  it is the most common legacy format and the byte pattern (ticker at
+  offset 0, nulls from offset len(ticker)) does not overlap with
+  length-prefixed (which has a non-printable byte at offset 0 for any
+  ticker shorter than `\x20`). Length-prefixed third because its byte 0
+  could theoretically collide with a short ticker whose first byte happens
+  to be a low-value printable character — but in practice, the
+  null-trimmed step rejects length-prefixed responses via `isprintable()`
+  since `\x03` is non-printable, so the ordering is safe.
+
+  **Explicit "still returns None" tail:** Any `symbol()` response that
+  does not match one of the three above ladder steps (including non-standard
+  encodings, ABI errors, empty responses, non-UTF-8 garbage, or responses
+  shorter than 1 byte) returns `None`. These formats are outside the
+  bounded catalog and remain best-effort. The scope-creep guard test
+  (`_try_decode_*` returns `None` for a response that matches no variant)
+  enforces this property in the test suite.
+
+  **Implementation shape (Issue 3.4):**
+  ```python
+  def _try_decode_abi_string(hex_result):  # Optional[str]
+      ...
+
+  def _try_decode_bytes32_null_trimmed(hex_result):  # Optional[str]
+      ...
+
+  def _try_decode_bytes32_length_prefixed(hex_result):  # Optional[str]
+      # raw = bytes.fromhex(hex_result.lstrip("0x") or hex_result[2:])
+      # length = raw[0] if len(raw) >= 1 else None
+      # validate 1 <= length <= 31 and len(raw) >= 1 + length
+      # ticker = raw[1:1+length].decode("ascii")
+      # validate ticker.isprintable()
+      ...
+
+  def decode_symbol(hex_result):  # Optional[str]
+      for fn in (_try_decode_abi_string,
+                 _try_decode_bytes32_null_trimmed,
+                 _try_decode_bytes32_length_prefixed):
+          result = fn(hex_result)
+          if result is not None:
+              return result
+      return None
+  ```
+
+  Each helper catches only `UnicodeDecodeError`, `ValueError`, and
+  `IndexError` — not broad `Exception`. The `decode_symbol` outer
+  function catches all remaining exceptions to preserve the
+  `Optional[str]` + never-raises contract (architecture ADR-006).
+
+- **Alternatives Considered:**
+
+  - **Chase the full `d-xo/weird-erc20` catalog** (MANA, KNC, SNT, REP,
+    etc.). Rejected per project plan R10: MANA and KNC use the same
+    null-padded bytes32 as MKR and are already handled by Phase 1's
+    null-trimmed fallback. REP and SAI return standard ABI `string`.
+    The only genuinely distinct new format in the catalog that would
+    otherwise return `None` is DGD-style length-prefixed bytes32.
+    Chasing the full catalog adds variants that are already handled or
+    where the delta is negligible.
+
+  - **Single monolithic `decode_symbol` with nested branches.** Rejected:
+    harder to test per-variant in isolation and harder to extend in
+    future phases. The per-variant `_try_decode_*` helper shape matches
+    the existing per-function test structure (ADR-011).
+
+  - **Accept the Phase 1 broad `except Exception`.** Rejected: broad
+    exception swallowing hides real bugs (e.g. `AttributeError` from a
+    programming mistake). The polished implementation catches only the
+    specific exceptions that genuinely indicate "this variant doesn't
+    apply" per-helper, with a final broad catch only at the
+    `decode_symbol` boundary.
+
+- **Consequences:**
+
+  - (+) DGD-style tokens that previously returned `None` (summary shows
+    `(unavailable)`) now decode correctly.
+  - (+) The ladder is finite and exhaustively tested. The
+    "outside-the-catalog" test guards against silent future accretion.
+  - (+) Each `_try_decode_*` helper is a pure function, independently
+    testable in `TestAbiCodec` / `TestDecodeSymbolPolished`.
+  - (+) The `Optional[str]` contract and never-raises guarantee are
+    preserved end-to-end (architecture ADR-006).
+  - (+) No new top-level imports. Reuses `bytes.fromhex`, slicing,
+    `.decode("utf-8", "ignore")` / `.decode("ascii")` (PA-4 stdlib-only).
+  - (-) The three-variant ladder adds ~40 lines to `abi_codec`. Acceptable
+    for the scope of the improvement; ADR-002's "revisit if file exceeds
+    ~800 lines" note still applies.
+
+  Cross-references: PRD §P2.4 (source requirement); architecture ADR-006
+  (the `Optional[str]` return contract that ADR-013 preserves); project
+  plan R10 (scope-bound mitigation — "scope Task 3.2 to a finite list
+  (MKR, DGD); stop when the catalog is exhausted").
