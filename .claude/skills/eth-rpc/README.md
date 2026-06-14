@@ -81,8 +81,23 @@ python3 eth_rpc.py batch --network hoodi --calls '[
 ]'
 ```
 
-<!-- PLACEHOLDER: team lead to run live e2e and paste output here -->
-<!-- Expected: [{"id": 0, "result": "0x88bb0"}, {"id": 1, "result": "0x..."}] -->
+Captured output:
+
+```json
+[
+  {
+    "id": 0,
+    "result": "0x88bb0"
+  },
+  {
+    "id": 1,
+    "result": "0x2df796"
+  }
+]
+```
+
+`id: 0` confirms hoodi `chainId = "0x88bb0"` (= 560048, re-confirms Phase 1 Assumption A5).
+`id: 1` is the current chain head hex quantity.
 
 ### net-version and client-version
 
@@ -91,9 +106,21 @@ python3 eth_rpc.py net-version    --network hoodi
 python3 eth_rpc.py client-version --network hoodi
 ```
 
-<!-- PLACEHOLDER: team lead to run live e2e and paste output here -->
-<!-- Expected: {"chainId": "560048", "netVersion": "560048"} -->
-<!-- Expected: {"chainId": "560048", "clientVersion": "Geth/..."} -->
+Captured output:
+
+```json
+{
+  "chainId": "560048",
+  "netVersion": "560048"
+}
+```
+
+```json
+{
+  "chainId": "560048",
+  "clientVersion": "Geth/v1.17.1-stable-16783c16/linux-amd64/go1.25.7"
+}
+```
 
 ### balance
 
