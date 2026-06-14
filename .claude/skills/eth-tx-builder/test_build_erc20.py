@@ -858,6 +858,89 @@ class TestSummary(unittest.TestCase):
             output = fake_err.getvalue()
         self.assertIn("WARNING:", output)
 
+    # --- warn_low_balance ---
+
+    def test_warn_low_balance_writes_warning_prefix(self):
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+            b.warn_low_balance(
+                holder="0x" + "1" * 40,
+                current=500_000,
+                requested=1_500_000,
+                decimals=6,
+                symbol="USDC",
+            )
+            output = fake_err.getvalue()
+        self.assertIn("WARNING:", output)
+        self.assertIn("0x" + "1" * 40, output)
+
+    def test_warn_low_balance_writes_to_stderr(self):
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+                b.warn_low_balance(
+                    holder="0x" + "1" * 40,
+                    current=0,
+                    requested=1_000_000,
+                    decimals=6,
+                    symbol="USDC",
+                )
+        self.assertGreater(len(fake_err.getvalue()), 0)
+        self.assertEqual(fake_out.getvalue(), "")
+
+    def test_warn_low_balance_contains_revert_hint(self):
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+            b.warn_low_balance(
+                holder="0x" + "1" * 40,
+                current=0,
+                requested=1_000_000,
+                decimals=6,
+                symbol="USDC",
+            )
+            output = fake_err.getvalue()
+        self.assertIn("revert", output)
+
+    # --- warn_balance_check_skipped ---
+
+    def test_warn_balance_check_skipped_contains_reason(self):
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+            b.warn_balance_check_skipped(reason="transport timeout")
+            output = fake_err.getvalue()
+        self.assertIn("WARNING:", output)
+        self.assertIn("transport timeout", output)
+
+    def test_warn_balance_check_skipped_build_continues(self):
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+            b.warn_balance_check_skipped(reason="down")
+            output = fake_err.getvalue()
+        self.assertIn("Build continues", output)
+
+    def test_warn_balance_check_skipped_writes_to_stderr(self):
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+                b.warn_balance_check_skipped(reason="x")
+        self.assertGreater(len(fake_err.getvalue()), 0)
+        self.assertEqual(fake_out.getvalue(), "")
+
+    # --- emit_warning: low_balance and balance_check_skipped ---
+
+    def test_emit_warning_low_balance_dispatches(self):
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+            b.emit_warning("low_balance", {
+                "holder": "0x" + "1" * 40,
+                "current": 0,
+                "requested": 1_000_000,
+                "decimals": 6,
+                "symbol": "USDC",
+            })
+            output = fake_err.getvalue()
+        self.assertIn("WARNING:", output)
+
+    def test_emit_warning_balance_check_skipped_dispatches(self):
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+            b.emit_warning("balance_check_skipped", {"reason": "rpc down"})
+            output = fake_err.getvalue()
+        self.assertIn("WARNING:", output)
+        self.assertIn("rpc down", output)
+
 
 class TestTxAssembly(unittest.TestCase):
     """Tests for the Layer 3 tx_assembly section.
@@ -890,17 +973,22 @@ class TestTxAssembly(unittest.TestCase):
     HEX_ALLOWANCE_HIGH = "0x" + format(10_000_000, "064x")
     # Allowance < requested (1 base unit)
     HEX_ALLOWANCE_LOW  = "0x" + format(1, "064x")
+    # Balance >= requested (10 USDC worth in base units 10_000_000)
+    HEX_BALANCE_HIGH   = "0x" + format(10_000_000, "064x")
+    # Balance < requested (1 base unit, less than 1.5 USDC requested)
+    HEX_BALANCE_LOW    = "0x" + format(1, "064x")
 
     def _make_block(self):
         """Return a minimal fake eth_getBlockByNumber result."""
         return {"baseFeePerGas": self.HEX_BASE_FEE}
 
-    def _make_rpc_for_transfer(self, *, gas_hex=None, allowance_hex=None):
+    def _make_rpc_for_transfer(self, *, gas_hex=None, allowance_hex=None,
+                               balance_hex=None):
         """Build a make_fake_rpc that supplies correct responses for do_transfer.
 
         The fake RPC dispatches eth_call responses by inspecting the selector
-        in the data field to distinguish decimals / symbol / allowance reads
-        (architecture A14 comment).
+        in the data field to distinguish decimals / symbol / allowance / balanceOf
+        reads (architecture A14 comment).
         """
         gas_hex = gas_hex or self.HEX_GAS
 
@@ -923,6 +1011,8 @@ class TestTxAssembly(unittest.TestCase):
                     return self.HEX_SYMBOL_USDC
                 if data.startswith(b.SEL_ALLOWANCE):
                     return allowance_hex or self.HEX_ALLOWANCE_HIGH
+                if data.startswith(b.SEL_BALANCE_OF):
+                    return balance_hex or self.HEX_BALANCE_HIGH
                 raise AssertionError("unexpected eth_call data: %r" % data)
             raise AssertionError("unexpected RPC method: %r" % method)
 
@@ -1013,6 +1103,94 @@ class TestTxAssembly(unittest.TestCase):
         self.assertIn("gas", ctx)
         self.assertIn("max_fee", ctx)
         self.assertIn("max_priority_fee", ctx)
+
+    # -----------------------------------------------------------------------
+    # do_transfer — balanceOf soft-check (Issue 2.2)
+    # -----------------------------------------------------------------------
+
+    def test_do_transfer_balance_sufficient_no_warning(self):
+        """Balance >= requested → no low_balance warning."""
+        rpc = self._make_rpc_for_transfer(balance_hex=self.HEX_BALANCE_HIGH)
+        _, _, warns = b.do_transfer(
+            network="mainnet", token=self.TOKEN, to=self.TO,
+            amount="1.5", sender=self.SENDER, rpc=rpc,
+        )
+        self.assertEqual(warns, [])
+
+    def test_do_transfer_low_balance_queues_warning(self):
+        """Balance < requested → low_balance warning; tx_dict still built."""
+        rpc = self._make_rpc_for_transfer(balance_hex=self.HEX_BALANCE_LOW)
+        tx, _, warns = b.do_transfer(
+            network="mainnet", token=self.TOKEN, to=self.TO,
+            amount="1.5", sender=self.SENDER, rpc=rpc,
+        )
+        self.assertEqual(len(warns), 1)
+        kind, payload = warns[0]
+        self.assertEqual(kind, "low_balance")
+        self.assertIn("holder", payload)
+        self.assertIn("current", payload)
+        self.assertIn("requested", payload)
+        self.assertIn("decimals", payload)
+        self.assertIn("symbol", payload)
+        # tx is still built
+        self.assertIn("data", tx)
+
+    def test_do_transfer_balance_rpc_error_queues_skipped_warning(self):
+        """fetch_balance_of RPCError → balance_check_skipped warning; tx still built."""
+        base_rpc = self._make_rpc_for_transfer()
+
+        def _rpc_balance_fails(url, method, params):
+            if method == "eth_call":
+                call_obj = params[0]
+                data = call_obj.get("data", "")
+                if data.startswith(b.SEL_BALANCE_OF):
+                    raise b._core.RPCError("balance rpc down")
+            return base_rpc(url, method, params)
+
+        tx, _, warns = b.do_transfer(
+            network="mainnet", token=self.TOKEN, to=self.TO,
+            amount="1.5", sender=self.SENDER, rpc=_rpc_balance_fails,
+        )
+        self.assertEqual(len(warns), 1)
+        kind, payload = warns[0]
+        self.assertEqual(kind, "balance_check_skipped")
+        self.assertIn("reason", payload)
+        # tx still built
+        self.assertIn("data", tx)
+
+    def test_do_transfer_estimate_gas_error_not_caught_by_balance_check(self):
+        """estimate_gas RPCError must NOT be caught by the balance try/except (ADR-007)."""
+        def _rpc_gas_fails(url, method, params):
+            if method == "eth_estimateGas":
+                raise b._core.RPCError("gas reverted")
+            return self._make_rpc_for_transfer()(url, method, params)
+
+        with self.assertRaises(b._core.RPCError):
+            b.do_transfer(
+                network="mainnet", token=self.TOKEN, to=self.TO,
+                amount="1.5", sender=self.SENDER, rpc=_rpc_gas_fails,
+            )
+
+    def test_do_transfer_decimals_fatal_balance_not_called(self):
+        """fetch_decimals RPCError propagates; fetch_balance_of must not be called."""
+        calls = []
+
+        def _rpc_no_decimals(url, method, params):
+            if method == "eth_call":
+                call_obj = params[0]
+                data = call_obj.get("data", "")
+                if data.startswith(b.SEL_DECIMALS):
+                    raise b._core.RPCError("decimals down")
+                if data.startswith(b.SEL_BALANCE_OF):
+                    calls.append("balanceOf")
+            return self._make_rpc_for_transfer()(url, method, params)
+
+        with self.assertRaises(b._core.RPCError):
+            b.do_transfer(
+                network="mainnet", token=self.TOKEN, to=self.TO,
+                amount="1.5", sender=self.SENDER, rpc=_rpc_no_decimals,
+            )
+        self.assertEqual(calls, [], "fetch_balance_of must not be called when decimals fails")
 
     # -----------------------------------------------------------------------
     # do_approve — bounded amount
@@ -1462,6 +1640,33 @@ class TestCliDispatch(unittest.TestCase):
                         "--to", self.TO,
                         "--amount", "1.5",
                         "--sender", self.SENDER,
+                    ])
+        self.assertEqual(result, 0)
+        self.assertIn("WARNING:", fake_err.getvalue())
+        parsed = json.loads(fake_out.getvalue())
+        self.assertEqual(parsed, self.FAKE_TX)
+
+    # -----------------------------------------------------------------------
+    # balanceOf soft-check at the CLI layer (Issue 2.2)
+    # -----------------------------------------------------------------------
+
+    def test_transfer_low_balance_returns_0_warning_on_stderr_json_on_stdout(self):
+        """Low balance: exit 0, WARNING: on stderr, valid JSON on stdout."""
+        warns = [("low_balance", {
+            "holder":    self.SENDER,
+            "current":   1,
+            "requested": 1_500_000,
+            "decimals":  6,
+            "symbol":    "USDC",
+        })]
+        with mock.patch("build_erc20.do_transfer",
+                        return_value=(self.FAKE_TX, self.FAKE_CTX, warns)):
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as fake_out:
+                with mock.patch("sys.stderr", new_callable=io.StringIO) as fake_err:
+                    result = b.main([
+                        "transfer", "--network", "mainnet",
+                        "--token", self.TOKEN, "--to", self.TO,
+                        "--amount", "1.5", "--sender", self.SENDER,
                     ])
         self.assertEqual(result, 0)
         self.assertIn("WARNING:", fake_err.getvalue())

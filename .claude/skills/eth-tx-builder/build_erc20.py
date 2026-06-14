@@ -520,6 +520,29 @@ def warn_allowance_check_skipped(reason):
     )
 
 
+def warn_low_balance(holder, current, requested, decimals, symbol):
+    """Write a low-balance WARNING line to stderr.
+
+    Uses base_units_to_human for the human-readable figures.
+    """
+    sym = symbol if symbol is not None else "<unknown>"
+    current_human = base_units_to_human(current, decimals)
+    requested_human = base_units_to_human(requested, decimals)
+    msg = (
+        "WARNING: sender %s balance is %d (%s %s); requested transfer is %d (%s %s)."
+        " This transaction will revert unless balance is funded before broadcast.\n"
+        % (holder, current, current_human, sym, requested, requested_human, sym)
+    )
+    sys.stderr.write(msg)
+
+
+def warn_balance_check_skipped(reason):
+    """Write a balanceOf-check-skipped WARNING line to stderr."""
+    sys.stderr.write(
+        "WARNING: balanceOf pre-check skipped: %s. Build continues.\n" % reason
+    )
+
+
 def warn_symbol_unavailable():
     """Write a symbol-unavailable WARNING line to stderr (optional, info-only)."""
     sys.stderr.write(
@@ -531,7 +554,8 @@ def emit_warning(kind, payload):
     """Dispatch a (kind, payload_dict) warning tuple to the matching warn_* emitter.
 
     kind must be one of: "approve_max", "low_allowance",
-    "allowance_check_skipped", "symbol_unavailable".
+    "allowance_check_skipped", "symbol_unavailable", "low_balance",
+    "balance_check_skipped".
 
     Raises ValueError on an unknown kind (defensive — a typo in tx_assembly
     should surface in tests rather than silently dropping a warning).
@@ -542,6 +566,10 @@ def emit_warning(kind, payload):
         warn_low_allowance(**payload)
     elif kind == "allowance_check_skipped":
         warn_allowance_check_skipped(**payload)
+    elif kind == "low_balance":
+        warn_low_balance(**payload)
+    elif kind == "balance_check_skipped":
+        warn_balance_check_skipped(**payload)
     elif kind == "symbol_unavailable":
         if payload:  # Fix 5: symbol_unavailable accepts no payload
             raise ValueError("symbol_unavailable takes no payload, got: %r" % payload)
@@ -599,6 +627,7 @@ def do_transfer(network, token, to, amount, sender, *, rpc=_core.rpc_call):
     Returns:
         tuple: (tx_dict, summary_ctx, warnings_list)
     """
+    warnings = []
     # Step 1: Resolve network.
     chain_id, url = _core.network_config(network)
     # Steps 2–3: Fetch decimals (FATAL) and symbol (best-effort).
@@ -608,6 +637,21 @@ def do_transfer(network, token, to, amount, sender, *, rpc=_core.rpc_call):
     amount_base = human_to_base_units(amount, decimals)
     # Step 5: Build calldata.
     calldata = encode_transfer(to, amount_base)
+    # Step 5a: Soft balance check (second allowed try/except RPCError outside main).
+    # Scoped strictly to the balanceOf read — must NOT wrap estimate_gas (ADR-007).
+    try:
+        balance = fetch_balance_of(rpc, url, token, sender)
+    except _core.RPCError as e:
+        warnings.append(("balance_check_skipped", {"reason": str(e)}))
+    else:
+        if balance < amount_base:
+            warnings.append(("low_balance", {
+                "holder":    sender,
+                "current":   balance,
+                "requested": amount_base,
+                "decimals":  decimals,
+                "symbol":    symbol,
+            }))
     # Step 6: Estimate gas — FATAL; RPCError propagates (ADR-007, no try/except).
     gas = estimate_gas(rpc, url, sender, token, calldata)
     # Step 7: Fetch nonce and fees.
@@ -635,7 +679,7 @@ def do_transfer(network, token, to, amount, sender, *, rpc=_core.rpc_call):
         "max_fee":        max_fee,
         "max_priority_fee": tip,
     }
-    return (tx_dict, summary_ctx, [])
+    return (tx_dict, summary_ctx, warnings)
 
 
 def do_approve(network, token, spender, amount, sender, *,
