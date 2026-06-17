@@ -141,6 +141,96 @@ ERC-20 tokens (ERC20.md, mainnet)
 When scope is `native` or `tokens`, show only that section.
 
 ## Worked example
+
+Balances are time-varying (they change block to block); this example demonstrates the
+correct procedure and output shape, not fixed values.
+
+**Target address:** `0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045` (vitalik.eth)
+**Network:** mainnet  **Scope:** all
+
+---
+
+**Step A — native ETH balance:**
+
+```bash
+cd .claude/skills/eth-jsonrpc
+python3 eth_rpc.py balance --network mainnet --address 0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045
+```
+
+Captured output:
+```json
+{
+  "network": "mainnet",
+  "chainId": "1",
+  "address": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+  "blockTag": "latest",
+  "balanceWei": "5690705707505023098",
+  "balanceEth": "5.690705707505023098"
+}
+```
+
+---
+
+**Step B — ERC-20 batch (one `eth_call` per token, single HTTP request):**
+
+```bash
+cd .claude/skills/eth-jsonrpc
+python3 eth_rpc.py batch --network mainnet --calls '[
+  {"method":"eth_call","params":[{"to":"0xdAC17F958D2ee523a2206206994597C13D831ec7","data":"0x70a08231000000000000000000000000d8da6bf26964af9d7eed9e03e53415d37aa96045"},"latest"]},
+  {"method":"eth_call","params":[{"to":"0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48","data":"0x70a08231000000000000000000000000d8da6bf26964af9d7eed9e03e53415d37aa96045"},"latest"]},
+  {"method":"eth_call","params":[{"to":"0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84","data":"0x70a08231000000000000000000000000d8da6bf26964af9d7eed9e03e53415d37aa96045"},"latest"]},
+  {"method":"eth_call","params":[{"to":"0x35fA164735182de50811E8e2E824cFb9B6118ac2","data":"0x70a08231000000000000000000000000d8da6bf26964af9d7eed9e03e53415d37aa96045"},"latest"]}
+]'
+```
+
+Captured output (id 0=USDT, 1=USDC, 2=stETH, 3=eETH):
+```json
+[
+  {"id": 0, "result": "0x00000000000000000000000000000000000000000000000000000000114cce4b"},
+  {"id": 1, "result": "0x0000000000000000000000000000000000000000000000000000000001dc7d01"},
+  {"id": 2, "result": "0x00000000000000000000000000000000000000000000000000000968428753d6"},
+  {"id": 3, "result": "0x0000000000000000000000000000000000000000000000000000000000000000"}
+]
+```
+
+---
+
+**Step C — decode each hex result to human amount (exact integer math):**
+
+```bash
+# USDT, decimals 6
+python3 -c "import sys;raw=int(sys.argv[1],16);d=int(sys.argv[2]);q,r=divmod(raw,10**d);print((f'{q}.{r:0{d}d}'.rstrip('0').rstrip('.')) if d and r else (f'{q}' ))" 0x00000000000000000000000000000000000000000000000000000000114cce4b 6
+# → 290.246219
+
+# USDC, decimals 6
+python3 -c "import sys;raw=int(sys.argv[1],16);d=int(sys.argv[2]);q,r=divmod(raw,10**d);print((f'{q}.{r:0{d}d}'.rstrip('0').rstrip('.')) if d and r else (f'{q}' ))" 0x0000000000000000000000000000000000000000000000000000000001dc7d01 6
+# → 31.227137
+
+# stETH, decimals 18
+python3 -c "import sys;raw=int(sys.argv[1],16);d=int(sys.argv[2]);q,r=divmod(raw,10**d);print((f'{q}.{r:0{d}d}'.rstrip('0').rstrip('.')) if d and r else (f'{q}' ))" 0x00000000000000000000000000000000000000000000000000000968428753d6 18
+# → 0.000010343397413846
+
+# eETH, decimals 18
+python3 -c "import sys;raw=int(sys.argv[1],16);d=int(sys.argv[2]);q,r=divmod(raw,10**d);print((f'{q}.{r:0{d}d}'.rstrip('0').rstrip('.')) if d and r else (f'{q}' ))" 0x0000000000000000000000000000000000000000000000000000000000000000 18
+# → 0
+```
+
+---
+
+**Assembled holdings report:**
+
+```
+Holdings for 0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045   (network: mainnet)
+
+Native ETH
+  5.690705707505023098 ETH   (5690705707505023098 wei)
+
+ERC-20 tokens (ERC20.md, mainnet)
+  USDT    290.246219              (decimals 6)
+  USDC    31.227137               (decimals 6)
+  stETH   0.000010343397413846   (rebasing)   (decimals 18)
+  eETH    0                      (rebasing)   (decimals 18)
+```
 ## Out of scope
 
 - Ad-hoc / arbitrary token addresses and on-chain `decimals()` discovery — `ERC20.md`
