@@ -88,7 +88,7 @@ amount with **exact integer math** (never float — float loses precision at 18
 decimals). Use this one-liner per result:
 
 ```bash
-python3 -c "import sys;raw=int(sys.argv[1],16);d=int(sys.argv[2]);q,r=divmod(raw,10**d);print((f'{q}.{r:0{d}d}'.rstrip('0').rstrip('.')) if d and r else (f'{q}' ))" <HEXRESULT> <DECIMALS>
+python3 -c "import sys;raw=int(sys.argv[1],16);d=int(sys.argv[2]);q,r=divmod(raw,10**d);print((f'{q}.{r:0{d}d}'.rstrip('0').rstrip('.')) if d and r else f'{q}')" <HEXRESULT> <DECIMALS>
 ```
 
 Examples:
@@ -205,19 +205,19 @@ Captured output (id 0=USDT, 1=USDC, 2=stETH, 3=eETH):
 
 ```bash
 # USDT, decimals 6
-python3 -c "import sys;raw=int(sys.argv[1],16);d=int(sys.argv[2]);q,r=divmod(raw,10**d);print((f'{q}.{r:0{d}d}'.rstrip('0').rstrip('.')) if d and r else (f'{q}' ))" 0x00000000000000000000000000000000000000000000000000000000114cce4b 6
+python3 -c "import sys;raw=int(sys.argv[1],16);d=int(sys.argv[2]);q,r=divmod(raw,10**d);print((f'{q}.{r:0{d}d}'.rstrip('0').rstrip('.')) if d and r else f'{q}')" 0x00000000000000000000000000000000000000000000000000000000114cce4b 6
 # → 290.246219
 
 # USDC, decimals 6
-python3 -c "import sys;raw=int(sys.argv[1],16);d=int(sys.argv[2]);q,r=divmod(raw,10**d);print((f'{q}.{r:0{d}d}'.rstrip('0').rstrip('.')) if d and r else (f'{q}' ))" 0x0000000000000000000000000000000000000000000000000000000001dc7d01 6
+python3 -c "import sys;raw=int(sys.argv[1],16);d=int(sys.argv[2]);q,r=divmod(raw,10**d);print((f'{q}.{r:0{d}d}'.rstrip('0').rstrip('.')) if d and r else f'{q}')" 0x0000000000000000000000000000000000000000000000000000000001dc7d01 6
 # → 31.227137
 
 # stETH, decimals 18
-python3 -c "import sys;raw=int(sys.argv[1],16);d=int(sys.argv[2]);q,r=divmod(raw,10**d);print((f'{q}.{r:0{d}d}'.rstrip('0').rstrip('.')) if d and r else (f'{q}' ))" 0x00000000000000000000000000000000000000000000000000000968428753d6 18
+python3 -c "import sys;raw=int(sys.argv[1],16);d=int(sys.argv[2]);q,r=divmod(raw,10**d);print((f'{q}.{r:0{d}d}'.rstrip('0').rstrip('.')) if d and r else f'{q}')" 0x00000000000000000000000000000000000000000000000000000968428753d6 18
 # → 0.000010343397413846
 
 # eETH, decimals 18
-python3 -c "import sys;raw=int(sys.argv[1],16);d=int(sys.argv[2]);q,r=divmod(raw,10**d);print((f'{q}.{r:0{d}d}'.rstrip('0').rstrip('.')) if d and r else (f'{q}' ))" 0x0000000000000000000000000000000000000000000000000000000000000000 18
+python3 -c "import sys;raw=int(sys.argv[1],16);d=int(sys.argv[2]);q,r=divmod(raw,10**d);print((f'{q}.{r:0{d}d}'.rstrip('0').rstrip('.')) if d and r else f'{q}')" 0x0000000000000000000000000000000000000000000000000000000000000000 18
 # → 0
 ```
 
