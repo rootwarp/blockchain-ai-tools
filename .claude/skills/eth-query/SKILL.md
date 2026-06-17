@@ -72,10 +72,15 @@ Default is `all`. Honor an explicit user narrowing ("just my USDC", "only ETH").
 
       (`<ACCT>` = the 40-hex account, no `0x`. Keep batch order = table order so each
       result maps back to its token by index.)
+
+      The four `to` addresses above mirror `ERC20.md` (the runtime source of truth) —
+      if `ERC20.md`'s token set changes, this template and the Worked example below
+      must be updated to match.
    4. For each result envelope, decode to an exact human amount with that token's
       decimals (see Precision). Handle per-entry errors per Error handling.
 
 4. **Assemble and present** the combined report (see Output).
+
 ## Precision (exact decimal conversion)
 
 A `balanceOf` result is a 32-byte hex integer (raw base units). Convert to a human
@@ -87,7 +92,7 @@ python3 -c "import sys;raw=int(sys.argv[1],16);d=int(sys.argv[2]);q,r=divmod(raw
 ```
 
 Examples:
-- `... 0x...4a817c800 6` → `20` (20 USDT, exact)
+- `... 0x...1312d00 6` → `20` (20 USDT, exact)
 - `... 0x...112210f47de98115 18` → `1.234567890123456789`
 - a zero result (`0x0…0`) → `0`
 
@@ -105,8 +110,9 @@ resolve to unrelated code) on hoodi/sepolia/holesky. Therefore:
   the mainnet-only constraint; do not query (the addresses are meaningless there).
 - **scope `native`** — any network is fine.
 
-Always run the ERC-20 batch with `--network mainnet`, regardless of where the native
-balance was read, and label the report's token section "mainnet".
+When ERC-20 is in scope (per the rules above), always run the batch with
+`--network mainnet`, regardless of where the native balance was read, and label the
+report's token section "mainnet".
 
 ## Error handling
 
@@ -231,6 +237,7 @@ ERC-20 tokens (ERC20.md, mainnet)
   stETH   0.000010343397413846   (rebasing)   (decimals 18)
   eETH    0                      (rebasing)   (decimals 18)
 ```
+
 ## Out of scope
 
 - Ad-hoc / arbitrary token addresses and on-chain `decimals()` discovery — `ERC20.md`
