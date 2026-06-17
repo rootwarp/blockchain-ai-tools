@@ -77,8 +77,75 @@ Default is `all`. Honor an explicit user narrowing ("just my USDC", "only ETH").
 
 4. **Assemble and present** the combined report (see Output).
 ## Precision (exact decimal conversion)
+
+A `balanceOf` result is a 32-byte hex integer (raw base units). Convert to a human
+amount with **exact integer math** (never float — float loses precision at 18
+decimals). Use this one-liner per result:
+
+```bash
+python3 -c "import sys;raw=int(sys.argv[1],16);d=int(sys.argv[2]);q,r=divmod(raw,10**d);print((f'{q}.{r:0{d}d}'.rstrip('0').rstrip('.')) if d and r else (f'{q}' ))" <HEXRESULT> <DECIMALS>
+```
+
+Examples:
+- `... 0x...4a817c800 6` → `20` (20 USDT, exact)
+- `... 0x...112210f47de98115 18` → `1.234567890123456789`
+- a zero result (`0x0…0`) → `0`
+
+`balanceOf` (not summed `Transfer` logs) is the source of truth for the current
+balance — this is what makes the rebasing tokens (stETH, eETH) correct.
+
 ## Network handling (ERC-20 is mainnet-only)
+
+The `ERC20.md` addresses exist on **Ethereum mainnet only** — they do not exist (or
+resolve to unrelated code) on hoodi/sepolia/holesky. Therefore:
+
+- **scope `all` on a non-mainnet network** — report the native ETH balance, **skip the
+  ERC-20 section**, and say so: "ERC-20 holdings are mainnet-only; skipped on <net>."
+- **scope `tokens` on a non-mainnet network** — **stop** with a clear error explaining
+  the mainnet-only constraint; do not query (the addresses are meaningless there).
+- **scope `native`** — any network is fine.
+
+Always run the ERC-20 batch with `--network mainnet`, regardless of where the native
+balance was read, and label the report's token section "mainnet".
+
 ## Error handling
+
+- **`eth_rpc.py` failure** (non-zero exit / `error:` on stderr): surface it and stop
+  that section. Never present a guessed or partial number as if it were real.
+- **Per-token resilience:** a `batch` entry that comes back as an error envelope
+  (`{"id":i,"error":{...}}`) marks only *that* token's balance as `<error: msg>` — the
+  other tokens still report. One bad token never sinks the whole report.
+- **Bad address:** reject `0x`+40-hex validation failures up front with a clear message.
+- **Rebasing note:** stETH/eETH balances grow with rewards and have no per-rebase
+  `Transfer` event; `balanceOf` is still exact, so no special handling is needed.
+
 ## Output
+
+Present a combined holdings report. Show the network prominently (so a wrong-chain
+query is obvious), both raw and decoded for native ETH, and decoded amounts for each
+token with its decimals; zero balances shown explicitly as `0`. Example shape:
+
+````
+Holdings for 0xABCD…1234   (network: mainnet)
+
+Native ETH
+  1.234567890123456789 ETH   (1234567890123456789 wei)
+
+ERC-20 tokens (ERC20.md, mainnet)
+  USDT    1250.5            (decimals 6)
+  USDC    0                 (decimals 6)
+  stETH   3.5  (rebasing)   (decimals 18)
+  eETH    <error: execution reverted>
+````
+
+When scope is `native` or `tokens`, show only that section.
+
 ## Worked example
 ## Out of scope
+
+- Ad-hoc / arbitrary token addresses and on-chain `decimals()` discovery — `ERC20.md`
+  list only.
+- ERC-20 balances on non-mainnet networks.
+- Signing (`sign_transaction`), building (`eth-tx-builder`), broadcasting
+  (`eth-jsonrpc broadcast`), or any general `eth_*` passthrough (`eth-jsonrpc call`).
+- Multi-address or multi-network fan-out in one invocation.
