@@ -55,7 +55,7 @@ the skills make the outbound RPC calls, the signer only signs.
   ready-to-sign `TxRequest` JSON for the signer's `sign_transaction` tool from a
   network, destination, and amount (v1: send-ETH, EIP-1559). Queries the sender's
   nonce and fees over RPC; does not sign.
-- [`eth-rpc`](./.claude/skills/eth-rpc/README.md) — **balance** (`eth_getBalance`
+- [`eth-jsonrpc`](./.claude/skills/eth-jsonrpc/README.md) — **balance** (`eth_getBalance`
   of an EOA) and **broadcast** (`eth_sendRawTransaction` for an already-signed raw
   tx, optionally waiting for the receipt). Does not sign and does not build.
 
@@ -63,7 +63,7 @@ Together with the signer they cover the full path — **build → sign → broad
 plus balance queries, on `mainnet` and `hoodi`:
 
 ```
-eth-tx-builder        eth-signer-mcp          eth-rpc
+eth-tx-builder        eth-signer-mcp          eth-jsonrpc
    (build)      →    (sign, offline)    →    (broadcast)
 ```
 

@@ -1,9 +1,9 @@
 ---
-name: eth-rpc
+name: eth-jsonrpc
 description: Use when the user wants to query an Ethereum account's ETH balance, broadcast a signed transaction, run any eth_* JSON-RPC read method, batch multiple calls, or get diagnostic info (net version, client version). Operations — balance, broadcast, call, batch, net-version, client-version — on mainnet/hoodi/sepolia/holesky or a custom endpoint. Does not sign and does not build transactions.
 ---
 
-# eth-rpc
+# eth-jsonrpc
 
 The read/write RPC companion to the `eth-signer-mcp` signer. Six operations:
 
@@ -406,7 +406,7 @@ Output: `{"chainId": "...", "clientVersion": "..."}`.
 3. Run the bundled helper from the skill directory:
 
    ```bash
-   cd .claude/skills/eth-rpc
+   cd .claude/skills/eth-jsonrpc
    python3 eth_rpc.py <op> ...
    ```
 

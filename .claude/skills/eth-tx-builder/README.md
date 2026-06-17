@@ -252,7 +252,7 @@ amount (base units): 0
 > DEFERRED (Risk R1).** The signer wallet holds no testnet ERC-20 and the e2e token is
 > operator-provided; setting/clearing allowance requires a live broadcast we cannot make
 > autonomously. When an operator funds a hoodi ERC-20, broadcast the JSON above via the
-> `eth-rpc` skill and verify the post-state with `eth-rpc`'s generic `call` op against
+> `eth-jsonrpc` skill and verify the post-state with `eth-jsonrpc`'s generic `call` op against
 > `allowance(address,address)` (selector `0xdd62ed3e`); the return must be 32 zero bytes.
 
 **Legacy-token `symbol()` coverage — LIVE mainnet read-only readback (Issue 3.4 / 3.8).**

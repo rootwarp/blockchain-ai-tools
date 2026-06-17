@@ -1,4 +1,4 @@
-# eth-rpc
+# eth-jsonrpc
 
 A Claude Code skill that acts as the read/write RPC companion to the
 [`eth-signer-mcp`](../../../apps/eth-signer-mcp/README.md) signer. Six operations:
@@ -37,7 +37,7 @@ guidance, and `--params @file` usage.
 ## Run the tests
 
 ```bash
-cd .claude/skills/eth-rpc
+cd .claude/skills/eth-jsonrpc
 python3 -m unittest test_eth_rpc -v
 ```
 
@@ -51,7 +51,7 @@ uses an injected clock/sleep.
 Two cheap read calls to confirm the `call` op and verify hoodi `chainId`:
 
 ```bash
-cd .claude/skills/eth-rpc
+cd .claude/skills/eth-jsonrpc
 python3 eth_rpc.py call --network hoodi --method eth_chainId    --params '[]'
 python3 eth_rpc.py call --network hoodi --method eth_blockNumber --params '[]'
 ```
@@ -75,7 +75,7 @@ Two-call batch confirming `eth_chainId` + `eth_blockNumber` via the new batch op
 (re-confirms hoodi chainId = `"0x88bb0"`, Phase 1 Assumption A5):
 
 ```bash
-cd .claude/skills/eth-rpc
+cd .claude/skills/eth-jsonrpc
 python3 eth_rpc.py batch --network hoodi --calls '[
   {"method": "eth_chainId",     "params": []},
   {"method": "eth_blockNumber", "params": []}
@@ -126,7 +126,7 @@ Captured output:
 ### balance
 
 ```bash
-cd .claude/skills/eth-rpc
+cd .claude/skills/eth-jsonrpc
 python3 eth_rpc.py balance \
   --network hoodi \
   --address 0x6302794A4F2487a2540c40E2dbB211Ff6AF1CD20
@@ -161,7 +161,7 @@ remains accessible for legacy contracts.
 
 ## Phase 2 manual end-to-end (new features: --decode, sepolia, --read-only-strict)
 
-Captured against live endpoints from `.claude/skills/eth-rpc/`:
+Captured against live endpoints from `.claude/skills/eth-jsonrpc/`:
 
 ```bash
 # 1. --decode: chainId with human-readable decimal

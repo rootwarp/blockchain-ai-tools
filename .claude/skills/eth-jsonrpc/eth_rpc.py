@@ -26,7 +26,7 @@ NETWORKS = {
 }
 
 # publicnode rejects the default "Python-urllib/x.y" User-Agent with HTTP 403.
-USER_AGENT = "eth-rpc/1.0"
+USER_AGENT = "eth-jsonrpc/1.0"
 
 WEI_PER_ETH = 1_000_000_000_000_000_000
 DEFAULT_WAIT_TIMEOUT = 120  # seconds to wait for a receipt with --wait
