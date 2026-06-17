@@ -27,6 +27,9 @@ call per token in a single request.
 
 Calldata = `0x70a08231` + `000000000000000000000000` + `<40-hex account, no 0x>`
 
+For a one-shot, decoded holdings report (ETH + all tokens below, human amounts), use
+the `eth-query` skill, which automates this batch + decimals workflow.
+
 ```bash
 # Replace <ACCT> with the 40-hex account address (no 0x prefix) in each "data".
 cd .claude/skills/eth-jsonrpc
