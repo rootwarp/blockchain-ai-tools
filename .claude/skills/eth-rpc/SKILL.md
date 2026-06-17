@@ -25,6 +25,10 @@ transactions (that is the `eth-tx-builder` skill).
 - **network** — `mainnet`, `hoodi`, `sepolia`, or `holesky` (required for
   balance and broadcast; optional for call/batch/net-version/client-version when
   using `--rpc-url` + `--chain-id` instead).
+  - **Always confirm which network before running.** If the request does not name
+    one, ask (mainnet/hoodi/sepolia) rather than assuming a default — picking the
+    wrong chain silently returns a misleading result (e.g. a real testnet balance
+    shown as `0` because the query went to mainnet).
   - **Holesky** was deprecated September 2025 — prefer `hoodi` for new work.
     Holesky remains reachable for legacy contracts.
 - balance: **address** — the EOA to query (optional; see below).
@@ -43,12 +47,20 @@ python3 eth_rpc.py balance \
   --network <mainnet|hoodi|sepolia|holesky> --address 0x<40hex>
 ```
 
-- If the user does **not** specify an address (e.g. "what's my balance",
-  "the signer's balance"), call the `get_address` MCP tool first and pass its
-  `address` as `--address`. This requires the `eth-signer-mcp` server to be
-  connected; if `get_address` is unavailable, tell the user to connect the signer
-  or supply an explicit address.
-- If the user names any other address, pass it directly — no `get_address` needed.
+**A balance query needs two inputs — an `--address` and a `--network`. Both must
+be resolved before running. If either is missing, ask for it; do not guess and do
+not default.**
+
+- **Address.** If the user names an address, use it directly. If the user means
+  their own / the signer's balance ("what's my balance", "the signer's balance"),
+  the address *is* specified — resolve it by calling the `get_address` MCP tool
+  first and pass its `address` as `--address`. This needs the `eth-signer-mcp`
+  server connected; if `get_address` is unavailable, tell the user to connect the
+  signer or supply an explicit address. If the user gives **no** address and **no**
+  self-reference, **ask which address** to query — never assume one.
+- **Network.** Required — never assume `mainnet` or any default. If not given,
+  **ask** (mainnet/hoodi/sepolia) with `AskUserQuestion`. See the network rule
+  under [Inputs](#inputs) and Procedure step 1.
 - Present the result making units loud: show **both** `balanceWei` and `balanceEth`.
 
 ### broadcast
@@ -379,8 +391,18 @@ Output: `{"chainId": "...", "clientVersion": "..."}`.
 ## Procedure
 
 1. Identify the operation (balance, broadcast, call, batch, net-version, or
-   client-version) and the network. Validate inputs.
-2. For balance with no address, call `get_address` first (see above).
+   client-version) and the **network**. Validate inputs.
+   - **Confirm the network before running — never assume.** If the user did not
+     name a target chain, do **not** default to `mainnet` (or any network): ask
+     which one with `AskUserQuestion`, offering `mainnet`, `hoodi`, and `sepolia`
+     (holesky is deprecated — offer it only on request). Skip the question only
+     when the user already named a network (this turn or an immediately prior one)
+     or supplied a custom `--rpc-url` + `--chain-id`.
+2. For a **balance** query, both `--address` and `--network` are required — resolve
+   each before running. Resolve the address from the user's input, or via
+   `get_address` when they mean their own/the signer's balance; if neither is
+   available, **ask which address**. Confirm the network per step 1. Do not run
+   until both are pinned.
 3. Run the bundled helper from the skill directory:
 
    ```bash
