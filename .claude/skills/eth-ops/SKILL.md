@@ -239,6 +239,32 @@ For "send ETH", "transfer/approve/transferFrom an ERC-20", run all six steps in 
    offer to keep polling. (`--wait` can exceed the default Bash timeout — run it with a
    raised timeout or in the background.)
 
+## Standalone routes
+
+Sub-cases of the pipeline, for when the user only wants one step:
+
+- **Build only** — user wants the `TxRequest` to inspect or sign elsewhere: run the
+  `eth-tx-builder` build (pipeline step 2), present the JSON, and **stop** (no gates, no
+  sign).
+- **Broadcast only** — user already has a signed raw tx: go straight to **Gate 2**
+  (present the decoded signed tx, mainnet callout, require "yes"), then broadcast
+  (pipeline step 6). Never broadcast without that gate.
+- **My address** — call `mcp__eth-signer__get_address` and report the address.
+
+## Safety invariants
+
+- A **read intent never triggers a write.**
+- `mcp__eth-signer__sign_transaction` is **never** called without passing **Gate 1**;
+  `eth_rpc.py broadcast` is **never** called without passing **Gate 2**. There is no
+  auto-confirm path.
+- Each gate shows **decoded, human-meaningful** details (not just opaque hex) so the
+  user can verify what they authorize.
+- **Any** delegated step that errors **stops** the flow; eth-ops never signs or
+  broadcasts a transaction that did not build/sign cleanly.
+- Network is always confirmed before acting. The `ERC20.md` curated list is mainnet-only
+  for **holdings**; **builds** accept any token address the user names.
+- eth-ops uses exactly the gas/nonce/fees `eth-tx-builder` produced — it never invents them.
+
 ## Worked example
 
 Balances are time-varying (they change block to block); this example demonstrates the
@@ -333,9 +359,12 @@ ERC-20 tokens (ERC20.md, mainnet)
 
 ## Out of scope
 
-- Ad-hoc / arbitrary token addresses and on-chain `decimals()` discovery — `ERC20.md`
-  list only.
-- ERC-20 balances on non-mainnet networks.
-- Signing (`sign_transaction`), building (`eth-tx-builder`), broadcasting
-  (`eth-jsonrpc broadcast`), or any general `eth_*` passthrough (`eth-jsonrpc call`).
-- Multi-address or multi-network fan-out in one invocation.
+- Implementing building, signing, broadcasting, or RPC transport **itself** — all
+  delegated to `eth-tx-builder`, the `eth-signer` MCP signer, and `eth-jsonrpc`. eth-ops
+  adds only routing, gating, and presentation.
+- Key custody (the `eth-signer` MCP server holds the keys).
+- Multi-transaction batching/queuing; gas-strategy tuning beyond what `eth-tx-builder`
+  does; multi-account or multi-network fan-out in one request.
+- Ad-hoc token *holdings* discovery and non-mainnet ERC-20 **holdings** (the curated
+  `ERC20.md` list is mainnet-only). Ad-hoc token **sends** are fine — the builder takes
+  any token address.
