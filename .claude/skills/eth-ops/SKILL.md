@@ -3,31 +3,61 @@ name: eth-ops
 description: Use as the front door for Ethereum operations — both reading and moving funds. Reads (no signing): an account's holdings (native ETH + decoded ERC-20 balances USDT/USDC/stETH/eETH), a single balance, any eth_* read, or node diagnostics. Writes (gated): send ETH, ERC-20 transfer/approve/transferFrom, or broadcast a signed tx — eth-ops conducts build → sign → broadcast end-to-end with explicit human confirmation before signing and before broadcasting. Phrases like "send 0.1 ETH to…", "transfer 50 USDC", "approve…", "what does this address hold", "broadcast this raw tx". Orchestrates the eth-jsonrpc + eth-tx-builder skills and the eth-signer MCP signer; instructions-only (no bundled code).
 ---
 
-# eth-query
+# eth-ops
 
-A high-level **holdings reader**: given an address + network, report the native ETH
-balance and the decoded ERC-20 balances for the curated `ERC20.md` tokens
-(USDT/USDC/stETH/eETH) in one combined view. It is the user-friendly layer above
-`eth-jsonrpc`, which exposes only raw (un-decoded) balances and leaves ERC-20
-decimals/ABI decoding out of scope.
+The front-door **orchestrator** for Ethereum operations. `eth-ops` classifies what you
+want, then drives the right underlying skill/tool — answering reads directly and
+conducting fund-moving operations through a gated `build → sign → broadcast` pipeline.
 
-This skill **reads only** — it never signs (`sign_transaction` MCP tool), builds
-(`eth-tx-builder`), or broadcasts (`eth-jsonrpc broadcast`). It does not bundle code;
-it orchestrates `eth-jsonrpc`'s `eth_rpc.py` and reads `ERC20.md` at runtime.
+It delegates everything; it adds routing, confirmation gates, and clear presentation:
 
-## Inputs
+- **reads** → `eth-jsonrpc` (`balance`, `call`, `batch`, diagnostics)
+- **build a tx** → `eth-tx-builder` (`build_send_eth.py`, `build_erc20.py`)
+- **sign** → the `eth-signer` MCP tools (`sign_transaction`, `get_address`)
+- **broadcast** → `eth-jsonrpc` (`broadcast`)
 
-- **address** — `0x` + 40 hex. If the user names one, use it. If they mean their own
-  / the signer's account ("my holdings", "the signer's balances"), resolve it by
-  calling the `get_address` MCP tool (needs `eth-signer-mcp` connected). If no address
-  and no self-reference, **ask** — never guess.
+Instructions-only — no bundled code. It never builds, signs, broadcasts, or makes RPC
+calls itself; it orchestrates the skills that do.
+
+## Intent routing
+
+Classify the request into one intent and act. When ambiguous, **ask** which is meant —
+never guess, and **never escalate a read into a write**.
+
+| Intent | Action | Gates |
+|---|---|---|
+| Holdings (ETH + decoded ERC-20) | `eth-jsonrpc` `balance` + `batch` — see Reads → Holdings | none |
+| Single balance / generic `eth_*` read / diagnostics | `eth-jsonrpc` `balance` / `call` / `net-version` / `client-version` | none |
+| Send ETH / ERC-20 transfer / approve / transferFrom | Fund-moving pipeline (build → sign → broadcast) | **two** |
+| Build only (want the `TxRequest`, no sign) | `eth-tx-builder`, return JSON, stop | none |
+| Broadcast only (have a signed raw tx) | `eth-jsonrpc` `broadcast` | one (before broadcast) |
+| My address | `mcp__eth-signer__get_address` | none |
+
+## Inputs (common)
+
+Resolve and confirm before acting on any intent:
+
 - **network** — `mainnet`, `hoodi`, `sepolia`, or `holesky`. **Never assume.** If not
   named, ask with `AskUserQuestion` (offer mainnet/hoodi/sepolia; holesky deprecated
-  Sept 2025, offer on request). Picking the wrong chain silently returns a misleading
-  result. Note: **ERC-20 balances require mainnet** (see Network handling).
-- **scope** — `all` (default), `native` (ETH only), or `tokens` (ERC-20 only).
+  Sept 2025). The wrong chain silently produces misleading results or sends funds on the
+  wrong network.
+- **address / sender** — `0x` + 40 hex. For "me"/"my"/"the signer", resolve via the
+  `mcp__eth-signer__get_address` tool (needs `eth-signer` MCP connected). For a read of
+  someone else's account, use the address the user names. If neither is available, **ask**.
+- **scope** (holdings reads only) — `all` (default), `native`, or `tokens`.
+- **operation specifics** (writes) — recipient/spender, amount, and (ERC-20) token
+  address, per the Fund-moving pipeline.
 
-## Scope
+## Reads (no gates)
+
+Reads never sign or broadcast. Confirm network/address per Inputs, then:
+
+### Holdings (ETH + decoded ERC-20)
+
+Give an address + network → native ETH balance plus decoded ERC-20 balances for the
+curated `ERC20.md` tokens, with `scope = all|native|tokens`.
+
+#### Scope
 
 | scope    | native ETH | ERC-20 (ERC20.md) |
 |----------|:----------:|:-----------------:|
@@ -37,7 +67,7 @@ it orchestrates `eth-jsonrpc`'s `eth_rpc.py` and reads `ERC20.md` at runtime.
 
 Default is `all`. Honor an explicit user narrowing ("just my USDC", "only ETH").
 
-## Procedure
+#### Procedure
 
 1. **Resolve** address, network, and scope per Inputs. Validate the address is `0x` +
    40 hex before any network call; on a bad address, stop with a clear message.
@@ -81,7 +111,7 @@ Default is `all`. Honor an explicit user narrowing ("just my USDC", "only ETH").
 
 4. **Assemble and present** the combined report (see Output).
 
-## Precision (exact decimal conversion)
+#### Precision (exact decimal conversion)
 
 A `balanceOf` result is a 32-byte hex integer (raw base units). Convert to a human
 amount with **exact integer math** (never float — float loses precision at 18
@@ -99,7 +129,7 @@ Examples:
 `balanceOf` (not summed `Transfer` logs) is the source of truth for the current
 balance — this is what makes the rebasing tokens (stETH, eETH) correct.
 
-## Network handling (ERC-20 is mainnet-only)
+#### Network handling (ERC-20 is mainnet-only)
 
 The `ERC20.md` addresses exist on **Ethereum mainnet only** — they do not exist (or
 resolve to unrelated code) on hoodi/sepolia/holesky. Therefore:
@@ -114,7 +144,7 @@ When ERC-20 is in scope (per the rules above), always run the batch with
 `--network mainnet`, regardless of where the native balance was read, and label the
 report's token section "mainnet".
 
-## Error handling
+#### Error handling
 
 - **`eth_rpc.py` failure** (non-zero exit / `error:` on stderr): surface it and stop
   that section. Never present a guessed or partial number as if it were real.
@@ -125,7 +155,7 @@ report's token section "mainnet".
 - **Rebasing note:** stETH/eETH balances grow with rewards and have no per-rebase
   `Transfer` event; `balanceOf` is still exact, so no special handling is needed.
 
-## Output
+#### Output
 
 Present a combined holdings report. Show the network prominently (so a wrong-chain
 query is obvious), both raw and decoded for native ETH, and decoded amounts for each
@@ -145,6 +175,12 @@ ERC-20 tokens (ERC20.md, mainnet)
 ````
 
 When scope is `native` or `tokens`, show only that section.
+
+### Single balance / generic read / diagnostics
+
+- **Single ETH balance** — `eth-jsonrpc` `balance` (`eth_rpc.py balance --network <net> --address 0x<40hex>`); present wei + ETH.
+- **Any `eth_*` read** — `eth-jsonrpc` `call` (optionally `--decode`); for the method list and flags see `../eth-jsonrpc/SKILL.md`.
+- **Diagnostics** — `eth-jsonrpc` `net-version` / `client-version`.
 
 ## Worked example
 
