@@ -265,7 +265,9 @@ Sub-cases of the pipeline, for when the user only wants one step:
   for **holdings**; **builds** accept any token address the user names.
 - eth-ops uses exactly the gas/nonce/fees `eth-tx-builder` produced — it never invents them.
 
-## Worked example
+## Worked examples
+
+### Read — holdings on mainnet (captured live)
 
 Balances are time-varying (they change block to block); this example demonstrates the
 correct procedure and output shape, not fixed values.
@@ -356,6 +358,45 @@ ERC-20 tokens (ERC20.md, mainnet)
   stETH   0.000010343397413846   (rebasing)   (decimals 18)
   eETH    0                      (rebasing)   (decimals 18)
 ```
+
+### Write — native send on hoodi (build → gates → broadcast)
+
+Sending `0.001 ETH` (= `1000000` gwei) to `0x…dEaD` on hoodi. Amounts/nonce are
+time-varying; this shows the flow, not fixed values.
+
+1. Build:
+   ```bash
+   cd .claude/skills/eth-tx-builder
+   python3 build_send_eth.py --network hoodi --to 0x000000000000000000000000000000000000dEaD --amount-gwei 1000000 --sender 0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045
+   ```
+   → `TxRequest`:
+   ```json
+   {
+     "type": "eip1559",
+     "chainId": "560048",
+     "nonce": "0",
+     "to": "0x000000000000000000000000000000000000dEaD",
+     "value": "1000000000000000",
+     "data": "0x",
+     "gas": "21000",
+     "maxFeePerGas": "1985761842",
+     "maxPriorityFeePerGas": "54413832"
+   }
+   ```
+2. **🚦 Gate 1** — eth-ops presents: to `0x…dEaD`, value `0.001 ETH`, gas `21000`,
+   maxFee `1985761842` wei (~1.986 gwei), nonce `0`, chainId `560048`. User confirms → proceed.
+3. Sign: `mcp__eth-signer__sign_transaction(<TxRequest>)` → `rawTransaction` `0x02f8…`.
+4. **🚦 Gate 2** — eth-ops presents the signed `0x02f8…` + summary (hoodi, 0.001 ETH →
+   0x…dEaD). User confirms → proceed. (On mainnet this step adds a real-funds callout.)
+5. Broadcast:
+   ```bash
+   cd .claude/skills/eth-jsonrpc
+   python3 eth_rpc.py broadcast --network hoodi --raw-tx 0x02f8… --wait --wait-timeout 120
+   ```
+   → `{ "txHash": "0x…", "status": "mined", "blockNumber": …, "gasUsed": …, "effectiveGasPrice": … }`
+
+(Steps 3–5 outputs are illustrative — the example shows the gated flow; a real
+end-to-end broadcast is operator-driven and optional.)
 
 ## Out of scope
 
