@@ -1,6 +1,6 @@
 ---
-name: eth-query
-description: Use when the user wants an Ethereum account's holdings — its native ETH balance and/or its ERC-20 token balances (USDT/USDC/stETH/eETH) decoded to human amounts. Phrases like "what does this address hold", "show balances", "token/portfolio balances", "USDC balance". A high-level combined reader built on the eth-jsonrpc skill (balance + batch) and the ERC20.md token list. Reads only; does not sign, build, or broadcast. ERC-20 balances are Ethereum-mainnet only.
+name: eth-ops
+description: Use as the front door for Ethereum operations — both reading and moving funds. Reads (no signing): an account's holdings (native ETH + decoded ERC-20 balances USDT/USDC/stETH/eETH), a single balance, any eth_* read, or node diagnostics. Writes (gated): send ETH, ERC-20 transfer/approve/transferFrom, or broadcast a signed tx — eth-ops conducts build → sign → broadcast end-to-end with explicit human confirmation before signing and before broadcasting. Phrases like "send 0.1 ETH to…", "transfer 50 USDC", "approve…", "what does this address hold", "broadcast this raw tx". Orchestrates the eth-jsonrpc + eth-tx-builder skills and the eth-signer MCP signer; instructions-only (no bundled code).
 ---
 
 # eth-query
