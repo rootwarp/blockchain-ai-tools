@@ -205,7 +205,8 @@ For "send ETH", "transfer/approve/transferFrom an ERC-20", run all six steps in 
    ```
 
    For **approve** / **transferFrom** and advanced flags (`--approve-max`, `--revoke`,
-   etc.), use the matching `build_erc20.py` subcommand — see `../eth-tx-builder/SKILL.md`
+   etc.), use the matching `build_erc20.py` subcommand (`approve`, `transfer-from` —
+   the CLI uses `transfer-from`, not `transferFrom`) — see `../eth-tx-builder/SKILL.md`
    for its exact flags (eth-ops does not duplicate them). ERC-20 builds also print a
    human-readable **summary + warnings to stderr**; capture it for Gate 1.
 
@@ -246,8 +247,11 @@ Sub-cases of the pipeline, for when the user only wants one step:
 - **Build only** — user wants the `TxRequest` to inspect or sign elsewhere: run the
   `eth-tx-builder` build (pipeline step 2), present the JSON, and **stop** (no gates, no
   sign).
-- **Broadcast only** — user already has a signed raw tx: go straight to **Gate 2**
-  (present the decoded signed tx, mainnet callout, require "yes"), then broadcast
+- **Broadcast only** — user already has a signed raw tx: go straight to **Gate 2**.
+  eth-ops cannot independently decode an arbitrary signed blob, so present the **raw tx
+  hex**, the **target network**, and whatever the user stated it does (recipient/amount),
+  add the mainnet "real funds" callout, and require an explicit "yes" confirming they are
+  broadcasting *this exact raw tx to this network* (irreversible). Then broadcast
   (pipeline step 6). Never broadcast without that gate.
 - **My address** — call `mcp__eth-signer__get_address` and report the address.
 
