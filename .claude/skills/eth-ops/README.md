@@ -1,40 +1,41 @@
-# eth-query
+# eth-ops
 
-A Claude Code skill that reports an Ethereum account's **holdings** — native ETH
-balance plus decoded ERC-20 balances for the curated [`ERC20.md`](../../../ERC20.md)
-tokens (USDT/USDC/stETH/eETH) — in one combined view. It is the high-level reader
-above [`eth-jsonrpc`](../eth-jsonrpc/README.md), which exposes only raw balances and
-leaves ERC-20 decimals/decoding out of scope.
+The front-door **orchestrator** skill for Ethereum operations. `eth-ops` classifies a
+request and drives the right underlying skill/tool — answering reads directly and
+conducting fund-moving operations through a gated `build → sign → broadcast` pipeline.
+Instructions-only; it adds routing, confirmation gates, and presentation, and delegates
+everything else.
 
-Reads only. Does **not** sign, build (`eth-tx-builder`), or broadcast.
+## What it routes to
+
+- **reads** (holdings, single balance, generic `eth_*`, diagnostics) → [`eth-jsonrpc`](../eth-jsonrpc/README.md)
+- **build a tx** (native send, ERC-20 transfer/approve/transferFrom) → [`eth-tx-builder`](../eth-tx-builder/README.md)
+- **sign** → the `eth-signer` MCP tools (`sign_transaction`, `get_address`)
+- **broadcast** → [`eth-jsonrpc`](../eth-jsonrpc/README.md) (`broadcast`)
 
 ## Files
 
-- `SKILL.md` — the skill Claude follows (resolve inputs → `eth-jsonrpc` balance/batch
-  → decode with `ERC20.md` decimals → combined report). No bundled code.
+- `SKILL.md` — the skill Claude follows: intent routing, the gated pipeline, read
+  procedures (incl. the decoded-holdings report over [`ERC20.md`](../../../ERC20.md)),
+  and safety invariants. No bundled code.
 
-## How it works
+## Safety model
 
-- **Native ETH:** delegates to `eth-jsonrpc`'s `balance` op (`eth_rpc.py balance`).
-- **ERC-20:** reads the `ERC20.md` token table, builds `balanceOf` calldata, and runs
-  one `eth-jsonrpc` `batch` of `eth_call`s on **mainnet**, decoding each result with
-  the token's decimals via an exact integer one-liner.
+Fund-moving requests pass **two explicit human confirmation gates** — one before
+signing (`sign_transaction`) and one before broadcasting (the irreversible step), with a
+"real funds" callout on mainnet. A read intent never triggers a write; any failed step
+stops the pipeline before signing or broadcasting.
 
 ## Prerequisites
 
-- `python3` (3.8+), stdlib only (used for the inline decode one-liner and by the
-  `eth-jsonrpc` helper it calls).
-- The sibling `eth-jsonrpc` skill present at `../eth-jsonrpc/eth_rpc.py`.
-- `ERC20.md` at the repo root (the token source of truth).
-- Outbound access to the public RPC endpoints; for the "my holdings" UX, the
-  `eth-signer-mcp` server connected (for `get_address`).
+- `python3` (3.8+), stdlib only (the delegated helpers + the holdings decimals one-liner).
+- Sibling skills present: `../eth-jsonrpc/eth_rpc.py`, `../eth-tx-builder/build_send_eth.py`
+  + `build_erc20.py`.
+- The `eth-signer` MCP server connected (for `get_address` + `sign_transaction`).
+- `ERC20.md` at the repo root (holdings token source of truth).
+- Outbound access to the public RPC endpoints.
 
-## Scope and constraints
+## Examples
 
-- Tokens: `ERC20.md` list only (no ad-hoc addresses).
-- **ERC-20 balances are Ethereum-mainnet only** — skipped (scope `all`) or refused
-  (scope `tokens`) on testnets. Native ETH works on any network.
-
-## Manual end-to-end
-
-See the "Worked example" section of `SKILL.md` for a captured mainnet run.
+See the "Worked examples" section of `SKILL.md` — a captured mainnet holdings read and a
+narrated hoodi `build → gates → broadcast` pipeline.
