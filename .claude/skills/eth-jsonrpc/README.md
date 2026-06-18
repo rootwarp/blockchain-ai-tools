@@ -242,7 +242,7 @@ and `storageProof[].value` are numeric-decoded.
 ## Future operations (not yet implemented)
 
 - ERC-20 balance / `balanceOf` via `call --method eth_call` with decoded output.
-  (Realized by the `eth-query` skill — see `../eth-query/README.md` — which decodes
+  (Realized by the `eth-ops` skill — see `../eth-ops/README.md` — which decodes
   `ERC20.md` token balances on top of `balance` + `batch`.)
 - Block-tag selection for `balance` (currently fixed at `latest`; `call` accepts
   any block tag the operator passes in `--params`).
