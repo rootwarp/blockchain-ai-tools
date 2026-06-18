@@ -182,6 +182,63 @@ When scope is `native` or `tokens`, show only that section.
 - **Any `eth_*` read** — `eth-jsonrpc` `call` (optionally `--decode`); for the method list and flags see `../eth-jsonrpc/SKILL.md`.
 - **Diagnostics** — `eth-jsonrpc` `net-version` / `client-version`.
 
+## Fund-moving pipeline (build → sign → broadcast)
+
+For "send ETH", "transfer/approve/transferFrom an ERC-20", run all six steps in order.
+**Stop immediately on any error** — never advance to sign or broadcast on a failed step.
+
+1. **Resolve inputs** (per Inputs): network; **sender** via `mcp__eth-signer__get_address`
+   (or explicit); recipient/spender; amount; and (ERC-20) the token contract address.
+   - Native amount goes to the builder in **gwei** (`--amount-gwei`); convert if the user
+     speaks in ETH (1 ETH = 1e9 gwei). ERC-20 amount is **human-readable** (`--amount`);
+     the builder applies token decimals.
+
+2. **Build** → `eth-tx-builder` (it fetches the live nonce + fees and prints a complete
+   `TxRequest` JSON to stdout):
+
+   ```bash
+   cd .claude/skills/eth-tx-builder
+   # native ETH send:
+   python3 build_send_eth.py --network <net> --to <recipient> --amount-gwei <gwei> --sender <from>
+   # ERC-20 transfer:
+   python3 build_erc20.py transfer --network <net> --token <token> --to <recipient> --amount <amt> --sender <from>
+   ```
+
+   For **approve** / **transferFrom** and advanced flags (`--approve-max`, `--revoke`,
+   etc.), use the matching `build_erc20.py` subcommand — see `../eth-tx-builder/SKILL.md`
+   for its exact flags (eth-ops does not duplicate them). ERC-20 builds also print a
+   human-readable **summary + warnings to stderr**; capture it for Gate 1.
+
+3. **🚦 Gate 1 — before signing.** Present the transaction **decoded**, then require an
+   explicit affirmative ("yes"/"confirm"); on anything else, **abort without signing**.
+   - Native: `to`, value in **ETH** (and wei), `gas`, `maxFeePerGas` / `maxPriorityFeePerGas`
+     (gwei), `nonce`, `chainId`.
+   - ERC-20: the builder's stderr **summary** (function, token, recipient/spender, human
+     amount, warnings) alongside the raw `TxRequest`.
+
+4. **Sign** → call the `mcp__eth-signer__sign_transaction` tool with the `TxRequest`
+   object from step 2. It returns `rawTransaction` (a `0x`-prefixed signed hex string).
+   On error, surface it and **stop** (nothing has been broadcast).
+
+5. **🚦 Gate 2 — before broadcasting.** Present the signed `rawTransaction` plus a
+   restated decoded summary (network, to, value/token+amount). **On `mainnet`, add an
+   explicit "this moves real funds on Ethereum mainnet" callout.** Require a *second*
+   explicit affirmative; on anything else, **abort without broadcasting** — hand the
+   signed raw tx back to the user instead of sending it.
+
+6. **Broadcast** → `eth-jsonrpc`:
+
+   ```bash
+   cd .claude/skills/eth-jsonrpc
+   python3 eth_rpc.py broadcast --network <net> --raw-tx <rawTransaction> --wait --wait-timeout 120
+   ```
+
+   Report `txHash` always; with `--wait`, also `status` (mined/failed/pending),
+   `blockNumber`, `gasUsed`, `effectiveGasPrice`. `status: failed` = included but
+   reverted (still a real broadcast). `status: pending` = not mined within the timeout;
+   offer to keep polling. (`--wait` can exceed the default Bash timeout — run it with a
+   raised timeout or in the background.)
+
 ## Worked example
 
 Balances are time-varying (they change block to block); this example demonstrates the
