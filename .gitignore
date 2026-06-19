@@ -44,3 +44,4 @@ Thumbs.db
 scripts/node_modules/
 scripts/package.json
 scripts/package-lock.json
+plan/
