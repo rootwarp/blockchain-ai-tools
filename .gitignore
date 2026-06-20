@@ -45,3 +45,7 @@ scripts/node_modules/
 scripts/package.json
 scripts/package-lock.json
 plan/
+
+# Address book — keep real labels out of git. The committed template is
+# address_book.example.md; the live book eth-ops reads is address_book.md.
+address_book.md
